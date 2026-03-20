@@ -1,0 +1,231 @@
+
+# --- Build system configuration
+
+[build-system]
+requires = [ "setuptools>=69", "setuptools-git-versioning", "scikit-build"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools-git-versioning]
+enabled = true
+starting_version = "0.0.1"
+
+[tool.setuptools]
+include-package-data = true
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# --- Project Metadata
+
+[project]
+name = "derzug"
+dynamic = ["version"]  # version is fetched by setuptools-git-versioning
+
+authors = [
+  { name="Derrick Chambers", email="chambers.ja.derrick@gmail.com" },
+]
+
+description = "A DAS application for interactive visualizations."
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+
+keywords = ["geophysics", "distributed-acoustic-sensing"]
+
+# --- Dependencies
+
+dependencies = [
+     "dascore",
+     "pyqtgraph",
+     "orange3",
+     "typer",
+     "PyQt6",
+     "tiledb",
+     "duckdb",
+]
+
+[project.scripts]
+derzug = "derzug.cli:app"
+
+[project.entry-points."orange.widgets.tutorials"]
+derzug = "derzug.workflows"
+
+[project.entry-points."derzug.widgets"]
+Spool = "derzug.widgets.spool"
+Waterfall = "derzug.widgets.waterfall"
+PatchViewer = "derzug.widgets.patchviewer"
+Filter = "derzug.widgets.filter"
+Wiggle = "derzug.widgets.wiggle"
+Rolling = "derzug.widgets.rolling"
+Resample = "derzug.widgets.resample"
+UFunc = "derzug.widgets.ufunc"
+UFuncUnary = "derzug.widgets.ufunc_unary"
+Taper = "derzug.widgets.taper"
+Aggregate = "derzug.widgets.aggregate"
+Coords = "derzug.widgets.coords"
+Select = "derzug.widgets.select"
+Detrend = "derzug.widgets.detrend"
+Normalize = "derzug.widgets.normalize"
+Norm = "derzug.widgets.norm"
+Code = "derzug.widgets.code"
+Fourier = "derzug.widgets.fourier"
+Stft = "derzug.widgets.stft"
+FBE = "derzug.widgets.fbe"
+Analytic = "derzug.widgets.analytic"
+Calculus = "derzug.widgets.calculus"
+PlayAudio = "derzug.widgets.playaudio"
+DataFrameLoader = "derzug.widgets.dataframe_loader"
+Table2Annotation = "derzug.widgets.table2annotation"
+Annotation2DataFrame = "derzug.widgets.annotation2dataframe"
+
+[project.entry-points."dascore.patch_namespace"]
+zug = "derzug.dascore:ZugPatchNameSpace"
+
+[project.entry-points."dascore.spool_namespace"]
+zug = "derzug.dascore:ZugSpoolNameSpace"
+
+[tool.setuptools.package-data]
+"derzug" = ["static/*.png"]
+"derzug.workflows" = ["*.ows"]
+
+[tool.setuptools.data-files]
+"share/applications" = ["resources/linux/derzug.desktop"]
+"share/icons/hicolor/64x64/apps" = ["resources/linux/icons/hicolor/64x64/apps/derzug.png"]
+"share/icons/hicolor/128x128/apps" = ["resources/linux/icons/hicolor/128x128/apps/derzug.png"]
+"share/icons/hicolor/256x256/apps" = ["resources/linux/icons/hicolor/256x256/apps/derzug.png"]
+"share/icons/hicolor/512x512/apps" = ["resources/linux/icons/hicolor/512x512/apps/derzug.png"]
+
+[project.optional-dependencies]
+
+test = [
+    "coverage>=7.4,<8",
+    "pytest-cov>=4",
+    "prek",
+    "pytest",
+    "pytest-qt",
+]
+
+
+dev = ["derzug[test]"]
+
+# --- URLs for project
+
+[project.urls]
+"Bug Tracker" = "https://github.com/DASDAE/derzug/issues"
+"Documentation" = "https://github.com/DASDAE/derzug"
+"Homepage" = "https://github.com/DASDAE/derzug"
+"Source" = "https://github.com/DASDAE/derzug"
+
+[tool.uv]
+trusted-publishing = "always"
+
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+explicit = true
+
+# --- External tool configuration
+
+[tool.ruff]
+
+line-length = 88
+
+# enable certain types of linting
+lint.select = [
+    "E",
+    "F",
+    "UP",
+    "RUF",
+    "I001",
+    "D",
+    "FA",
+    "T",
+    "N",
+    "NPY",
+    "NPY201",
+]
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "__init__.py"
+]
+
+# lowest python version supported
+target-version = "py310"
+
+lint.fixable = ["ALL"]
+
+# List of codes to ignore
+lint.ignore = ["D105", "D107", "D401", "D205", "D200", "D400", "N802"]
+
+[tool.ruff.lint.mccabe]
+# Unlike Flake8, default to a complexity level of 10.
+max-complexity = 10
+
+# config for docstring parsing
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Ignore hdf5 warnings from pytables, See pytables #1035
+    'ignore::Warning:tables:',
+    # Orange 3.40.0 imports a deprecated module internally; track upstream fix.
+    'ignore:Orange\\.widgets\\.utils\\.stdpaths module is deprecated\\.:DeprecationWarning',
+]
+
+[tool.ruff.format]
+# Use `\n` line endings for all files
+line-ending = "lf"
+
+[tool.typos.files]
+extend-exclude = ["docs/_static/logo.svg"]
+
+[tool.typos.default]
+# Ignore identifiers after a dot, plus text in [] or quotes (often API names/keys).
+extend-ignore-re = [
+    "\\b[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*\\b",
+    "\\[[^\\]]*\\]",
+    "\"[^\"]*\"",
+    "'[^']*'",
+]
+
+[tool.typos.default.extend-words]
+nin = "nin"
+df = "df"
+ser = "ser"
+ar = "ar"
+nd = "nd"

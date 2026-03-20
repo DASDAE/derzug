@@ -1,0 +1,48 @@
+exclude = "scripts/_templates"
+minimum_prek_version = "0.3.6"
+
+[[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v2.3.0"
+hooks = [
+  { id = "check-yaml" },
+  { id = "end-of-file-fixer" },
+  { id = "check-merge-conflict" },
+  { id = "mixed-line-ending", args = ["--fix=lf"] },
+]
+
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.4.8"
+hooks = [
+  { id = "ruff", args = ["--fix"] },
+  { id = "ruff-format" },
+]
+
+[[repos]]
+repo = "https://github.com/frostming/fix-future-annotations"
+rev = "0.5.0"
+hooks = [
+  { id = "fix-future-annotations" },
+]
+
+[[repos]]
+repo = "https://github.com/kynan/nbstripout"
+rev = "0.6.1"
+hooks = [
+  { id = "nbstripout" },
+]
+
+[[repos]]
+repo = "https://github.com/crate-ci/typos"
+rev = "v1.22.4"
+hooks = [
+  { id = "typos", files = "\\.(py|qmd)$" },
+]
+
+[[repos]]
+repo = "https://github.com/rhysd/actionlint"
+rev = "v1.6.27"
+hooks = [
+  { id = "actionlint" },
+]

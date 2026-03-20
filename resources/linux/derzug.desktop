@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DerZug
+GenericName=DAS Visualization
+Comment=Interactive DAS visualizations with Orange workflows
+Exec=derzug %f
+Icon=derzug
+Terminal=false
+Categories=Science;Education;DataVisualization;Qt;
+Keywords=DAS;Distributed Acoustic Sensing;Orange;Visualization;
+MimeType=application/x-derzug-workflow;
+StartupNotify=true
+StartupWMClass=derzug

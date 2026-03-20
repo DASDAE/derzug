@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="48"
+   height="48"
+   viewBox="0 0 48 48"
+   version="1.1"
+   id="svg9"
+   sodipodi:docname="Coords.svg"
+   inkscape:version="1.4.3 (1:1.4.3+202512261035+0d15f75042)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs9" />
+  <sodipodi:namedview
+     id="namedview9"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="3.0383495"
+     inkscape:cx="11.354849"
+     inkscape:cy="17.608244"
+     inkscape:window-width="1033"
+     inkscape:window-height="749"
+     inkscape:window-x="843"
+     inkscape:window-y="224"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg9" />
+  <rect
+     x="5"
+     y="8"
+     width="16"
+     height="12"
+     rx="2"
+     fill="#333333"
+     id="rect1" />
+  <rect
+     x="27"
+     y="8"
+     width="16"
+     height="12"
+     rx="2"
+     fill="#333333"
+     id="rect2" />
+  <rect
+     x="5"
+     y="28"
+     width="16"
+     height="12"
+     rx="2"
+     fill="#333333"
+     id="rect3" />
+  <rect
+     x="27"
+     y="28"
+     width="16"
+     height="12"
+     rx="2"
+     fill="#333333"
+     id="rect4" />
+  <path
+     d="M21 14h6"
+     stroke="#f28c28"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="path4"
+     style="stroke:#666666;stroke-opacity:1" />
+  <path
+     d="M24 11l3 3-3 3"
+     fill="none"
+     stroke="#f28c28"
+     stroke-width="3"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     id="path5"
+     style="stroke:#666666;stroke-opacity:1" />
+  <path
+     d="M14 20v8"
+     stroke="#f28c28"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="path6"
+     style="stroke:#666666;stroke-opacity:1" />
+  <path
+     d="M11 25l3 3 3-3"
+     fill="none"
+     stroke="#f28c28"
+     stroke-width="3"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     id="path7"
+     style="stroke:#666666;stroke-opacity:1" />
+  <path
+     d="M34 20v8"
+     stroke="#f28c28"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="path8"
+     style="stroke:#666666;stroke-opacity:1" />
+  <path
+     d="M37 23l-3-3-3 3"
+     fill="none"
+     stroke="#f28c28"
+     stroke-width="3"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     id="path9"
+     style="stroke:#666666;stroke-opacity:1" />
+</svg>

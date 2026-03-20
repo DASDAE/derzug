@@ -1,0 +1,200 @@
+"""Orange widget that applies DASCore aggregate reduction to patches."""
+
+from __future__ import annotations
+
+from typing import ClassVar
+
+import dascore as dc
+from AnyQt.QtWidgets import QComboBox
+from Orange.widgets import gui
+from Orange.widgets.utils.signals import Input, Output
+from Orange.widgets.widget import Msg
+
+from derzug.core.zugwidget import ZugWidget
+from derzug.orange import Setting
+
+
+class Aggregate(ZugWidget):
+    """Apply DASCore aggregate reduction to an input patch."""
+
+    name = "Aggregate"
+    description = "Apply DASCore aggregate reduction to a patch"
+    icon = "icons/AggregateColumns.svg"
+    category = "Processing"
+    keywords = ("aggregate", "reduce", "mean", "sum", "statistics")
+    priority = 25
+
+    want_main_area = False
+
+    selected_dim = Setting("")
+    method = Setting("mean")
+    dim_reduce = Setting("empty")
+
+    _METHODS: ClassVar[tuple[str, ...]] = (
+        "first",
+        "last",
+        "max",
+        "mean",
+        "median",
+        "min",
+        "phase_weighted_stack",
+        "std",
+        "sum",
+    )
+    _DIM_REDUCES: ClassVar[tuple[str, ...]] = (
+        "empty",
+        "squeeze",
+        "mean",
+        "min",
+        "max",
+        "first",
+        "last",
+    )
+
+    class Error(ZugWidget.Error):
+        """Errors shown by the widget."""
+
+        aggregate_failed = Msg("Aggregate failed: {}")
+
+    class Inputs:
+        """Input signal definitions."""
+
+        patch = Input("Patch", dc.Patch)
+
+    class Outputs:
+        """Output signal definitions."""
+
+        patch = Output("Patch", dc.Patch)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._patch: dc.Patch | None = None
+        self._available_dims: tuple[str, ...] = ()
+
+        box = gui.widgetBox(self.controlArea, "Parameters")
+
+        gui.widgetLabel(box, "Dimension:")
+        self._dim_combo = QComboBox(box)
+        box.layout().addWidget(self._dim_combo)
+
+        gui.widgetLabel(box, "Method:")
+        self._method_combo = QComboBox(box)
+        self._method_combo.addItems(self._METHODS)
+        box.layout().addWidget(self._method_combo)
+
+        gui.widgetLabel(box, "Coordinate reduction:")
+        self._dim_reduce_combo = QComboBox(box)
+        self._dim_reduce_combo.addItems(self._DIM_REDUCES)
+        box.layout().addWidget(self._dim_reduce_combo)
+
+        if self.method not in self._METHODS:
+            self.method = self._METHODS[0]
+        self._method_combo.setCurrentText(self.method)
+
+        if self.dim_reduce not in self._DIM_REDUCES:
+            self.dim_reduce = self._DIM_REDUCES[0]
+        self._dim_reduce_combo.setCurrentText(self.dim_reduce)
+
+        self._dim_combo.currentTextChanged.connect(self._on_dim_changed)
+        self._method_combo.currentTextChanged.connect(self._on_method_changed)
+        self._dim_reduce_combo.currentTextChanged.connect(self._on_dim_reduce_changed)
+
+    @Inputs.patch
+    def set_patch(self, patch: dc.Patch | None) -> None:
+        """Receive an input patch and run the aggregate pipeline."""
+        self._patch = patch
+        self._refresh_dims()
+        self.run()
+
+    def _refresh_dims(self) -> None:
+        """Sync dimension choices from the current patch."""
+        dims = (
+            tuple(sorted(self._patch.dims, key=str.casefold))
+            if self._patch is not None
+            else ()
+        )
+        self._available_dims = dims
+
+        self._dim_combo.blockSignals(True)
+        self._dim_combo.clear()
+        self._dim_combo.addItem("All")
+        self._dim_combo.addItems(dims)
+
+        if self._patch is None:
+            self._dim_combo.setCurrentText("All")
+        elif self.selected_dim in ("", "All") or self.selected_dim not in dims:
+            self.selected_dim = ""
+            self._dim_combo.setCurrentText("All")
+        else:
+            self._dim_combo.setCurrentText(self.selected_dim)
+
+        self._dim_combo.setEnabled(bool(dims))
+        self._dim_combo.blockSignals(False)
+
+    def _on_dim_changed(self, value: str) -> None:
+        """Persist selected dimension and rerun."""
+        self.selected_dim = "" if value == "All" else value
+        self.run()
+
+    def _on_method_changed(self, value: str) -> None:
+        """Persist selected method and rerun."""
+        self.method = value
+        self.run()
+
+    def _on_dim_reduce_changed(self, value: str) -> None:
+        """Persist selected dim_reduce and rerun."""
+        self.dim_reduce = value
+        self.run()
+
+    def _run(self) -> dc.Patch | None:
+        """Apply aggregate reduction with current settings and return output patch."""
+        if self._patch is None:
+            return None
+
+        method = self.method if self.method in self._METHODS else self._METHODS[0]
+        if method != self.method:
+            self.method = method
+            self._method_combo.blockSignals(True)
+            self._method_combo.setCurrentText(method)
+            self._method_combo.blockSignals(False)
+
+        dim_reduce = (
+            self.dim_reduce
+            if self.dim_reduce in self._DIM_REDUCES
+            else self._DIM_REDUCES[0]
+        )
+        if dim_reduce != self.dim_reduce:
+            self.dim_reduce = dim_reduce
+            self._dim_reduce_combo.blockSignals(True)
+            self._dim_reduce_combo.setCurrentText(dim_reduce)
+            self._dim_reduce_combo.blockSignals(False)
+
+        dim = None if self.selected_dim in ("", "All") else self.selected_dim
+
+        try:
+            if method == "phase_weighted_stack":
+                out = self._patch.phase_weighted_stack(
+                    stack_dim=dim,
+                    dim_reduce=dim_reduce,
+                )
+            else:
+                out = self._patch.aggregate(
+                    dim=dim,
+                    method=method,
+                    dim_reduce=dim_reduce,
+                )
+        except Exception as exc:
+            self._show_exception("aggregate_failed", exc)
+            return None
+
+        return out
+
+    def _on_result(self, result: dc.Patch | None) -> None:
+        """Send aggregate result patch on output."""
+        self.Outputs.patch.send(result)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    from Orange.widgets.utils.widgetpreview import WidgetPreview
+
+    WidgetPreview(Aggregate).run()

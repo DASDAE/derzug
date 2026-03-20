@@ -1,0 +1,219 @@
+"""Tests for the FBE widget."""
+
+from __future__ import annotations
+
+import dascore as dc
+import numpy as np
+import pytest
+from dascore.units import percent
+from derzug.utils.testing import (
+    TestPatchDimWidgetDefaults,
+    capture_output,
+    wait_for_output,
+    widget_context,
+)
+from derzug.widgets.fbe import FBE
+
+
+@pytest.fixture
+def fbe_widget(qtbot):
+    """Return a live FBE widget for one test case."""
+    with widget_context(FBE) as widget:
+        yield widget
+
+
+class TestFBE:
+    """Tests for the FBE widget."""
+
+    def test_widget_instantiates(self, fbe_widget):
+        """Widget creates with expected defaults and controls."""
+        assert isinstance(fbe_widget, FBE)
+        assert fbe_widget.selected_dim == ""
+        assert fbe_widget.window_length == "0.01"
+        assert fbe_widget.overlap == "50 %"
+        assert fbe_widget.taper_window == "hann"
+        assert fbe_widget.samples is False
+        assert fbe_widget.detrend is False
+        assert fbe_widget.fbe_lower == ""
+        assert fbe_widget.fbe_upper == ""
+
+    def test_patch_none_emits_none(self, fbe_widget, monkeypatch, qtbot):
+        """A None patch clears output."""
+        received = capture_output(fbe_widget.Outputs.patch, monkeypatch)
+
+        fbe_widget.set_patch(None)
+        wait_for_output(qtbot, received)
+
+        assert received == [None]
+
+    def test_default_settings_work_for_example_event_2(
+        self, fbe_widget, monkeypatch, qtbot
+    ):
+        """Default widget settings should succeed on example_event_2."""
+        received = capture_output(fbe_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+
+        fbe_widget.set_patch(patch)
+        wait_for_output(qtbot, received)
+
+        out = received[-1]
+        assert out is not None
+        assert out.dims == ("distance", "time")
+        assert out.shape == (601, 21)
+        assert not fbe_widget.Error.transform_failed.is_shown()
+
+    def test_fbe_matches_explicit_pipeline(self, fbe_widget, monkeypatch, qtbot):
+        """FBE output should match the explicit STFT-power-band pipeline."""
+        received = capture_output(fbe_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        fbe_widget.fbe_lower = "100"
+        fbe_widget.fbe_upper = "500"
+
+        fbe_widget.set_patch(patch)
+        wait_for_output(qtbot, received)
+
+        stft_patch = patch.stft(time=0.01, overlap=50 * percent, taper_window="hann")
+        expected = (
+            (stft_patch * stft_patch.conj())
+            .select(ft_time=(100, 500))
+            .sum("ft_time")
+            .squeeze()
+        )
+        out = received[-1]
+        assert out is not None
+        assert out.dims == expected.dims
+        assert out.shape == expected.shape
+        assert np.allclose(out.data, expected.data)
+
+    def test_dimension_change_triggers_rerun(self, fbe_widget, monkeypatch, qtbot):
+        """Changing dimension reruns and emits a fresh output."""
+        received = capture_output(fbe_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_1")
+        original_stft = patch.stft
+
+        def _fake_stft(
+            *,
+            overlap=None,
+            taper_window="hann",
+            samples=False,
+            detrend=False,
+            **kwargs,
+        ):
+            return original_stft(time=0.01)
+
+        monkeypatch.setattr(patch, "stft", _fake_stft)
+        fbe_widget.set_patch(patch)
+        wait_for_output(qtbot, received)
+
+        if fbe_widget._dim_combo.count() < 2:
+            pytest.skip("Need at least two dimensions for this test")
+
+        current = fbe_widget.selected_dim
+        other_dim = next(
+            fbe_widget._dim_combo.itemText(i)
+            for i in range(fbe_widget._dim_combo.count())
+            if fbe_widget._dim_combo.itemText(i) != current
+        )
+        fbe_widget._dim_combo.setCurrentText(other_dim)
+        wait_for_output(qtbot, received)
+
+        assert fbe_widget.selected_dim == other_dim
+        assert received[-1] is not None
+
+    def test_window_length_reaches_patch_method(self, fbe_widget, monkeypatch, qtbot):
+        """The selected dimension window length should be passed via kwargs."""
+        received = capture_output(fbe_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_1")
+        captured: dict[str, object] = {}
+        original_stft = patch.stft
+
+        def _fake_stft(
+            *,
+            overlap=None,
+            taper_window="hann",
+            samples=False,
+            detrend=False,
+            **kwargs,
+        ):
+            captured["overlap"] = overlap
+            captured["taper_window"] = taper_window
+            captured["samples"] = samples
+            captured["detrend"] = detrend
+            captured["kwargs"] = kwargs
+            return original_stft(time=0.01)
+
+        monkeypatch.setattr(patch, "stft", _fake_stft)
+        fbe_widget.window_length = "25"
+        fbe_widget.overlap = "10"
+        fbe_widget.samples = True
+        fbe_widget.detrend = True
+        fbe_widget.selected_dim = "time"
+        fbe_widget.set_patch(patch)
+        wait_for_output(qtbot, received)
+
+        assert received[-1] is not None
+        assert captured["overlap"] == 10
+        assert captured["samples"] is True
+        assert captured["detrend"] is True
+        assert captured["kwargs"] == {"time": 25}
+
+    def test_invalid_taper_window_shows_error(self, fbe_widget, monkeypatch, qtbot):
+        """Unsupported taper-window literal types should raise a widget error."""
+        received = capture_output(fbe_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_1")
+        fbe_widget.taper_window = "[1, 2, 3]"
+
+        fbe_widget.set_patch(patch)
+        wait_for_output(qtbot, received)
+
+        assert received[-1] is None
+        assert fbe_widget.Error.invalid_taper_window.is_shown()
+
+    def test_invalid_overlap_shows_error(self, fbe_widget, monkeypatch, qtbot):
+        """Unparseable overlap values should show a widget error."""
+        received = capture_output(fbe_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_1")
+        fbe_widget.overlap = "abc def"
+
+        fbe_widget.set_patch(patch)
+        wait_for_output(qtbot, received)
+
+        assert received[-1] is None
+        assert fbe_widget.Error.invalid_overlap.is_shown()
+
+    def test_invalid_fbe_lower_shows_error(self, fbe_widget, monkeypatch, qtbot):
+        """Unparseable lower band values should show a widget error."""
+        received = capture_output(fbe_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_1")
+        fbe_widget.fbe_lower = "abc def"
+
+        fbe_widget.set_patch(patch)
+        wait_for_output(qtbot, received)
+
+        assert received[-1] is None
+        assert fbe_widget.Error.invalid_fbe_lower.is_shown()
+
+    def test_reversed_fbe_band_shows_error(self, fbe_widget, monkeypatch, qtbot):
+        """Lower > upper should show a dedicated FBE band error."""
+        received = capture_output(fbe_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_1")
+        fbe_widget.fbe_lower = "500"
+        fbe_widget.fbe_upper = "100"
+
+        fbe_widget.set_patch(patch)
+        wait_for_output(qtbot, received)
+
+        assert received[-1] is None
+        assert fbe_widget.Error.invalid_fbe_band.is_shown()
+
+
+class TestFBEDefaults(TestPatchDimWidgetDefaults):
+    """Shared default/smoke tests for FBE."""
+
+    __test__ = True
+    widget = FBE
+    inputs = (("patch", dc.get_example_patch("example_event_1")),)
+    compatible_patch = dc.get_example_patch("example_event_1")
+    incompatible_patch = dc.get_example_patch("example_event_1").rename_coords(
+        time="seconds"
+    )

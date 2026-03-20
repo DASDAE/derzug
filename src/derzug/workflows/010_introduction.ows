@@ -1,0 +1,36 @@
+<?xml version='1.0' encoding='utf-8'?>
+<scheme version="2.0" title="Introduction" description="This workflow shows how to visualize and apply processing to some patch data.">
+	<nodes>
+		<node id="0" name="Spool" qualified_name="derzug.widgets.spool.Spool" project_name="derzug" version="" title="Spool ⚡" position="(0, 150)" />
+		<node id="1" name="Waterfall" qualified_name="derzug.widgets.waterfall.Waterfall" project_name="derzug" version="" title="Pre-Proc Waterfall" position="(150, 150)" />
+		<node id="2" name="Detrend" qualified_name="derzug.widgets.detrend.Detrend" project_name="derzug" version="" title="Detrend" position="(300.0, 149.0)" />
+		<node id="3" name="Filter" qualified_name="derzug.widgets.filter.Filter" project_name="derzug" version="" title="Filter" position="(450, 150)" />
+		<node id="4" name="Waterfall" qualified_name="derzug.widgets.waterfall.Waterfall" project_name="derzug" version="" title="Post-Proc Waterfall" position="(600, 150)" />
+	</nodes>
+	<links>
+		<link id="0" source_node_id="0" sink_node_id="1" source_channel="Patch" sink_channel="Patch" enabled="true" source_channel_id="patch" sink_channel_id="patch" />
+		<link id="1" source_node_id="1" sink_node_id="2" source_channel="Patch" sink_channel="Patch" enabled="true" source_channel_id="patch" sink_channel_id="patch" />
+		<link id="2" source_node_id="2" sink_node_id="3" source_channel="Patch" sink_channel="Patch" enabled="true" source_channel_id="patch" sink_channel_id="patch" />
+		<link id="3" source_node_id="3" sink_node_id="4" source_channel="Patch" sink_channel="Patch" enabled="true" source_channel_id="patch" sink_channel_id="patch" />
+	</links>
+	<annotations>
+		<text id="0" type="text/plain" rect="(-54.0, 222.0, 113.0, 122.0)" font-family="Sans Serif" font-size="16">Use spool to load the fiber data.</text>
+		<text id="1" type="text/plain" rect="(101.0, 208.0, 113.0, 131.0)" font-family="Sans Serif" font-size="16">Use Waterfall to visualize the data.</text>
+		<text id="2" type="text/plain" rect="(317.0, 200.0, 10.0, 12.0)" font-family="Sans Serif" font-size="16" />
+		<text id="3" type="text/plain" rect="(268.0, 208.0, 91.0, 102.0)" font-family="Sans Serif" font-size="16">Remove trend along time axis.</text>
+		<text id="4" type="text/plain" rect="(409.0, 211.0, 115.0, 103.0)" font-family="Sans Serif" font-size="16">Low pass filter on time axis.</text>
+		<text id="5" type="text/plain" rect="(550.0, 210.0, 109.0, 122.0)" font-family="Sans Serif" font-size="16">Visualize the effect of processing</text>
+		<text id="6" type="text/plain" rect="(209.0, 25.0, 366.0, 65.0)" font-family="Sans Serif" font-size="16">Workflow Introduction</text>
+	</annotations>
+	<thumbnail />
+	<node_properties>
+		<properties node_id="0" format="literal">{'chunk_conflict': 'raise', 'chunk_dim': '', 'chunk_keep_partial': False, 'chunk_overlap': '', 'chunk_snap_coords': True, 'chunk_tolerance': 1.5, 'chunk_value': '', 'controlAreaVisible': True, 'file_input': '', 'raw_input': '', 'savedWidgetGeometry': b'\x01\xd9\xd0\xcb\x00\x03\x00\x00\x00\x00\x00\xed\x00\x00\x01\xb3\x00\x00\x04~\x00\x00\x03\xf5\x00\x00\x00\xed\x00\x00\x01\xb3\x00\x00\x04~\x00\x00\x03\xf5\x00\x00\x00\x00\x00\x00\x00\x00\x07\x80\x00\x00\x00\xed\x00\x00\x01\xb3\x00\x00\x04~\x00\x00\x03\xf5', 'select_col': '', 'select_filters': [{'key': '', 'raw': ''}], 'select_val': '', 'spool_input': 'example_event_1', 'unpack_single_patch': True, '__version__': 1}</properties>
+		<properties node_id="1" format="literal">{'color_limits': None, 'colormap': 'CET-D1', 'controlAreaVisible': True, 'savedWidgetGeometry': b'\x01\xd9\xd0\xcb\x00\x03\x00\x00\x00\x00\x00`\x00\x00\x01s\x00\x00\x04\x9e\x00\x00\x03w\x00\x00\x00`\x00\x00\x01\x98\x00\x00\x04\x9e\x00\x00\x03w\x00\x00\x00\x00\x00\x00\x00\x00\x07\x80\x00\x00\x00`\x00\x00\x01\x98\x00\x00\x04\x9e\x00\x00\x03w', '__version__': 1}</properties>
+		<properties node_id="2" format="literal">{'controlAreaVisible': True, 'detrend_type': 'linear', 'savedWidgetGeometry': b'\x01\xd9\xd0\xcb\x00\x03\x00\x00\x00\x00\x03s\x00\x00\x00\xe5\x00\x00\x04:\x00\x00\x02\xfd\x00\x00\x03s\x00\x00\x01\n\x00\x00\x04:\x00\x00\x02\xfd\x00\x00\x00\x00\x00\x00\x00\x00\x07\x80\x00\x00\x03s\x00\x00\x01\n\x00\x00\x04:\x00\x00\x02\xfd', 'selected_dim': 'time', '__version__': 1}</properties>
+		<properties node_id="3" format="literal">{'apply_taper': True, 'approximate': True, 'controlAreaVisible': True, 'corners': 4, 'cval': 0.0, 'filter_window': '0.01', 'high_bound': '200', 'low_bound': '', 'mode': 'reflect', 'noise': '', 'polyorder': 3, 'q': 35.0, 'samples': False, 'savedWidgetGeometry': b'\x01\xd9\xd0\xcb\x00\x03\x00\x00\x00\x00\x00\xcd\x00\x00\x00 \x00\x00\x01\x9f\x00\x00\x02d\x00\x00\x00\xcd\x00\x00\x00E\x00\x00\x01\x9f\x00\x00\x02d\x00\x00\x00\x00\x00\x00\x00\x00\x07\x80\x00\x00\x00\xcd\x00\x00\x00E\x00\x00\x01\x9f\x00\x00\x02d', 'selected_dim': 'time', 'selected_filter': 'pass_filter', 'slope_dim0': 'distance', 'slope_dim1': 'time', 'slope_directional': False, 'slope_filt': '', 'slope_invert': False, 'slope_notch': False, 'taper_window': '0.01', 'threshold': 10.0, 'truncate': 4.0, 'zerophase': True, '__version__': 1}</properties>
+		<properties node_id="4" format="literal">{'color_limits': None, 'colormap': 'CET-D1', 'controlAreaVisible': True, 'savedWidgetGeometry': b'\x01\xd9\xd0\xcb\x00\x03\x00\x00\x00\x00\x02x\x00\x00\x00\x85\x00\x00\x07\xa7\x00\x00\x02\x89\x00\x00\x02x\x00\x00\x00\xaa\x00\x00\x07\xa7\x00\x00\x02\x89\x00\x00\x00\x00\x00\x00\x00\x00\x07\x80\x00\x00\x02x\x00\x00\x00\xaa\x00\x00\x07\xa7\x00\x00\x02\x89', '__version__': 1}</properties>
+	</node_properties>
+	<session_state>
+		<window_groups />
+	</session_state>
+</scheme>
