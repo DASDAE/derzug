@@ -33,7 +33,7 @@ def _load_qt_multimedia():
     for module_name in ("PyQt6.QtMultimedia", "PyQt5.QtMultimedia"):
         try:
             module = import_module(module_name)
-        except ModuleNotFoundError:
+        except (ImportError, OSError):
             continue
         return module.QAudio, module.QAudioFormat, module.QAudioSink, module_name
     return None

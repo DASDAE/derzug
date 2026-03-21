@@ -17,9 +17,12 @@ def _import_qt_multimedia():
     for module_name in ("PyQt6.QtMultimedia", "PyQt5.QtMultimedia"):
         try:
             return import_module(module_name)
-        except ModuleNotFoundError:
+        except (ImportError, OSError):
             continue
-    pytest.skip("Neither PyQt6.QtMultimedia nor PyQt5.QtMultimedia is available")
+    pytest.skip(
+        "Neither PyQt6.QtMultimedia nor PyQt5.QtMultimedia is available",
+        allow_module_level=True,
+    )
 
 
 _qt_multimedia = _import_qt_multimedia()
