@@ -531,7 +531,8 @@ class TestSpool:
         dialog.accept()
 
         assert dialog.result() == QDialog.DialogCode.Accepted
-        assert dialog.chosen_path() == str(directory)
+        # Necessary to convert to a Path object for OS-independent equivalence
+        assert Path(dialog.chosen_path()) == directory
 
     def test_file_or_dir_dialog_accepts_file(self, tmp_path):
         """Pressing Open with a selected file accepts that file path."""
@@ -544,7 +545,8 @@ class TestSpool:
         dialog.accept()
 
         assert dialog.result() == QDialog.DialogCode.Accepted
-        assert dialog.chosen_path() == str(file_path)
+        # Necessary to convert to a Path object for OS-independent equivalence
+        assert Path(dialog.chosen_path()) == file_path
 
     def test_run_uses_file_loader_when_file_input_set(self, spool_widget):
         """_snapshot_loader() routes to the file path when file_input is set."""
