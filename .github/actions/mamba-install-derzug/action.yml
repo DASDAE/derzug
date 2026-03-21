@@ -55,11 +55,6 @@ runs:
       run: |
         python --version
 
-    - name: install Qt bindings
-      shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
-      run: |
-        python -m pip install --upgrade --force-reinstall "PyQt6!=6.8.*"
-
     - name: install Linux Qt runtime libs
       if: runner.os == 'Linux'
       shell: bash -el {0}

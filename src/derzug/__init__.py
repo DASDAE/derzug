@@ -1,9 +1,4 @@
 """derzug package."""
-import os
-
-# Explicitly use pyqt6 here. Because, newwer is better right?
-os.environ.setdefault("QT_API", "pyqt6")
-
 
 def __getattr__(name: str):
     """Provide lazy access to workflow symbols expected at package top level."""

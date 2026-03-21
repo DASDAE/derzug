@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+from importlib import import_module
+
 import dascore as dc
 import numpy as np
 import pytest
 from AnyQt.QtCore import QIODevice
+from derzug.utils.testing import TestWidgetDefaults, widget_context
+from derzug.widgets.playaudio import PlayAudio
 
-pytest.importorskip("PyQt6.QtMultimedia")
-from derzug.utils.testing import TestWidgetDefaults, widget_context  # noqa: E402
-from derzug.widgets.playaudio import PlayAudio  # noqa: E402
-from PyQt6.QtMultimedia import QAudio, QAudioFormat  # noqa: E402
+
+def _import_qt_multimedia():
+    """Import QtMultimedia from any supported PyQt binding."""
+    for module_name in ("PyQt6.QtMultimedia", "PyQt5.QtMultimedia"):
+        try:
+            return import_module(module_name)
+        except ModuleNotFoundError:
+            continue
+    pytest.skip("Neither PyQt6.QtMultimedia nor PyQt5.QtMultimedia is available")
+
+
+_qt_multimedia = _import_qt_multimedia()
+QAudio = _qt_multimedia.QAudio
+QAudioFormat = _qt_multimedia.QAudioFormat
 
 
 @pytest.fixture
