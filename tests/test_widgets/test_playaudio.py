@@ -6,6 +6,7 @@ import dascore as dc
 import numpy as np
 import pytest
 from AnyQt.QtCore import QIODevice
+pytest.importorskip("PyQt6.QtMultimedia")
 from derzug.utils.testing import TestWidgetDefaults, widget_context
 from derzug.widgets.playaudio import PlayAudio
 from PyQt6.QtMultimedia import QAudio, QAudioFormat

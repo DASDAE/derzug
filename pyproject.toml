@@ -123,7 +123,7 @@ dev = ["derzug[test]"]
 "Source" = "https://github.com/DASDAE/derzug"
 
 [tool.uv]
-trusted-publishing = "always"
+trusted-publishing = "never"
 
 [[tool.uv.index]]
 name = "testpypi"

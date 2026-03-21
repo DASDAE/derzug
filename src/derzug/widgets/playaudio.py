@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from math import isfinite
 
 import dascore as dc
@@ -20,11 +21,57 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from PyQt6.QtMultimedia import QAudio, QAudioFormat, QAudioSink
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.orange import Setting
 from derzug.utils.display import format_display
+
+try:
+    from PyQt6.QtMultimedia import QAudio, QAudioFormat, QAudioSink
+
+    _QT_MULTIMEDIA_AVAILABLE = True
+except ModuleNotFoundError:
+    _QT_MULTIMEDIA_AVAILABLE = False
+
+    class QAudio:
+        """Fallback QtMultimedia enums when the module is unavailable."""
+
+        class Error(Enum):
+            NoError = 0
+
+        class State(Enum):
+            StoppedState = 0
+            ActiveState = 1
+            IdleState = 2
+
+    class QAudioFormat:
+        """Fallback audio format storing the requested output settings."""
+
+        class SampleFormat(Enum):
+            Int16 = 0
+
+        def __init__(self) -> None:
+            self._sample_rate = 0
+            self._channel_count = 0
+            self._sample_format = self.SampleFormat.Int16
+
+        def setSampleRate(self, value: int) -> None:
+            self._sample_rate = int(value)
+
+        def sampleRate(self) -> int:
+            return int(self._sample_rate)
+
+        def setChannelCount(self, value: int) -> None:
+            self._channel_count = int(value)
+
+        def setSampleFormat(self, value) -> None:
+            self._sample_format = value
+
+    class QAudioSink:
+        """Fallback sink that raises when playback is attempted without QtMultimedia."""
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise RuntimeError("PyQt6.QtMultimedia is not available")
 
 _AUDIBLE_MIN_HZ = 20.0
 _AUDIBLE_MAX_HZ = 20_000.0
