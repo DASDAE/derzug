@@ -9,8 +9,8 @@ from AnyQt.QtGui import QKeySequence, QShortcut
 from AnyQt.QtWidgets import (
     QCheckBox,
     QFileDialog,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QPushButton,
     QTableView,
     QVBoxLayout,
@@ -94,7 +94,11 @@ class _AnnotationsTableModel(QAbstractTableModel):
             if field == "size_text":
                 return summary.size_bytes if summary.size_bytes is not None else -1
             return value
-        if role == Qt.ItemDataRole.TextAlignmentRole and field != "name" and field != "dims_text":
+        if (
+            role == Qt.ItemDataRole.TextAlignmentRole
+            and field != "name"
+            and field != "dims_text"
+        ):
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return None
 
@@ -106,7 +110,9 @@ class _AnnotationsTableModel(QAbstractTableModel):
     ):
         if role != Qt.ItemDataRole.DisplayRole:
             return None
-        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(_TABLE_COLUMNS):
+        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(
+            _TABLE_COLUMNS
+        ):
             return _TABLE_COLUMNS[section][1]
         return None
 
@@ -150,15 +156,23 @@ class Annotations(ZugWidget):
     selected_entry_id: str = Setting("")
 
     class Error(ZugWidget.Error):
+        """Errors shown by the widget."""
+
         general = Msg("Annotation store error: {}")
 
     class Warning(ZugWidget.Warning):
+        """Warnings shown by the widget."""
+
         no_directory = Msg("Directory does not exist: {}")
 
     class Inputs:
+        """Input signal definitions."""
+
         annotation_set = Input("Annotations", AnnotationSet)
 
     class Outputs:
+        """Output signal definitions."""
+
         annotation_set = Output("Annotations", AnnotationSet)
 
     def __init__(self) -> None:
@@ -232,12 +246,15 @@ class Annotations(ZugWidget):
             self.Warning.no_directory(directory)
             directory = ""
             self.store_directory = ""
-        self._entries = load_store(directory=directory, state_entries=self.stored_entries)
+        self._entries = load_store(
+            directory=directory, state_entries=self.stored_entries
+        )
         selected = self.selected_entry_id.strip() or None
         self.selected_entry_id = normalize_selected_id(self._entries, selected) or ""
 
     @Inputs.annotation_set
     def set_annotation_set(self, annotation_set: AnnotationSet | None) -> None:
+        """Receive an annotation set and import it into the store."""
         if annotation_set is None:
             return
         self.Error.clear()
@@ -333,7 +350,9 @@ class Annotations(ZugWidget):
             self.selected_entry_id.strip() or None,
         )
         selected_count = 0 if selected is None else len(selected.annotations)
-        self._status_label.setText(f"{count} set(s), {selected_count} annotation(s) selected")
+        self._status_label.setText(
+            f"{count} set(s), {selected_count} annotation(s) selected"
+        )
 
     def _choose_directory(self) -> None:
         start_dir = self.store_directory.strip() or str(Path.cwd())
@@ -352,9 +371,12 @@ class Annotations(ZugWidget):
                 self._entries = load_store(directory=directory, state_entries=[])
             else:
                 self._entries = sync_directory_state(self._entries, directory)
-            self.selected_entry_id = normalize_selected_id(
-                self._entries, self.selected_entry_id.strip() or None
-            ) or ""
+            self.selected_entry_id = (
+                normalize_selected_id(
+                    self._entries, self.selected_entry_id.strip() or None
+                )
+                or ""
+            )
             self._persist_settings()
             self._emit_selected_output()
             self._request_ui_refresh()
@@ -384,7 +406,9 @@ class Annotations(ZugWidget):
                 selected_id,
                 selected_id=selected_id,
             )
-            self._entries = sync_directory_state(self._entries, self.store_directory.strip())
+            self._entries = sync_directory_state(
+                self._entries, self.store_directory.strip()
+            )
             self.selected_entry_id = next_selected or ""
             self._persist_settings()
             self._emit_selected_output()
@@ -400,7 +424,9 @@ class Annotations(ZugWidget):
         if not entry_id:
             return False
         self._entries = rename_entry(self._entries, entry_id, value)
-        self._entries = sync_directory_state(self._entries, self.store_directory.strip())
+        self._entries = sync_directory_state(
+            self._entries, self.store_directory.strip()
+        )
         self._persist_settings()
         self._emit_selected_output()
         self._update_status_label()

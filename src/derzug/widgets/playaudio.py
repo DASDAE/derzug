@@ -37,9 +37,13 @@ except ModuleNotFoundError:
         """Fallback QtMultimedia enums when the module is unavailable."""
 
         class Error(Enum):
+            """Audio error codes."""
+
             NoError = 0
 
         class State(Enum):
+            """Audio playback states."""
+
             StoppedState = 0
             ActiveState = 1
             IdleState = 2
@@ -48,6 +52,8 @@ except ModuleNotFoundError:
         """Fallback audio format storing the requested output settings."""
 
         class SampleFormat(Enum):
+            """PCM sample formats."""
+
             Int16 = 0
 
         def __init__(self) -> None:
@@ -56,15 +62,19 @@ except ModuleNotFoundError:
             self._sample_format = self.SampleFormat.Int16
 
         def setSampleRate(self, value: int) -> None:
+            """Set the sample rate in Hz."""
             self._sample_rate = int(value)
 
         def sampleRate(self) -> int:
+            """Return the sample rate in Hz."""
             return int(self._sample_rate)
 
         def setChannelCount(self, value: int) -> None:
+            """Set the channel count."""
             self._channel_count = int(value)
 
         def setSampleFormat(self, value) -> None:
+            """Set the sample format."""
             self._sample_format = value
 
     class QAudioSink:
@@ -72,6 +82,7 @@ except ModuleNotFoundError:
 
         def __init__(self, *_args, **_kwargs) -> None:
             raise RuntimeError("PyQt6.QtMultimedia is not available")
+
 
 _AUDIBLE_MIN_HZ = 20.0
 _AUDIBLE_MAX_HZ = 20_000.0

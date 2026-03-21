@@ -70,6 +70,7 @@ pytest dascore --doctest-modules
 - Add type hints for public functions/methods.
 - Use NumPy-style docstrings for public APIs.
 - Keep comments meaningful; do not restate obvious code.
+- All functions must have a docstring; proper numpy docstrings for public functions and a few liners for private.
 
 
 ## Quality bar for agent changes

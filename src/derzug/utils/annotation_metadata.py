@@ -25,9 +25,13 @@ LABEL_SLOT_COLORS: dict[str, tuple[int, int, int]] = {
 class AnnotationLabelConfig(Protocol):
     """Minimal config API for label-slot resolution helpers."""
 
-    def label_name(self, slot: str) -> str: ...
+    def label_name(self, slot: str) -> str:
+        """Return the configured label for a numeric slot."""
+        ...
 
-    def slot_for_label(self, label: str | None) -> str | None: ...
+    def slot_for_label(self, label: str | None) -> str | None:
+        """Return the numeric slot backing a persisted annotation label."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -91,4 +95,3 @@ def annotation_metadata_row(annotation: Annotation) -> dict[str, object]:
         "label": annotation.label,
         "tags": ", ".join(annotation.tags),
     }
-

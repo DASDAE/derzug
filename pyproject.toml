@@ -100,6 +100,13 @@ zug = "derzug.dascore:ZugSpoolNameSpace"
 "derzug" = ["static/*.png"]
 "derzug.workflows" = ["*.ows"]
 
+[tool.setuptools.data-files]
+"share/applications" = ["resources/linux/derzug.desktop"]
+"share/icons/hicolor/64x64/apps" = ["resources/linux/icons/hicolor/64x64/apps/derzug.png"]
+"share/icons/hicolor/128x128/apps" = ["resources/linux/icons/hicolor/128x128/apps/derzug.png"]
+"share/icons/hicolor/256x256/apps" = ["resources/linux/icons/hicolor/256x256/apps/derzug.png"]
+"share/icons/hicolor/512x512/apps" = ["resources/linux/icons/hicolor/512x512/apps/derzug.png"]
+
 
 [project.optional-dependencies]
 

@@ -206,7 +206,9 @@ def delete_entry(
     return kept, next_selected
 
 
-def merge_annotation_sets(current: AnnotationSet, incoming: AnnotationSet) -> AnnotationSet:
+def merge_annotation_sets(
+    current: AnnotationSet, incoming: AnnotationSet
+) -> AnnotationSet:
     """Append incoming annotations, replacing entries with colliding ids."""
     existing = annotation_id_map(current)
     current_ids = set(existing)
@@ -364,7 +366,9 @@ def persist_entries(
     updated: list[AnnotationStoreEntry] = []
     for entry in entries:
         path = entry_file_path(root, entry.id)
-        path.write_text(serialize_annotation_set(entry.annotation_set), encoding="utf-8")
+        path.write_text(
+            serialize_annotation_set(entry.annotation_set), encoding="utf-8"
+        )
         valid_paths.add(path)
         updated.append(
             AnnotationStoreEntry(
@@ -380,7 +384,9 @@ def persist_entries(
     return tuple(updated)
 
 
-def load_entries_from_directory(directory: str | Path) -> tuple[AnnotationStoreEntry, ...]:
+def load_entries_from_directory(
+    directory: str | Path,
+) -> tuple[AnnotationStoreEntry, ...]:
     """Load all JSON-backed annotation sets from one directory."""
     root = Path(directory)
     if not root.exists() or not root.is_dir():
@@ -388,7 +394,9 @@ def load_entries_from_directory(directory: str | Path) -> tuple[AnnotationStoreE
     entries: list[AnnotationStoreEntry] = []
     for path in sorted(root.glob("*.json")):
         try:
-            annotation_set = deserialize_annotation_set(path.read_text(encoding="utf-8"))
+            annotation_set = deserialize_annotation_set(
+                path.read_text(encoding="utf-8")
+            )
         except Exception:
             continue
         entries.append(
@@ -410,7 +418,10 @@ def persist_entry_name_metadata(
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True)
     path = entry_file_path(root, entry.id)
-    payload = {"name": entry.name, "annotation_set": entry.annotation_set.model_dump(mode="json")}
+    payload = {
+        "name": entry.name,
+        "annotation_set": entry.annotation_set.model_dump(mode="json"),
+    }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return AnnotationStoreEntry(
         id=entry.id,
@@ -420,7 +431,9 @@ def persist_entry_name_metadata(
     )
 
 
-def load_entries_with_metadata(directory: str | Path) -> tuple[AnnotationStoreEntry, ...]:
+def load_entries_with_metadata(
+    directory: str | Path,
+) -> tuple[AnnotationStoreEntry, ...]:
     """Load annotation entries from directory, supporting stored row names."""
     root = Path(directory)
     if not root.exists() or not root.is_dir():
