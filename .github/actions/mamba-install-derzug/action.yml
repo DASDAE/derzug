@@ -57,9 +57,10 @@ runs:
 
     - name: install Linux Qt runtime libs
       if: runner.os == 'Linux'
-      shell: bash -el {0}
+      shell: bash
       run: |
-        micromamba install -y -n derzug libegl
+        sudo apt-get update
+        sudo apt-get install -y libegl1 libgl1
 
     - name: get tags for correct versioning
       shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
