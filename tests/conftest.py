@@ -133,6 +133,9 @@ warnings.filterwarnings("ignore")
 # real windows on the user's desktop.
 if not _show_mode_requested(sys.argv):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # PyQt5 does not reliably ship an offscreen platform plugin on macOS CI.
+    # Prefer PyQt6 for headless pytest runs when no explicit binding was chosen.
+    os.environ.setdefault("QT_API", "pyqt6")
 
 from AnyQt.QtCore import QCoreApplication  # noqa
 import dascore.core.attrs as _dascore_attrs  # noqa
