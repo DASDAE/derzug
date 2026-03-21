@@ -30,14 +30,16 @@ runs:
   steps:
     - uses: mamba-org/setup-micromamba@v2
       with:
-        micromamba-version: '2.0.5-0' # versions: https://github.com/mamba-org/micromamba-releases
+        micromamba-version: '2.0.6-0' # versions: https://github.com/mamba-org/micromamba-releases
         environment-file: ${{ inputs.environment-file }}
         init-shell: >-
           bash
           powershell
         cache-environment: true
         cache-environment-key: environment-${{ runner.os }}-${{ inputs.python-version }}-${{ hashFiles(inputs.environment-file, 'pyproject.toml') }}-${{ inputs.cache-number }}
-        post-cleanup: "shell-init"
+        # GitHub-hosted runners are ephemeral; skip post-job cleanup to avoid
+        # setup-micromamba Windows post-step failures.
+        post-cleanup: "none"
         create-args: >-
           python=${{ inputs.python-version }}
 
