@@ -71,6 +71,7 @@ from orangewidget.workflow.widgetsscheme import (
     WidgetsSignalManager,
 )
 
+import derzug._anyqt_patch  # noqa: F401 - imported for side effects before AnyQt.QtGui
 from derzug.annotations_config import (
     AnnotationSettingsDialog,
     load_annotation_config,

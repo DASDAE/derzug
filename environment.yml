@@ -2,11 +2,6 @@ name: derzug
 channels:
   - conda-forge
 dependencies:
-  - pip
   - dascore>=0.1.15
+  - Orange3
   - pyqtgraph
-  - orange3>=3.40.0
-  - typer
-  - pyqt6
-  - tiledb
-  - duckdb

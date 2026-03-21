@@ -23,7 +23,7 @@ inputs:
   cache-number:
     description: "Cache number. Use != 1 to reset data cache"
     required: false
-    default: "1"
+    default: "2"
 
 runs:
   using: "composite"
@@ -36,7 +36,7 @@ runs:
           bash
           powershell
         cache-environment: true
-        cache-environment-key: environment-${{ runner.os }}-${{ inputs.python-version }}-${{ inputs.environment-file }}-${{ inputs.cache-number }}
+        cache-environment-key: environment-${{ runner.os }}-${{ inputs.python-version }}-${{ hashFiles(inputs.environment-file, 'pyproject.toml') }}-${{ inputs.cache-number }}
         post-cleanup: "shell-init"
         create-args: >-
           python=${{ inputs.python-version }}
@@ -54,6 +54,17 @@ runs:
       shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
       run: |
         python --version
+
+    - name: install Qt bindings
+      shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
+      run: |
+        python -m pip install --upgrade --force-reinstall "PyQt6!=6.8.*"
+
+    - name: install Linux Qt runtime libs
+      if: runner.os == 'Linux'
+      shell: bash -el {0}
+      run: |
+        micromamba install -y -n derzug libegl
 
     - name: get tags for correct versioning
       shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
