@@ -7,13 +7,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field
-from slanrod.core import SlanRodModel
+
+from ..core import DerzugModel
 
 if TYPE_CHECKING:
     from .pipe import Pipe
 
 
-class ExecutionContext(SlanRodModel):
+class ExecutionContext(DerzugModel):
     """
     Execution context provided to context-aware tasks during pipeline execution.
 

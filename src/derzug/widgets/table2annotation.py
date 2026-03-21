@@ -26,14 +26,14 @@ from derzug.models.annotations import (
     SpanGeometry,
 )
 from derzug.orange import Setting
+from derzug.utils.annotation_metadata import LABEL_SLOTS, optional_text
 
 _GEOM_DOT = 0
 _GEOM_LINE = 1
 
-_GROUP_MODE_FIXED = 0
-_GROUP_MODE_COLUMN = 1
+_LABEL_MODE_FIXED = 0
+_LABEL_MODE_COLUMN = 1
 
-_GROUP_SLOTS = ["", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 _NO_COLUMN = ""
 
 
@@ -58,7 +58,7 @@ class Table2Annotation(ZugWidget):
         "Convert rows of a DataFrame into an AnnotationSet. "
         "Each row becomes one annotation (dot or line)."
     )
-    icon = "icons/MergeData.svg"
+    icon = "icons/DataFrame2Annotation.svg"
     category = "Table"
     keywords = ("annotation", "table", "dataframe", "convert", "label")
     priority = 25
@@ -69,10 +69,10 @@ class Table2Annotation(ZugWidget):
     dims_text: str = Setting("")  # comma-separated dims
     col_map: dict = Setting({})  # {dim_name: col_name}
     semantic_type_text: str = Setting("generic")
-    text_col: str = Setting(_NO_COLUMN)
-    group_mode: int = Setting(_GROUP_MODE_FIXED)  # 0=fixed, 1=column
-    fixed_group: str = Setting("")
-    group_col: str = Setting(_NO_COLUMN)
+    notes_col: str = Setting(_NO_COLUMN)
+    label_mode: int = Setting(_LABEL_MODE_FIXED)  # 0=fixed, 1=column
+    fixed_label: str = Setting("")
+    label_col: str = Setting(_NO_COLUMN)
     tags_col: str = Setting(_NO_COLUMN)
 
     class Error(ZugWidget.Error):
@@ -96,7 +96,7 @@ class Table2Annotation(ZugWidget):
     class Outputs:
         """Widget output signals."""
 
-        annotation_set = Output("Annotations", AnnotationSet, auto_summary=False)
+        annotation_set = Output("Annotations", AnnotationSet)
 
     def __init__(self) -> None:
         super().__init__()
@@ -157,40 +157,40 @@ class Table2Annotation(ZugWidget):
             callback=self.run,
         )
 
-        # Text column
-        text_col_row = QWidget(fields_box)
-        text_col_layout = QHBoxLayout(text_col_row)
-        text_col_layout.setContentsMargins(0, 0, 0, 0)
-        text_col_layout.setSpacing(4)
-        text_col_layout.addWidget(QLabel("Text column:", text_col_row))
-        self._text_col_combo = QComboBox(text_col_row)
-        self._text_col_combo.currentTextChanged.connect(self._on_text_col_changed)
-        text_col_layout.addWidget(self._text_col_combo, 1)
-        fields_box.layout().addWidget(text_col_row)
+        # Notes column
+        notes_col_row = QWidget(fields_box)
+        notes_col_layout = QHBoxLayout(notes_col_row)
+        notes_col_layout.setContentsMargins(0, 0, 0, 0)
+        notes_col_layout.setSpacing(4)
+        notes_col_layout.addWidget(QLabel("Notes column:", notes_col_row))
+        self._notes_col_combo = QComboBox(notes_col_row)
+        self._notes_col_combo.currentTextChanged.connect(self._on_notes_col_changed)
+        notes_col_layout.addWidget(self._notes_col_combo, 1)
+        fields_box.layout().addWidget(notes_col_row)
 
-        # Group
+        # Label
         gui.radioButtons(
             fields_box,
             self,
-            "group_mode",
-            btnLabels=["Fixed group:", "Group column:"],
+            "label_mode",
+            btnLabels=["Fixed label:", "Label column:"],
             orientation=gui.Qt.Horizontal,
-            callback=self._on_group_mode_changed,
+            callback=self._on_label_mode_changed,
         )
-        group_row = QWidget(fields_box)
-        group_row_layout = QHBoxLayout(group_row)
-        group_row_layout.setContentsMargins(0, 0, 0, 0)
-        group_row_layout.setSpacing(4)
-        self._fixed_group_combo = QComboBox(group_row)
-        self._fixed_group_combo.addItems(["(none)", *_GROUP_SLOTS[1:]])
-        if self.fixed_group in _GROUP_SLOTS[1:]:
-            self._fixed_group_combo.setCurrentText(self.fixed_group)
-        self._fixed_group_combo.currentTextChanged.connect(self._on_fixed_group_changed)
-        self._group_col_combo = QComboBox(group_row)
-        self._group_col_combo.currentTextChanged.connect(self._on_group_col_changed)
-        group_row_layout.addWidget(self._fixed_group_combo, 1)
-        group_row_layout.addWidget(self._group_col_combo, 1)
-        fields_box.layout().addWidget(group_row)
+        label_row = QWidget(fields_box)
+        label_row_layout = QHBoxLayout(label_row)
+        label_row_layout.setContentsMargins(0, 0, 0, 0)
+        label_row_layout.setSpacing(4)
+        self._fixed_label_combo = QComboBox(label_row)
+        self._fixed_label_combo.addItems(["(none)", *LABEL_SLOTS])
+        if self.fixed_label in LABEL_SLOTS:
+            self._fixed_label_combo.setCurrentText(self.fixed_label)
+        self._fixed_label_combo.currentTextChanged.connect(self._on_fixed_label_changed)
+        self._label_col_combo = QComboBox(label_row)
+        self._label_col_combo.currentTextChanged.connect(self._on_label_col_changed)
+        label_row_layout.addWidget(self._fixed_label_combo, 1)
+        label_row_layout.addWidget(self._label_col_combo, 1)
+        fields_box.layout().addWidget(label_row)
 
         # Tags column
         tags_col_row = QWidget(fields_box)
@@ -209,7 +209,7 @@ class Table2Annotation(ZugWidget):
         # Restore persisted state
         self._rebuild_mapping_rows()
         self._update_line_axis_visibility()
-        self._update_group_controls()
+        self._update_label_controls()
 
     # ── Input handler ─────────────────────────────────────────────
 
@@ -261,8 +261,8 @@ class Table2Annotation(ZugWidget):
                     id=f"t2a-{i}",
                     geometry=geometry,
                     semantic_type=self.semantic_type_text.strip() or "generic",
-                    text=self._get_text(row),
-                    group=self._get_group(row),
+                    notes=self._get_notes(row),
+                    label=self._get_label(row),
                     tags=self._get_tags(row),
                 )
             )
@@ -303,28 +303,26 @@ class Table2Annotation(ZugWidget):
             raise ValueError(f"NaN in column '{col}'")
         return SpanGeometry(dim=dim, start=val, end=val)
 
-    def _get_text(self, row: pd.Series) -> str | None:
-        """Return Annotation.text from the configured column, or None."""
-        col = self.text_col
+    def _get_notes(self, row: pd.Series) -> str | None:
+        """Return Annotation.notes from the configured column, or None."""
+        col = self.notes_col
         if not col or col not in row.index:
             return None
         val = row[col]
         if _is_missing(val):
             return None
-        return str(val)
+        return optional_text(val)
 
-    def _get_group(self, row: pd.Series) -> str | None:
-        """Return Annotation.group from fixed setting or per-row column."""
-        if self.group_mode == _GROUP_MODE_COLUMN:
-            col = self.group_col
+    def _get_label(self, row: pd.Series) -> str | None:
+        """Return Annotation.label from fixed setting or per-row column."""
+        if self.label_mode == _LABEL_MODE_COLUMN:
+            col = self.label_col
             if col and col in row.index:
                 val = row[col]
                 if not _is_missing(val):
-                    s = str(val).strip()
-                    if s in _GROUP_SLOTS[1:]:
-                        return s
+                    return optional_text(val)
             return None
-        return self.fixed_group or None
+        return optional_text(self.fixed_label)
 
     def _get_tags(self, row: pd.Series) -> tuple[str, ...]:
         """Return Annotation.tags split from a comma-separated column value."""
@@ -420,8 +418,8 @@ class Table2Annotation(ZugWidget):
 
         # Auxiliary combos
         for combo, attr in [
-            (self._text_col_combo, "text_col"),
-            (self._group_col_combo, "group_col"),
+            (self._notes_col_combo, "notes_col"),
+            (self._label_col_combo, "label_col"),
             (self._tags_col_combo, "tags_col"),
         ]:
             saved = getattr(self, attr)
@@ -436,11 +434,11 @@ class Table2Annotation(ZugWidget):
         """Show the line-axis row only in line mode."""
         self._line_axis_row.setVisible(self.geometry_type == _GEOM_LINE)
 
-    def _update_group_controls(self) -> None:
-        """Enable the appropriate group sub-control for the current mode."""
-        fixed = self.group_mode == _GROUP_MODE_FIXED
-        self._fixed_group_combo.setEnabled(fixed)
-        self._group_col_combo.setEnabled(not fixed)
+    def _update_label_controls(self) -> None:
+        """Enable the appropriate label sub-control for the current mode."""
+        fixed = self.label_mode == _LABEL_MODE_FIXED
+        self._fixed_label_combo.setEnabled(fixed)
+        self._label_col_combo.setEnabled(not fixed)
 
     # ── Callbacks ─────────────────────────────────────────────────
 
@@ -469,20 +467,20 @@ class Table2Annotation(ZugWidget):
         self.col_map = updated
         self.run()
 
-    def _on_text_col_changed(self, text: str) -> None:
-        self.text_col = text
+    def _on_notes_col_changed(self, text: str) -> None:
+        self.notes_col = text
         self.run()
 
-    def _on_group_mode_changed(self) -> None:
-        self._update_group_controls()
+    def _on_label_mode_changed(self) -> None:
+        self._update_label_controls()
         self.run()
 
-    def _on_fixed_group_changed(self, text: str) -> None:
-        self.fixed_group = "" if text == "(none)" else text
+    def _on_fixed_label_changed(self, text: str) -> None:
+        self.fixed_label = "" if text == "(none)" else text
         self.run()
 
-    def _on_group_col_changed(self, text: str) -> None:
-        self.group_col = text
+    def _on_label_col_changed(self, text: str) -> None:
+        self.label_col = text
         self.run()
 
     def _on_tags_col_changed(self, text: str) -> None:

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect x="4" y="4" width="40" height="40" rx="2"
+        fill="#ffffff" stroke="#333333" stroke-width="2.5"/>
+  <!-- Baseline -->
+  <line x1="6" y1="39" x2="42" y2="39"
+        stroke="#333333" stroke-width="1.5"/>
+  <!-- Bell / taper window curve (filled) -->
+  <path d="M 6,39 Q 10,39 14,32 Q 18,18 24,8 Q 30,18 34,32 Q 38,39 42,39 Z"
+        fill="#333333"/>
+</svg>

@@ -192,6 +192,7 @@ def derzug_app(qapp, tmp_path_factory) -> DerZugAppContext:
     main.output = TerminalTextDocument()
     main.registry = main.run_discovery()
     window = main.setup_main_window()
+    window.set_experimental_warning_hidden(True)
 
     # Keep fixture setup headless-safe; tests can show explicitly when needed.
     qapp.processEvents()

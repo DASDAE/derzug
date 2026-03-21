@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <!-- Table (right side) -->
+  <rect x="20" y="7" width="23" height="34" rx="2"
+        fill="#ffffff" stroke="#333333" stroke-width="2.5"/>
+  <!-- Header row -->
+  <rect x="21.3" y="8.3" width="20.4" height="8"
+        fill="#333333"/>
+  <!-- Header / body separator -->
+  <line x1="20" y1="16.5" x2="43" y2="16.5"
+        stroke="#333333" stroke-width="1.5"/>
+  <!-- Column divider (data area) -->
+  <line x1="31" y1="16.5" x2="31" y2="41"
+        stroke="#333333" stroke-width="1.5"/>
+  <!-- Data row dividers -->
+  <line x1="20" y1="25" x2="43" y2="25"
+        stroke="#333333" stroke-width="1.5"/>
+  <line x1="20" y1="33" x2="43" y2="33"
+        stroke="#333333" stroke-width="1.5"/>
+  <!-- Outer border on top -->
+  <rect x="20" y="7" width="23" height="34" rx="2"
+        fill="none" stroke="#333333" stroke-width="2.5"/>
+  <!-- Pencil (left side, tip at bottom-left, eraser at top-right) -->
+  <!-- Writing lines -->
+  <line x1="3" y1="36" x2="16" y2="36"
+        stroke="#333333" stroke-width="2" stroke-linecap="round"/>
+  <line x1="3" y1="41" x2="12" y2="41"
+        stroke="#333333" stroke-width="2" stroke-linecap="round"/>
+  <g transform="rotate(135, 10, 18)">
+    <!-- Eraser -->
+    <rect x="-4" y="14" width="3" height="8"
+          fill="#ffffff" stroke="#333333" stroke-width="1.5"/>
+    <!-- Ferrule -->
+    <rect x="-1" y="14" width="3" height="8"
+          fill="#333333"/>
+    <!-- Body -->
+    <rect x="2" y="14" width="15" height="8"
+          fill="#ffffff" stroke="#333333" stroke-width="1.5"/>
+    <!-- Tip -->
+    <polygon points="17,14 22,18 17,22"
+             fill="#333333"/>
+  </g>
+</svg>

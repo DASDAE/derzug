@@ -38,6 +38,8 @@ _TOOL_METADATA = {
 class AnnotationToolbox(QFrame):
     """Compact floating toolbox for annotation-capable hosts."""
 
+    _BASE_TITLE = "Annotations"
+
     toolChanged = Signal(str)  # noqa: N815
     fitRequested = Signal(str)  # noqa: N815
     hideRequested = Signal()  # noqa: N815
@@ -72,6 +74,11 @@ class AnnotationToolbox(QFrame):
             button.setChecked(False)
         for button in buttons:
             button.setAutoExclusive(True)
+
+    def set_dirty(self, dirty: bool) -> None:
+        """Reflect unsent annotation changes in the toolbox title."""
+        suffix = " *" if dirty else ""
+        self.title_label.setText(f"{self._BASE_TITLE}{suffix}")
 
     @property
     def user_moved(self) -> bool:
@@ -167,7 +174,7 @@ class AnnotationToolbox(QFrame):
         header.setSpacing(4)
         layout.addWidget(header_widget)
 
-        title = QLabel("Annotations", self)
+        title = QLabel(self._BASE_TITLE, self)
         title.setObjectName("annotation-toolbox-title")
         header.addWidget(title)
         self.title_label = title

@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-
 from derzug.models.annotations import AnnotationSet, PointGeometry, SpanGeometry
 from derzug.utils.testing import TestWidgetDefaults, capture_output, widget_context
 from derzug.widgets.table2annotation import Table2Annotation
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -52,6 +50,8 @@ class TestTable2AnnotationDefaults(TestWidgetDefaults):
 
 
 class TestSetData:
+    """Tests for Table2Annotation.set_data."""
+
     def test_none_input_shows_no_data_warning(self, widget, monkeypatch):
         """None input triggers the no_data warning."""
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)
@@ -73,6 +73,8 @@ class TestSetData:
 
 
 class TestRunOutput:
+    """Tests for Table2Annotation output correctness."""
+
     def test_no_dims_shows_error(self, widget, monkeypatch):
         """Missing dims configuration raises no_dims error."""
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)
@@ -117,8 +119,6 @@ class TestRunOutput:
 
     def test_rows_with_nan_are_skipped(self, widget, monkeypatch):
         """Rows containing NaN in a mapped column are skipped with a warning."""
-        import math
-
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)
         _configure_point_widget(widget)
         df = pd.DataFrame({"time": [1.0, float("nan")], "dist": [10.0, 20.0]})

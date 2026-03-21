@@ -15,11 +15,11 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from pydantic import ConfigDict
 
-from ..core import SlanRodBaseModel
+from ..core import DerzugBaseModel
 from ..utils.misc import get_class_ast_hash
 
 
-class Task(SlanRodBaseModel):
+class Task(DerzugBaseModel):
     """
     Base class for workflow tasks.
 

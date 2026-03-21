@@ -1,0 +1,27 @@
+# This is where global configurations are added.
+
+name: "Load Shared Variables"
+description: "Loads shared variables and sets them as environment variables and outputs"
+
+outputs:
+  python-test-matrix:
+    description: "Python version matrix for full tests"
+    value: ${{ steps.load.outputs.python-test-matrix }}
+  python-min-deps-matrix:
+    description: "Python version matrix for minimum dependency tests"
+    value: ${{ steps.load.outputs.python-min-deps-matrix }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: load shared variables
+      id: load
+      shell: bash
+      run: |
+        python_default="3.13"
+        python_test_matrix='["3.13","3.14"]'
+        python_min_deps_matrix='["3.13","3.14"]'
+
+        echo "PYTHON_DEFAULT=$python_default" >> "$GITHUB_ENV"
+        echo "python-test-matrix=$python_test_matrix" >> "$GITHUB_OUTPUT"
+        echo "python-min-deps-matrix=$python_min_deps_matrix" >> "$GITHUB_OUTPUT"

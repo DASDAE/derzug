@@ -1,0 +1,74 @@
+name: "Mamba Install"
+description: "Sets up mamba before installing derzug's environment.yml file."
+inputs:
+  python-version:
+    description: "The python string of the version to install"
+    required: true
+
+  environment-file:
+    description: "The path to the environment file to use."
+    required: false
+    default: "environment.yml"
+
+  install-group-str:
+    description: "The string to use for specifying install groups"
+    default: "[dev]"
+    required: false
+
+  install-package:
+    description: "If true, install derzug"
+    default: "true"
+    required: false
+
+  cache-number:
+    description: "Cache number. Use != 1 to reset data cache"
+    required: false
+    default: "1"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: mamba-org/setup-micromamba@v2
+      with:
+        micromamba-version: '2.0.5-0' # versions: https://github.com/mamba-org/micromamba-releases
+        environment-file: ${{ inputs.environment-file }}
+        init-shell: >-
+          bash
+          powershell
+        cache-environment: true
+        cache-environment-key: environment-${{ runner.os }}-${{ inputs.python-version }}-${{ inputs.environment-file }}-${{ inputs.cache-number }}
+        post-cleanup: "shell-init"
+        create-args: >-
+          python=${{ inputs.python-version }}
+
+    # Not sure why this is needed but it appears to be the case
+    - name: fix env
+      if: runner.os != 'Windows'
+      shell: bash -el {0}
+      run: |
+        micromamba shell init --shell bash --root-prefix=~/micromamba
+        eval "$(micromamba shell hook --shell bash)"
+        micromamba activate derzug
+
+    - name: print python version
+      shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
+      run: |
+        python --version
+
+    - name: get tags for correct versioning
+      shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
+      run: |
+        git fetch --tags --force
+
+    - name: install derzug
+      if: "${{ inputs.install-package == 'true' }}"
+      shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
+      run: |
+        pip install -e .${{ inputs.install-group-str }}
+
+    # Print out the package info for current environment
+    - name: print package info
+      shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
+      run: |
+        micromamba info
+        micromamba list

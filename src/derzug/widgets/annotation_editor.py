@@ -15,6 +15,10 @@ from AnyQt.QtWidgets import (
 )
 
 from derzug.models.annotations import Annotation
+from derzug.utils.annotation_metadata import (
+    ANNOTATION_TEXT_FIELD_SPECS,
+    optional_text,
+)
 
 
 class AnnotationEditorDialog(QDialog):
@@ -31,18 +35,20 @@ class AnnotationEditorDialog(QDialog):
         layout.addLayout(form)
 
         self._semantic_type = QLineEdit(annotation.semantic_type, self)
-        self._text = QLineEdit(annotation.text or "", self)
         self._tags = QLineEdit(", ".join(annotation.tags), self)
-        self._group = QLineEdit(annotation.group or "", self)
+        self._text_inputs: dict[str, QLineEdit] = {}
         self._properties = QLineEdit(
             json.dumps(annotation.properties, sort_keys=True),
             self,
         )
 
         form.addRow("Type", self._semantic_type)
-        form.addRow("Text", self._text)
         form.addRow("Tags", self._tags)
-        form.addRow("Group", self._group)
+        for spec in ANNOTATION_TEXT_FIELD_SPECS:
+            line_edit = QLineEdit(getattr(annotation, spec.name) or "", self)
+            self._text_inputs[spec.name] = line_edit
+            setattr(self, f"_{spec.name}", line_edit)
+            form.addRow(spec.label, line_edit)
         form.addRow("Properties", self._properties)
 
         buttons = QDialogButtonBox(
@@ -65,9 +71,11 @@ class AnnotationEditorDialog(QDialog):
             properties = {}
         return {
             "semantic_type": self._semantic_type.text().strip() or "generic",
-            "text": self._text.text().strip() or None,
             "tags": tuple(tag.strip() for tag in raw_tags.split(",") if tag.strip()),
-            "group": self._group.text().strip() or None,
+            **{
+                name: optional_text(line_edit.text())
+                for name, line_edit in self._text_inputs.items()
+            },
             "properties": properties,
         }
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 import numpy as np
@@ -23,7 +23,7 @@ def _normalize_coord_value(value: Any) -> CoordScalar:
     if isinstance(value, np.generic):
         if np.issubdtype(value.dtype, np.datetime64):
             ns_value = value.astype("datetime64[ns]").astype(np.int64).item()
-            return datetime.fromtimestamp(ns_value / 1e9, tz=timezone.utc)
+            return datetime.fromtimestamp(ns_value / 1e9, tz=UTC)
         if np.issubdtype(value.dtype, np.timedelta64):
             ns_value = value.astype("timedelta64[ns]").astype(np.int64).item()
             return timedelta(microseconds=ns_value / 1000)
@@ -184,9 +184,12 @@ class Annotation(_StrictModel):
     id: str
     geometry: Geometry
     semantic_type: str = "generic"
-    text: str | None = None
+    annotator: str | None = None
+    organization: str | None = None
+    notes: str | None = None
     tags: tuple[str, ...] = ()
     group: str | None = None
+    label: str | None = None
     properties: dict[str, Any] = Field(default_factory=dict)
     ui: dict[str, Any] = Field(default_factory=dict)
 

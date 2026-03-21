@@ -166,7 +166,7 @@ class DataFrameLoader(ConcurrentWidgetMixin, ZugWidget):
         "Load a tabular DataFrame from a file. "
         "Format is auto-detected from the file extension or can be set manually."
     )
-    icon = "icons/File.svg"
+    icon = "icons/DataFrame.svg"
     category = "IO"
     keywords = ("dataframe", "csv", "parquet", "excel", "table", "file", "load")
     priority = 20

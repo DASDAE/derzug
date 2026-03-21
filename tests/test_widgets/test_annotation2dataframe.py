@@ -36,9 +36,10 @@ def _point_set() -> AnnotationSet:
                 id="p1",
                 geometry=PointGeometry(dims=("time", "distance"), values=(1.0, 10.0)),
                 semantic_type="arrival",
-                text="first",
+                notes="first",
                 tags=("manual",),
                 group="1",
+                label="p_pick",
                 properties={"confidence": 0.9},
             ),
             Annotation(
@@ -96,8 +97,9 @@ def test_output_columns_in_order(widget, monkeypatch):
         "distance",
         "id",
         "semantic_type",
-        "text",
+        "notes",
         "group",
+        "label",
         "tags",
     ]
 
@@ -141,24 +143,26 @@ def test_empty_tags_produce_empty_string(widget, monkeypatch):
 
 
 def test_metadata_fields_preserved(widget, monkeypatch):
-    """semantic_type, text, and group values are passed through unchanged."""
+    """semantic_type, notes, group, and label values are preserved."""
     received = capture_output(widget.Outputs.data, monkeypatch)
     widget.set_annotation_set(_point_set())
     df = received[-1]
     p1_row = df[df["id"] == "p1"].iloc[0]
     assert p1_row["semantic_type"] == "arrival"
-    assert p1_row["text"] == "first"
+    assert p1_row["notes"] == "first"
     assert p1_row["group"] == "1"
+    assert p1_row["label"] == "p_pick"
 
 
-def test_none_text_and_group_propagate(widget, monkeypatch):
-    """Annotations with None text/group produce None or NaN in those columns."""
+def test_none_notes_group_and_label_propagate(widget, monkeypatch):
+    """Annotations with missing notes/group/label stay missing in the DataFrame."""
     received = capture_output(widget.Outputs.data, monkeypatch)
     widget.set_annotation_set(_point_set())
     df = received[-1]
     p3_row = df[df["id"] == "p3"].iloc[0]
-    assert p3_row["text"] is None or pd.isna(p3_row["text"])
+    assert p3_row["notes"] is None or pd.isna(p3_row["notes"])
     assert p3_row["group"] is None or pd.isna(p3_row["group"])
+    assert p3_row["label"] is None or pd.isna(p3_row["label"])
 
 
 def test_include_properties_adds_json_column(widget, monkeypatch):

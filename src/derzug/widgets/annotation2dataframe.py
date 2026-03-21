@@ -14,6 +14,7 @@ from Orange.widgets.widget import Msg
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
 from derzug.orange import Setting
+from derzug.utils.annotation_metadata import annotation_metadata_row
 
 
 class Annotation2DataFrame(ZugWidget):
@@ -21,8 +22,8 @@ class Annotation2DataFrame(ZugWidget):
 
     name = "Annotations to DataFrame"
     description = "Extract point annotations from an AnnotationSet into a DataFrame."
-    icon = "icons/File.svg"
-    category = "IO"
+    icon = "icons/Annotation2DataFrame.svg"
+    category = "Table"
     keywords = ("annotation", "table", "dataframe", "convert", "point")
     priority = 26
 
@@ -37,7 +38,7 @@ class Annotation2DataFrame(ZugWidget):
     class Inputs:
         """Widget input signals."""
 
-        annotation_set = Input("Annotations", AnnotationSet, auto_summary=False)
+        annotation_set = Input("Annotations", AnnotationSet)
 
     class Outputs:
         """Widget output signals."""
@@ -86,10 +87,7 @@ class Annotation2DataFrame(ZugWidget):
             row = {
                 **dim_vals,
                 "id": ann.id,
-                "semantic_type": ann.semantic_type,
-                "text": ann.text,
-                "group": ann.group,
-                "tags": ", ".join(ann.tags),
+                **annotation_metadata_row(ann),
             }
             if self.include_properties:
                 row["properties"] = json.dumps(ann.properties)

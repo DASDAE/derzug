@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<scheme version="2.0" title="" description="">
+<scheme version="2.0" title="Intro to DSS" description="">
 	<nodes>
 		<node id="0" name="Spool" qualified_name="derzug.widgets.spool.Spool" project_name="derzug" version="" title="Spool ⚡" position="(128.0, 104.0)" />
 		<node id="1" name="Waterfall" qualified_name="derzug.widgets.waterfall.Waterfall" project_name="derzug" version="" title="Waterfall" position="(281.66666666666663, 97.11111111111111)" />

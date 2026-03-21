@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
 
 import dascore as dc
 import numpy as np
@@ -66,7 +65,7 @@ class _TimeSeriesRenderState:
     color_levels: tuple[float, float] | None = None
 
 
-_WiggleRenderState: TypeAlias = _OffsetRenderState | _TimeSeriesRenderState
+type _WiggleRenderState = _OffsetRenderState | _TimeSeriesRenderState
 
 
 class _ExpandableGainSlider(QSlider):

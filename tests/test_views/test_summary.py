@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import dascore as dc
-from derzug.views.summary import _format_detail_html, summarize_patch, summarize_spool
+from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
+from derzug.views.summary import (
+    _format_detail_html,
+    summarize_annotation_set,
+    summarize_patch,
+    summarize_spool,
+)
 
 
 class _ReprValue:
@@ -39,3 +45,26 @@ def test_summarize_spool_uses_formatted_html_details():
     assert out.details is not None
     assert out.details.startswith("<pre")
     assert "white-space:pre-wrap" in out.details
+
+
+def test_summarize_annotation_set_uses_formatted_html_details():
+    """AnnotationSet summaries should provide HTML-safe pretty-printed details."""
+    ann_set = AnnotationSet(
+        dims=("time",),
+        annotations=(
+            Annotation(
+                id="a",
+                geometry=PointGeometry(dims=("time",), values=(1.0,)),
+            ),
+        ),
+    )
+
+    out = summarize_annotation_set(ann_set)
+
+    assert out.summary == "Annotations"
+    assert out.details is not None
+    assert out.details.startswith("<pre")
+    assert "&quot;schema_version&quot;: &quot;2&quot;" in out.details
+    assert "&quot;dims&quot;: [" in out.details
+    assert "\n  &quot;annotations&quot;: [" in out.details
+    assert "&quot;id&quot;: &quot;a&quot;" in out.details

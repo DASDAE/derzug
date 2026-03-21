@@ -83,6 +83,10 @@ class ZugWidget(OWWidget, openclass=True):
             self._toggle_fullscreen()
             event.accept()
             return
+        if self._should_send_pending_state(event):
+            if self._flush_pending_outputs():
+                event.accept()
+                return
         if self._should_close_window(event):
             self._close_window()
             event.accept()
@@ -102,6 +106,7 @@ class ZugWidget(OWWidget, openclass=True):
         super().__init__(*args, **kwargs)
         self._ui_refresh_pending = False
         self._control_area_width_check_pending = False
+        self._dirty_delayed_outputs: set[str] = set()
         self._last_error_exc: (
             tuple[type[BaseException], BaseException, object] | None
         ) = None
@@ -122,6 +127,9 @@ class ZugWidget(OWWidget, openclass=True):
         self._escape_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self._escape_shortcut.setContext(Qt.WindowShortcut)
         self._escape_shortcut.activated.connect(self._on_escape_shortcut)
+        self._send_pending_shortcut = QShortcut(QKeySequence(Qt.Key_S), self)
+        self._send_pending_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._send_pending_shortcut.activated.connect(self._on_send_pending_shortcut)
         self._close_shortcut = QShortcut(QKeySequence("Ctrl+Q"), self)
         self._close_shortcut.setContext(Qt.WindowShortcut)
         self._close_shortcut.activated.connect(self._on_close_shortcut)
@@ -286,6 +294,7 @@ class ZugWidget(OWWidget, openclass=True):
         """Return shortcut rows shared by all DerZug widgets."""
         return [
             ("F", "Toggle fullscreen"),
+            ("S", "Send unsent state"),
             ("Ctrl+Q", "Close window"),
             ("F1", "Open widget help"),
             ("Shift+~", "Raise canvas window"),
@@ -323,6 +332,45 @@ class ZugWidget(OWWidget, openclass=True):
             return False
         return not self._focus_should_keep_key_behavior(QApplication.focusWidget())
 
+    def _should_send_pending_state(self, event: QKeyEvent) -> bool:
+        """Return True when plain `s` should flush delayed outputs."""
+        if event.key() != Qt.Key_S:
+            return False
+        if event.modifiers() != Qt.NoModifier:
+            return False
+        return not self._focus_should_keep_key_behavior(QApplication.focusWidget())
+
+    def _delayed_output_names(self) -> tuple[str, ...]:
+        """Return delayed output names for this widget."""
+        return ()
+
+    def _mark_output_dirty(self, name: str) -> None:
+        """Mark one declared delayed output as having unsent local changes."""
+        if name in self._delayed_output_names():
+            self._dirty_delayed_outputs.add(name)
+
+    def _clear_output_dirty(self, name: str) -> None:
+        """Clear the pending flag for one delayed output."""
+        self._dirty_delayed_outputs.discard(name)
+
+    def _is_output_dirty(self, name: str) -> bool:
+        """Return True when a delayed output currently has unsent changes."""
+        return name in self._dirty_delayed_outputs
+
+    def _flush_delayed_output(self, name: str) -> bool:
+        """Flush one delayed output by name and return True if anything sent."""
+        return False
+
+    def _flush_pending_outputs(self) -> bool:
+        """Flush all dirty delayed outputs declared by this widget."""
+        sent_any = False
+        for name in self._delayed_output_names():
+            if not self._is_output_dirty(name):
+                continue
+            if self._flush_delayed_output(name):
+                sent_any = True
+        return sent_any
+
     def _focus_should_keep_key_behavior(self, widget: QWidget | None) -> bool:
         """
         Return True when the focused widget should keep normal text-entry behavior.
@@ -346,6 +394,12 @@ class ZugWidget(OWWidget, openclass=True):
     def _on_escape_shortcut(self) -> None:
         """Cancel active interactions and restore focus to the widget window."""
         self._handle_escape()
+
+    def _on_send_pending_shortcut(self) -> None:
+        """Flush delayed outputs from a shared window shortcut."""
+        if self._focus_should_keep_key_behavior(QApplication.focusWidget()):
+            return
+        self._flush_pending_outputs()
 
     def _should_raise_canvas(self, event: QKeyEvent) -> bool:
         """Return True when Shift+~ should raise the canvas window."""

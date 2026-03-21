@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 import dascore as dc
 import numpy as np
 import pyqtgraph as pg
-from AnyQt.QtCore import QEvent, QRectF, Qt
+from AnyQt.QtCore import QRectF, Qt, QTimer
 from AnyQt.QtGui import QIcon
 from AnyQt.QtWidgets import (
     QAction,
@@ -22,6 +22,7 @@ from AnyQt.QtWidgets import (
     QLabel,
     QMenu,
     QMenuBar,
+    QPushButton,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -229,6 +230,8 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
     saved_selection_basis = Setting("", schema_only=True)
     saved_selection_ranges = Setting([], schema_only=True)
     saved_selection_has_roi = Setting(None, schema_only=True)
+    saved_annotation_set = Setting(None, schema_only=True)
+    saved_view_range = Setting(None, schema_only=True)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -262,13 +265,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         """Input signal definitions."""
 
         patch = Input("Patch", dc.Patch)
-        annotation_set = Input("Annotations", AnnotationSet, auto_summary=False)
+        annotation_set = Input("Annotations", AnnotationSet)
 
     class Outputs:
         """Output signal definitions."""
 
         patch = Output("Patch", dc.Patch)
-        annotation_set = Output("Annotations", AnnotationSet, auto_summary=False)
+        annotation_set = Output("Annotations", AnnotationSet)
 
     def widget_shortcuts(self) -> list[tuple[str, str]]:
         """Return Waterfall-specific keyboard and pointer shortcuts."""
@@ -278,8 +281,8 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             ("Shift+Left Click", "Place a point annotation"),
             ("E", "Fit an ellipse from the selected point annotations"),
             ("H", "Fit a hyperbola from the selected point annotations"),
-            ("1-9", "Assign selected annotations to group slots"),
-            ("0", "Clear group assignment from selected annotations"),
+            ("1-9", "Assign selected annotations to label slots"),
+            ("0", "Clear label assignment from selected annotations"),
         ]
 
     def __init__(self) -> None:
@@ -289,6 +292,8 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._pending_saved_selection_restore = False
         self._pending_saved_selection_has_roi: bool | None = None
         self._prime_saved_selection_state()
+        self._pending_saved_annotation_set = self._load_saved_annotation_state()
+        self._pending_saved_view_range = self._load_saved_view_range()
         self._patch: dc.Patch | None = None
         self._pending_view_range: (
             tuple[tuple[float, float], tuple[float, float]] | None
@@ -345,6 +350,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         selection_layout.insertWidget(reset_index, button_row)
         self._selection_button_row = button_row
 
+        ann_box = gui.widgetBox(self.controlArea, "Annotations")
+        self._open_annotations_button = QPushButton("Open Annotations (A)", ann_box)
+        self._open_annotations_button.setCheckable(True)
+        self._open_annotations_button.setToolTip("Show/hide the annotation toolbox (A)")
+        self._open_annotations_button.setChecked(False)
+        ann_box.layout().addWidget(self._open_annotations_button)
+
         self._plot_widget = pg.PlotWidget(
             self.mainArea,
             viewBox=_WaterfallViewBox(),
@@ -391,6 +403,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             ),
             default_tool="select",
             on_tool_changed=self._on_overlay_tool_changed,
+            on_annotation_set_changed=self._on_local_annotation_set_changed,
         )
         self._annotation_controller._editor_class = _AnnotationEditorDialog
         self._annotation_controller.toolbox.fitRequested.connect(
@@ -399,10 +412,9 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
         self._cmap_combo.currentTextChanged.connect(self._on_colormap_changed)
         self._add_selection_button.clicked.connect(self._add_selection_from_view)
+        self._open_annotations_button.toggled.connect(self._toggle_annotation_toolbox)
         self._plot_widget.scene().sigMouseClicked.connect(self._on_plot_mouse_clicked)
         self._plot_widget.scene().installEventFilter(self)
-        self._plot_widget.installEventFilter(self)
-        self._plot_widget.viewport().installEventFilter(self)
         self._mouse_proxy = pg.SignalProxy(
             self._plot_widget.scene().sigMouseMoved,
             rateLimit=60,
@@ -413,17 +425,12 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._apply_colormap(self.colormap)
         self._set_overlay_mode("select", sync_tool=False)
         self._install_view_menu_actions()
+        self._open_annotations_button.setChecked(not self._annotation_toolbox_hidden)
         self._toggle_annotations_action.setChecked(not self._annotation_toolbox_hidden)
 
     def eventFilter(self, obj, event) -> bool:
         """Handle floating toolbox placement and annotation draw gestures."""
         if self._annotation_controller.handle_event_filter(obj, event):
-            return True
-        if (
-            obj in {self._plot_widget, self._plot_widget.viewport()}
-            and event.type() == QEvent.Type.KeyPress
-            and self._handle_widget_key_press(event)
-        ):
             return True
         if obj is self._plot_widget.scene():
             return False
@@ -462,7 +469,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
                 Qt.Key_Delete,
                 Qt.Key_Backspace,
             ):
-                self._emit_annotation_set()
+                self._mark_output_dirty("annotation_set")
             return True
         if (
             self._overlay_mode == "select"
@@ -514,6 +521,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._pending_view_range = (
             None if should_reset_on_new else self._get_view_range()
         )
+        if (
+            not should_reset_on_new
+            and self._patch is None
+            and self._pending_saved_view_range is not None
+        ):
+            self._pending_view_range = self._pending_saved_view_range
+            self._force_preserve_pending_view_range = True
         if should_reset_on_new:
             self.color_limits = None
         had_active_selection = self._has_active_narrowed_selection()
@@ -539,13 +553,14 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._restore_saved_roi_after_render = patch is not None
         self._apply_pending_saved_selection_restore(patch)
         if patch is None:
-            self._clear_annotations(emit=False)
+            self._clear_annotations(emit=True)
         else:
             self._ensure_annotation_set()
+            self._apply_pending_saved_annotation_restore()
+            self._emit_annotation_set()
         self._persist_selection_settings()
         self._request_ui_refresh()
         self._emit_current_selection()
-        self._emit_annotation_set()
 
     @Inputs.annotation_set
     def set_annotation_set(self, annotation_set: AnnotationSet | None) -> None:
@@ -557,12 +572,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         ):
             self._annotation_set = None
             self._rebuild_annotation_items()
-            self._emit_annotation_set()
+            self._clear_output_dirty("annotation_set")
             return
         self._annotation_set = annotation_set
         self._active_annotation_id = None
         self._rebuild_annotation_items()
-        self._emit_annotation_set()
+        self._clear_output_dirty("annotation_set")
+        self._persist_annotation_settings()
 
     def _update_axis_state_from_patch(self, patch: dc.Patch | None) -> None:
         """Precompute axis metadata without forcing an immediate render."""
@@ -645,9 +661,47 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._annotation_controller.clear_annotations()
         if emit:
             self._emit_annotation_set()
+        else:
+            self._clear_output_dirty("annotation_set")
+            self._sync_annotation_toolbox_dirty_state()
+        self._persist_annotation_settings()
 
     def _emit_annotation_set(self) -> None:
         self.Outputs.annotation_set.send(self._annotation_controller.annotation_set)
+        self._clear_output_dirty("annotation_set")
+        self._sync_annotation_toolbox_dirty_state()
+
+    def _delayed_output_names(self) -> tuple[str, ...]:
+        """Return the delayed outputs for Waterfall."""
+        return ("annotation_set",)
+
+    def _flush_delayed_output(self, name: str) -> bool:
+        """Flush one delayed Waterfall output by name."""
+        if name != "annotation_set":
+            return False
+        self._emit_annotation_set()
+        return True
+
+    def _mark_output_dirty(self, name: str) -> None:
+        """Mark one delayed output dirty and update the toolbox title."""
+        super()._mark_output_dirty(name)
+        if name == "annotation_set":
+            self._sync_annotation_toolbox_dirty_state()
+            self._persist_annotation_settings()
+
+    def _clear_output_dirty(self, name: str) -> None:
+        """Clear one delayed output dirty flag and update the toolbox title."""
+        super()._clear_output_dirty(name)
+        if name == "annotation_set":
+            self._sync_annotation_toolbox_dirty_state()
+            self._persist_annotation_settings()
+
+    def _sync_annotation_toolbox_dirty_state(self) -> None:
+        """Mirror unsent annotation state into the toolbox title."""
+        controller = getattr(self, "_annotation_controller", None)
+        if controller is None:
+            return
+        self._annotation_toolbox.set_dirty(self._is_output_dirty("annotation_set"))
 
     def _rebuild_annotation_items(self) -> None:
         self._annotation_controller.rebuild_items()
@@ -655,14 +709,17 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
     def _annotation_by_id(self, annotation_id: str) -> Annotation | None:
         return self._annotation_controller.annotation_by_id(annotation_id)
 
+    def _on_local_annotation_set_changed(self) -> None:
+        """Record local overlay mutations as unsent Waterfall annotation changes."""
+        self._mark_output_dirty("annotation_set")
+        QTimer.singleShot(0, self._restore_window_focus)
+
     def _delete_annotation(self, annotation_id: str) -> None:
         self._annotation_controller.delete_annotation(annotation_id)
-        self._emit_annotation_set()
 
     def _create_point_annotation(self, plot_x: float, plot_y: float) -> None:
         self._activate_annotation_layer()
         self._annotation_controller.create_point_annotation(plot_x, plot_y)
-        self._emit_annotation_set()
 
     def _create_box_annotation(
         self,
@@ -671,7 +728,6 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
     ) -> None:
         self._activate_annotation_layer()
         self._annotation_controller.create_box_annotation(start, end)
-        self._emit_annotation_set()
 
     def _create_line_annotation(
         self,
@@ -680,17 +736,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
     ) -> None:
         self._activate_annotation_layer()
         self._annotation_controller.create_line_annotation(start, end)
-        self._emit_annotation_set()
 
     def _set_active_annotation(self, annotation_id: str | None) -> None:
         self._annotation_controller.set_active_annotation(annotation_id)
 
     def _edit_annotation(self, annotation_id: str) -> bool:
         self._annotation_controller._editor_class = _AnnotationEditorDialog
-        updated = self._annotation_controller.edit_annotation(annotation_id)
-        if updated:
-            self._emit_annotation_set()
-        return updated
+        return self._annotation_controller.edit_annotation(annotation_id)
 
     def _activate_annotation_layer(self) -> None:
         if self._annotation_controller.tool == "select":
@@ -900,6 +952,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
                 self._restore_saved_roi_after_render = False
             self._ensure_annotation_set()
             self._rebuild_annotation_items()
+            self._persist_annotation_settings()
         except Exception as exc:
             self._image_item.clear()
             self._axes = None
@@ -911,6 +964,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
     def _on_view_range_changed(self, _view_box, _view_range) -> None:
         """Refresh axis labels when zoom/pan changes datetime context."""
+        self._persist_view_range_settings()
         self._refresh_axis_labels()
 
     def _refresh_axis_labels(self) -> None:
@@ -1139,11 +1193,14 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         action = getattr(self, "_toggle_annotations_action", None)
         if action is not None and action.isChecked() != visible:
             action.setChecked(visible)
+        btn = getattr(self, "_open_annotations_button", None)
+        if btn is not None and btn.isChecked() != visible:
+            btn.setChecked(visible)
 
     def _on_annotation_fit_requested(self, shape: str) -> None:
         """Fit one shape from the selected point annotations."""
         if self._annotation_controller.fit_shape_from_selection(shape):
-            self._emit_annotation_set()
+            self._mark_output_dirty("annotation_set")
 
     def _on_overlay_tool_changed(self, tool: str) -> None:
         """Treat the selected toolbox button as the active overlay mode."""
@@ -1527,6 +1584,65 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             self._selection_state.patch.ranges[dim] = extent
             self._selection_state.patch.enabled[dim] = True
         self._restore_saved_roi_after_render = False
+
+    def _load_saved_annotation_state(self) -> dict[str, object] | None:
+        """Return one serialized Waterfall annotation set staged from settings."""
+        payload = self.saved_annotation_set
+        return payload if isinstance(payload, dict) else None
+
+    def _load_saved_view_range(
+        self,
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """Return one serialized Waterfall view range staged from settings."""
+        payload = self.saved_view_range
+        if not isinstance(payload, (list | tuple)) or len(payload) != 2:
+            return None
+        try:
+            x_range_raw, y_range_raw = payload
+            x_range = tuple(float(value) for value in x_range_raw)
+            y_range = tuple(float(value) for value in y_range_raw)
+        except (TypeError, ValueError):
+            return None
+        if len(x_range) != 2 or len(y_range) != 2:
+            return None
+        if not np.all(np.isfinite([*x_range, *y_range])):
+            return None
+        return x_range, y_range
+
+    def _apply_pending_saved_annotation_restore(self) -> None:
+        """Restore one saved Waterfall annotation set when axes are available."""
+        payload = self._pending_saved_annotation_set
+        if payload is None:
+            return
+        self._pending_saved_annotation_set = None
+        try:
+            annotation_set = AnnotationSet.model_validate(payload)
+        except Exception:
+            self.saved_annotation_set = None
+            return
+        dims = self._annotation_controller.annotation_dims()
+        if dims is None or annotation_set.dims != dims:
+            self.saved_annotation_set = None
+            return
+        self._annotation_set = annotation_set
+        self._active_annotation_id = None
+        self._rebuild_annotation_items()
+        self.saved_annotation_set = annotation_set.model_dump(mode="json")
+        self._clear_output_dirty("annotation_set")
+
+    def _persist_annotation_settings(self) -> None:
+        """Mirror the current Waterfall annotation set into workflow settings."""
+        annotation_set = self._annotation_set
+        self.saved_annotation_set = (
+            None if annotation_set is None else annotation_set.model_dump(mode="json")
+        )
+
+    def _persist_view_range_settings(self) -> None:
+        """Mirror the current Waterfall plot extents into workflow settings."""
+        view_range = self._get_view_range()
+        self.saved_view_range = (
+            None if view_range is None else [list(view_range[0]), list(view_range[1])]
+        )
 
     @staticmethod
     def _absolute_value_matches_coord_type(

@@ -19,7 +19,7 @@ class Taper(PatchDimWidget):
 
     name = "Taper"
     description = "Apply a taper window to a patch along a selected dimension"
-    icon = "icons/Filter.svg"
+    icon = "icons/Taper.svg"
     category = "Processing"
     keywords = ("taper", "window", "hann", "pre-fft", "cosine")
     priority = 21.4
@@ -29,7 +29,12 @@ class Taper(PatchDimWidget):
     p = Setting(0.05)
     window_type = Setting("hann")
 
-    _WINDOW_TYPES: ClassVar[tuple[str, ...]] = ("hann", "hamming", "blackman", "nuttall")
+    _WINDOW_TYPES: ClassVar[tuple[str, ...]] = (
+        "hann",
+        "hamming",
+        "blackman",
+        "nuttall",
+    )
 
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""

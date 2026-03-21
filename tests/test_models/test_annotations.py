@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
@@ -214,9 +214,7 @@ def test_annotation_accepts_datetime_coord_values_and_json_round_trips():
         },
     )
 
-    assert annotation.geometry.values == (
-        datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
-    )
+    assert annotation.geometry.values == (datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC),)
     dumped = annotation.model_dump(mode="json")
     assert dumped["geometry"]["values"] == ["2024-01-02T03:04:05Z"]
 
@@ -252,3 +250,29 @@ def test_annotation_accepts_string_coord_values():
     )
 
     assert annotation.geometry.values == ("channel-12",)
+
+
+def test_annotation_defaults_identity_fields_to_none():
+    """Legacy annotations should remain valid without global identity metadata."""
+    annotation = Annotation(
+        id="basic",
+        geometry={"type": "point", "dims": ("time",), "values": (1.0,)},
+    )
+
+    assert annotation.annotator is None
+    assert annotation.organization is None
+
+
+def test_annotation_round_trips_identity_fields():
+    """Annotation identity metadata should survive JSON serialization."""
+    annotation = Annotation(
+        id="pick-1",
+        geometry={"type": "point", "dims": ("distance", "time"), "values": (1.0, 2.0)},
+        annotator="alice",
+        organization="DASDAE",
+    )
+
+    dumped = annotation.model_dump(mode="json")
+
+    assert dumped["annotator"] == "alice"
+    assert dumped["organization"] == "DASDAE"

@@ -13,8 +13,10 @@ import derzug.constants as constants
 import pytest
 from AnyQt.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
 from AnyQt.QtGui import QAction, QKeyEvent, QMouseEvent
+from AnyQt.QtTest import QTest
 from AnyQt.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QLabel,
@@ -22,6 +24,11 @@ from AnyQt.QtWidgets import (
     QMessageBox,
     QPushButton,
     QWidget,
+)
+from derzug.annotations_config import (
+    AnnotationConfig,
+    clear_annotation_config_cache,
+    save_annotation_config,
 )
 from derzug.utils.display import format_display
 from derzug.utils.testing import (
@@ -211,10 +218,46 @@ class TestDerZugMainWindow:
     @staticmethod
     def _clear_startup_warning_setting() -> None:
         """Reset the persisted startup warning preference for one test."""
-        settings = orange_view.QSettings()
+        settings = orange_view._derzug_settings()
         settings.beginGroup("startup")
         settings.remove("hide-experimental-warning")
         settings.endGroup()
+
+    @staticmethod
+    def _clear_annotation_settings() -> None:
+        """Reset persisted annotation preferences for one test."""
+        clear_annotation_config_cache()
+        save_annotation_config(AnnotationConfig())
+
+    def test_annotation_settings_load_uses_cache_until_save(
+        self, derzug_app, monkeypatch
+    ):
+        """Repeated default loads should reuse the cached config until a save."""
+        self._clear_annotation_settings()
+        calls: list[str] = []
+        original_reader = orange_view.load_annotation_config.__globals__[
+            "_read_annotation_config"
+        ]
+
+        def _wrapped_reader(settings):
+            calls.append("read")
+            return original_reader(settings)
+
+        monkeypatch.setitem(
+            orange_view.load_annotation_config.__globals__,
+            "_read_annotation_config",
+            _wrapped_reader,
+        )
+
+        first = orange_view.load_annotation_config(force_reload=True)
+        second = orange_view.load_annotation_config()
+        save_annotation_config(AnnotationConfig(annotator="alice"))
+        third = orange_view.load_annotation_config()
+
+        assert first.annotator == ""
+        assert second.annotator == ""
+        assert third.annotator == "alice"
+        assert calls == ["read"]
 
     def test_help_menu_is_derzug_trimmed(self, derzug_app):
         """Help menu keeps only the curated DerZug actions."""
@@ -229,14 +272,71 @@ class TestDerZugMainWindow:
 
     def test_shell_hides_inherited_orange_actions(self, derzug_app):
         """Menus should drop the inherited Orange-specific maintenance actions."""
+        self._clear_annotation_settings()
         window = derzug_app.window
 
+        assert all(label.strip() for label in _menu_labels(window, "File"))
         assert "Open Report..." not in _menu_labels(window, "File")
         assert "Window Groups" not in _menu_labels(window, "View")
         assert "Show report" not in _menu_labels(window, "View")
         assert "Add-ons..." not in _menu_labels(window, "Options")
         assert "Reset Widget Settings..." not in _menu_labels(window, "Options")
+        assert "Annotation Settings..." in _menu_labels(window, "Options")
         assert "Settings" in _menu_labels(window, "Options")
+        assert window.dock_help_action not in window.canvas_toolbar.actions()
+
+    def test_annotation_settings_action_opens_dialog(self, derzug_app, monkeypatch):
+        """The Options menu should expose the global annotation settings dialog."""
+        self._clear_annotation_settings()
+        window = derzug_app.window
+        opened = []
+
+        class _FakeAnnotationSettingsDialog:
+            def __init__(self, *_args, **_kwargs):
+                opened.append(True)
+
+            def exec(self):
+                return QDialog.DialogCode.Rejected
+
+        monkeypatch.setattr(
+            orange_view,
+            "AnnotationSettingsDialog",
+            _FakeAnnotationSettingsDialog,
+        )
+
+        window.annotation_settings_action.trigger()
+
+        assert opened == [True]
+
+    def test_annotation_settings_dialog_persists_values(self, derzug_app, monkeypatch):
+        """Accepting the global annotation dialog should update QSettings."""
+        self._clear_annotation_settings()
+        window = derzug_app.window
+        accepted = orange_view.AnnotationSettingsDialog(
+            AnnotationConfig(
+                annotator="alice",
+                organization="DASDAE",
+                label_names={"1": "p_pick"},
+            ),
+            window,
+        )
+        monkeypatch.setattr(accepted, "exec", lambda: QDialog.DialogCode.Accepted)
+        monkeypatch.setattr(
+            orange_view,
+            "AnnotationSettingsDialog",
+            lambda *_args, **_kwargs: accepted,
+        )
+
+        window.open_annotation_settings()
+
+        settings = orange_view._derzug_settings()
+        settings.beginGroup("annotations")
+        try:
+            assert settings.value("annotator", "", type=str) == "alice"
+            assert settings.value("organization", "", type=str) == "DASDAE"
+            assert settings.value("labels/1", "", type=str) == "p_pick"
+        finally:
+            settings.endGroup()
 
     def test_dev_controls_are_absent_by_default(self, derzug_app):
         """Normal mode should not expose development reload controls."""
@@ -249,13 +349,14 @@ class TestDerZugMainWindow:
         )
 
     def test_dev_controls_appear_in_dev_mode(self, derzug_app):
-        """Dev mode should expose a top-level Dev menu and reload action."""
+        """Dev mode should expose a top-level Dev menu and its actions."""
         window = derzug_app.window
         window.dev_mode = True
 
         window.install_dev_controls()
 
         assert window.hot_reload_action is not None
+        assert window.edit_config_file_action is not None
         assert window.hot_reload_action.shortcut().toString() == "Ctrl+Shift+R"
         dev_menu = next(
             action.menu()
@@ -267,8 +368,70 @@ class TestDerZugMainWindow:
             action.text().replace("&", "")
             for action in dev_menu.actions()
             if not action.isSeparator()
-        ] == ["Hot Reload"]
-        assert window.hot_reload_action in window.canvas_toolbar.actions()
+        ] == ["Hot Reload", "Edit Config File"]
+        assert window.hot_reload_action not in window.canvas_toolbar.actions()
+
+    def test_set_active_source_action_is_not_added_to_canvas_toolbar(self, derzug_app):
+        """The active-source override should live in node menus, not the toolbar."""
+        window = derzug_app.window
+
+        assert all(
+            action.text().replace("&", "") != "Set Active Source"
+            for action in window.canvas_toolbar.actions()
+        )
+
+    def test_derzug_settings_use_dasdae_scope(self, derzug_app):
+        """DerZug should store user settings under the dasdae namespace."""
+        settings = orange_view._derzug_settings()
+
+        assert settings.fileName().endswith("/dasdae/DerZug.ini")
+
+    def test_edit_config_file_action_opens_derzug_config_file(
+        self, derzug_app, monkeypatch, tmp_path
+    ):
+        """The dev action should open the DerZug config file path."""
+        window = derzug_app.window
+        window.dev_mode = True
+        window.install_dev_controls()
+        opened = []
+        config_path = tmp_path / "dasdae" / "DerZug.ini"
+        monkeypatch.setattr(window, "_config_file_path", lambda: str(config_path))
+        monkeypatch.setattr(
+            orange_view.QDesktopServices,
+            "openUrl",
+            lambda url: opened.append(url.toLocalFile()) or True,
+        )
+
+        window.edit_config_file_action.trigger()
+
+        assert config_path.exists()
+        assert opened == [str(config_path)]
+
+    def test_edit_config_file_action_reports_open_failure(
+        self, derzug_app, monkeypatch, tmp_path
+    ):
+        """The dev action should surface an error if the config file cannot open."""
+        window = derzug_app.window
+        window.dev_mode = True
+        window.install_dev_controls()
+        shown = []
+        config_path = tmp_path / "dasdae" / "DerZug.ini"
+        monkeypatch.setattr(window, "_config_file_path", lambda: str(config_path))
+        monkeypatch.setattr(orange_view.QDesktopServices, "openUrl", lambda _url: False)
+        monkeypatch.setattr(
+            QMessageBox,
+            "critical",
+            lambda _parent, title, text: shown.append((title, text)),
+        )
+
+        window.edit_config_file_action.trigger()
+
+        assert shown == [
+            (
+                "Open Config File Failed",
+                f"Could not open config file: {config_path}",
+            )
+        ]
 
     def test_documentation_action_opens_github(self, derzug_app, monkeypatch):
         """Documentation action should open the DerZug GitHub repository."""
@@ -313,9 +476,47 @@ class TestDerZugMainWindow:
 
         labels = [label.text() for label in dialog.findChildren(QLabel)]
         buttons = [button.text() for button in dialog.findChildren(QPushButton)]
+        checkboxes = [box.text() for box in dialog.findChildren(QCheckBox)]
 
+        assert dialog.windowTitle() == "🚨 Experimental Warning"
+        assert "DerZug Is Experimental" in labels
         assert any("highly experimental proof of concept" in text for text in labels)
-        assert buttons == ["OK", "Don't show this message again"]
+        assert buttons == ["OK"]
+        assert checkboxes == ["Don't show this message again"]
+
+    def test_startup_warning_ok_only_closes_for_now(self, qtbot):
+        """OK should dismiss the warning without persisting the opt-out flag."""
+        dialog = ExperimentalWarningDialog()
+        qtbot.addWidget(dialog)
+        ok_button = next(
+            button
+            for button in dialog.findChildren(QPushButton)
+            if button.text() == "OK"
+        )
+
+        dialog.show()
+        QTest.mouseClick(ok_button, Qt.MouseButton.LeftButton)
+
+        assert dialog.result() == QDialog.DialogCode.Accepted
+        assert dialog.hide_future_warnings is False
+
+    def test_startup_warning_checked_checkbox_persists_opt_out(self, qtbot):
+        """Checking the opt-out box before OK should persist the suppression intent."""
+        dialog = ExperimentalWarningDialog()
+        qtbot.addWidget(dialog)
+        checkbox = dialog.findChild(QCheckBox)
+        ok_button = next(
+            button
+            for button in dialog.findChildren(QPushButton)
+            if button.text() == "OK"
+        )
+
+        dialog.show()
+        checkbox.setChecked(True)
+        QTest.mouseClick(ok_button, Qt.MouseButton.LeftButton)
+
+        assert dialog.result() == QDialog.DialogCode.Accepted
+        assert dialog.hide_future_warnings is True
 
     def test_about_dialog_is_derzug_led_with_orange_in_credits(self, qtbot):
         """About should lead with DerZug while keeping Orange as secondary credit."""
@@ -378,6 +579,36 @@ class TestDerZugMainWindow:
 
         assert shown == [window]
         assert window.should_show_experimental_warning() is False
+
+    def test_clear_startup_warning_setting_restores_warning_visibility(
+        self, derzug_app
+    ):
+        """Clearing the stored opt-out should make the warning visible again."""
+        window = derzug_app.window
+        self._clear_startup_warning_setting()
+
+        window.set_experimental_warning_hidden(True)
+        assert window.should_show_experimental_warning() is False
+
+        window.clear_experimental_warning_hidden()
+
+        assert window.should_show_experimental_warning() is True
+
+    def test_startup_warning_ignores_other_settings_scopes(self, derzug_app):
+        """DerZug should not read the warning flag from unrelated QSettings scopes."""
+        window = derzug_app.window
+        self._clear_startup_warning_setting()
+        other = orange_view.QSettings(
+            orange_view.QSettings.IniFormat,
+            orange_view.QSettings.UserScope,
+            "some.other.scope",
+            "NotDerZug",
+        )
+        other.beginGroup("startup")
+        other.setValue("hide-experimental-warning", True)
+        other.endGroup()
+
+        assert window.should_show_experimental_warning() is True
 
     def test_hot_reload_is_noop_outside_dev_mode(self, derzug_app, monkeypatch):
         """Non-dev hot reload attempts should not spawn a new process."""
@@ -474,33 +705,31 @@ class TestDerZugMainWindow:
         assert spool_node.title == "Spool ⚡"
 
     def test_build_hot_reload_command_preserves_dev_mode_and_workflow_path(
-        self, derzug_app, tmp_path
+        self, derzug_app, tmp_path, monkeypatch
     ):
-        """Hot reload should relaunch via the CLI with --dev and the workflow path."""
+        """Hot reload should relaunch via the CLI with --dev and temp workflow path."""
         window = derzug_app.window
         window.dev_mode = True
-        workflow_path = tmp_path / "reload.ows"
-        window.current_document().setPath(str(workflow_path))
+        monkeypatch.setattr(orange_view.tempfile, "gettempdir", lambda: str(tmp_path))
 
         command = window._build_hot_reload_command(window._workflow_path_for_reload())
 
         assert command[:4] == [sys.executable, "-m", "derzug.cli", "--dev"]
-        assert command[-1] == str(workflow_path)
+        assert command[-1] == str(tmp_path / "derzug-hot-reload.ows")
 
-    def test_hot_reload_save_discard_and_cancel_paths(
+    def test_hot_reload_saves_live_scheme_to_stable_temp_path(
         self, derzug_app, tmp_path, monkeypatch
     ):
-        """Hot reload should honor save, discard, and cancel decisions."""
+        """Hot reload should snapshot the current scheme to temp without prompting."""
         window = derzug_app.window
         window.dev_mode = True
         window.install_dev_controls()
-        workflow_path = tmp_path / "saved.ows"
         document = window.current_document()
-        document.setPath("")
         document.setModified(True)
 
         spawned: list[list[str]] = []
         quits: list[bool] = []
+        saved: list[tuple[object, str]] = []
         monkeypatch.setattr(
             orange_view.subprocess, "Popen", lambda cmd: spawned.append(cmd)
         )
@@ -509,52 +738,54 @@ class TestDerZugMainWindow:
             "singleShot",
             lambda _delay, callback: (quits.append(True), callback()),
         )
-        monkeypatch.setattr(
-            QMessageBox,
-            "question",
-            lambda *args, **kwargs: QMessageBox.Save,
-        )
+        monkeypatch.setattr(orange_view.tempfile, "gettempdir", lambda: str(tmp_path))
 
-        def _save_as():
-            document.setPath(str(workflow_path))
-            document.setModified(False)
+        def _save_scheme_to(scheme, path):
+            saved.append((scheme, path))
             return True
 
-        monkeypatch.setattr(window, "save_scheme_as", _save_as)
+        monkeypatch.setattr(window, "save_scheme_to", _save_scheme_to)
+        question_calls: list[tuple[tuple, dict]] = []
+        monkeypatch.setattr(
+            QMessageBox,
+            "question",
+            lambda *args, **kwargs: question_calls.append((args, kwargs)),
+        )
 
         window._trigger_hot_reload()
 
+        expected_path = str(tmp_path / "derzug-hot-reload.ows")
+        assert saved == [(document.scheme(), expected_path)]
         assert spawned[-1][:4] == [sys.executable, "-m", "derzug.cli", "--dev"]
-        assert spawned[-1][-1] == str(workflow_path)
+        assert spawned[-1][-1] == expected_path
         assert quits
+        assert question_calls == []
 
-        document.setModified(True)
-        spawned.clear()
-        quits.clear()
-        monkeypatch.setattr(
-            QMessageBox,
-            "question",
-            lambda *args, **kwargs: QMessageBox.Discard,
-        )
+    def test_hot_reload_uses_temp_path_even_when_document_has_saved_path(
+        self, derzug_app, tmp_path, monkeypatch
+    ):
+        """Hot reload should relaunch the temp snapshot rather than the real .ows."""
+        window = derzug_app.window
+        window.dev_mode = True
+        workflow_path = tmp_path / "saved.ows"
+        window.current_document().setPath(str(workflow_path))
+        monkeypatch.setattr(orange_view.tempfile, "gettempdir", lambda: str(tmp_path))
 
-        window._trigger_hot_reload()
+        reloaded_path = window._workflow_path_for_reload()
 
-        assert spawned
-        assert quits
+        assert reloaded_path == str(tmp_path / "derzug-hot-reload.ows")
 
-        spawned.clear()
-        quits.clear()
-        document.setModified(True)
-        monkeypatch.setattr(
-            QMessageBox,
-            "question",
-            lambda *args, **kwargs: QMessageBox.Cancel,
-        )
+    def test_hot_reload_temp_path_uses_os_temp_directory(
+        self, derzug_app, tmp_path, monkeypatch
+    ):
+        """The hot reload temp file should live in the OS temp directory."""
+        window = derzug_app.window
+        monkeypatch.setattr(orange_view.tempfile, "gettempdir", lambda: str(tmp_path))
 
-        window._trigger_hot_reload()
+        path = window._hot_reload_temp_workflow_path()
 
-        assert spawned == []
-        assert quits == []
+        assert path == str(tmp_path / "derzug-hot-reload.ows")
+        assert path.endswith(".ows")
 
     def test_open_widgets_flag_in_reload_command(self, derzug_app):
         """--open-widgets with node indices is included in the reload command."""
@@ -621,6 +852,44 @@ class TestDerZugMainWindow:
         assert shown == [("Hot Reload Failed", "boom")]
         assert quits == []
 
+    def test_hot_reload_temp_save_failure_keeps_app_open(self, derzug_app, monkeypatch):
+        """A temp snapshot failure should report an error and not quit."""
+        window = derzug_app.window
+        window.dev_mode = True
+        shown: list[tuple[str, str]] = []
+        quits: list[bool] = []
+        monkeypatch.setattr(
+            window,
+            "save_scheme_to",
+            lambda _scheme, _path: False,
+        )
+        monkeypatch.setattr(
+            QMessageBox,
+            "critical",
+            lambda _parent, title, text: shown.append((title, text)),
+        )
+        monkeypatch.setattr(
+            orange_view.QTimer,
+            "singleShot",
+            lambda _delay, callback: (quits.append(True), callback()),
+        )
+
+        window._trigger_hot_reload()
+
+        assert shown == [
+            ("Hot Reload Failed", "Failed to save hot reload workflow snapshot.")
+        ]
+        assert quits == []
+
+    def test_hot_reload_bypasses_save_prompt_during_quit(self, derzug_app):
+        """Hot reload shutdown should skip the normal modified-workflow prompt."""
+        window = derzug_app.window
+        document = window.current_document()
+        document.setModified(True)
+        window._hot_reload_in_progress = True
+
+        assert window.ask_save_changes() == QDialog.Accepted
+
     def test_spool_caption_does_not_overwrite_custom_node_titles(
         self, derzug_app, qapp, orange_workflow
     ):
@@ -662,33 +931,69 @@ class TestDerZugMainWindow:
         assert waterfall_widget._axes.x_coord.dtype == expected.get_array("time").dtype
         assert waterfall_widget._axes.y_coord[0] == expected.get_array("distance")[0]
 
-    def test_active_source_uses_visual_box_not_title_prefix(
+    def test_source_node_context_menu_offers_set_active_source(
+        self, derzug_app, orange_workflow
+    ):
+        """Source nodes should expose Set Active Source on right-click."""
+        window = derzug_app.window
+        workflow = orange_workflow((("Spool", "Spool"), ("Code", "Code")))
+        spool_node = workflow.nodes_by_title["Spool"]
+
+        menu = window._canvas_composite_controller.context_menu_for_node(spool_node)
+
+        assert menu is not None
+        assert "Set Active Source" in [action.text() for action in menu.actions()]
+
+    def test_non_source_node_context_menu_hides_set_active_source(
+        self, derzug_app, orange_workflow
+    ):
+        """Non-source nodes should not expose Set Active Source."""
+        window = derzug_app.window
+        workflow = orange_workflow((("Code", "Code"),))
+        code_node = workflow.nodes_by_title["Code"]
+
+        menu = window._canvas_composite_controller.context_menu_for_node(code_node)
+        labels = (
+            [action.text() for action in menu.actions()] if menu is not None else []
+        )
+
+        assert "Set Active Source" not in labels
+
+    def test_active_source_set_from_context_menu_keeps_title_stable(
         self, derzug_app, qapp, orange_workflow
     ):
-        """Active source should keep its title text and gain a visible title box."""
-        from derzug.views import orange as orange_view
-
+        """Context-menu activation should promote the source without retitling it."""
         window = derzug_app.window
         manager = ActiveSourceManager()
         window.active_source_manager = manager
-        orange_view._APP_ACTIVE_SOURCE_MANAGER = manager
-        orange_view._APP_ACTIVE_SOURCE_MAIN_WINDOW = window
-        qapp.active_source_manager = manager
-        qapp.active_source_main_window = window
         workflow = orange_workflow((("Spool", "Spool"),))
         spool_widget = workflow.widgets_by_title["Spool"]
         spool_node = workflow.nodes_by_title["Spool"]
 
-        window.show()
-        spool_widget.show()
-        wait_for_widget_idle(spool_widget)
         title_before = spool_node.title
-        manager.ensure_active_source(window)
+        window._canvas_composite_controller._set_active_source_widget(spool_widget)
         qapp.processEvents()
 
         assert manager._active_widget is spool_widget
         assert spool_node.title == title_before
-        assert _active_source_box_visible(window, spool_node)
+
+    def test_group_menu_can_coexist_with_set_active_source(
+        self, derzug_app, orange_workflow
+    ):
+        """A source node in a groupable selection should show both actions."""
+        window = derzug_app.window
+        workflow = orange_workflow((("Spool", "Spool"), ("Code", "Code")))
+        spool_node = workflow.nodes_by_title["Spool"]
+        code_node = workflow.nodes_by_title["Code"]
+        _select_canvas_nodes(window, spool_node, code_node)
+
+        menu = window._canvas_composite_controller.context_menu_for_node(spool_node)
+        labels = (
+            [action.text() for action in menu.actions()] if menu is not None else []
+        )
+
+        assert "Group" in labels
+        assert "Set Active Source" in labels
 
     def test_example_workflow_entrypoints_are_derzug_only(self):
         """Help-menu example workflows should come only from DerZug."""

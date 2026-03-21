@@ -1,0 +1,100 @@
+# Run full test suite using conda env and all optional deps.
+name: TestCode
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+    paths:
+      - 'pyproject.toml'
+      - 'environment.yml'
+      - '**/*.py'
+      - '.github/test_code.sh'
+      - '.github/workflows/*.yml'
+      - '.github/actions/**/*.yml'
+
+env:
+  # used to manually trigger cache reset. Just increment if needed.
+  CACHE_NUMBER: 1
+  # Ensure matplotlib doesn't try to show figures in CI
+  MPLBACKEND: Agg
+  QT_QPA_PLATFORM: offscreen
+
+# Cancel previous runs when this one starts.
+concurrency:
+  group: TestCode-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # Load Python version matrix from shared vars
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      # Shared values live in .github/actions/load-shared-vars/action.yml
+      python-matrix: ${{ steps.load-vars.outputs.python-test-matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/load-shared-vars
+        id: load-vars
+
+  test_code:
+    needs: setup
+    timeout-minutes: 25
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Defined in .github/actions/load-shared-vars/action.yml
+        python-version: ${{ fromJson(needs.setup.outputs.python-matrix) }}
+
+    # only run if CI isn't turned off
+    if: github.event_name == 'push' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
+
+    env:
+      # set conda environment file with dependencies
+      env_file: 'environment.yml'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+
+      - uses: ./.github/actions/mamba-install-derzug
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache-number: ${{ env.CACHE_NUMBER }}
+
+      # Runs test suite and calculates coverage
+      - name: run test suite (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash -el {0}
+        run: ./.github/test_code.sh
+
+      - name: run test suite (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python -m pytest tests -s --cov derzug --cov-append --cov-report=xml
+
+#      # Runs examples in docstrings
+#      - name: test docstrings
+#        shell: bash -el {0}
+#        run: ./.github/test_code.sh doctest
+
+#      # Upload coverage files
+#      - uses: codecov/codecov-action@v4
+#        with:
+#          fail_ci_if_error: false
+#          files: ./coverage.xml
+#          flags: unittests
+#          name: PR_tests
+#          token: ${{ secrets.CODECOV_TOKEN }}
+      
+            
+# This is a very useful step for debugging, it allows you to ssh into the CI
+# machine (https://github.com/marketplace/actions/debugging-with-tmate).
+#
+#- name: Setup tmate session
+#  uses: mxschmitt/action-tmate@v3

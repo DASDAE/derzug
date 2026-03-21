@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -36,7 +36,7 @@ def _datetime_value_to_ns(value: Any) -> np.int64:
         return value.astype("datetime64[ns]").astype(np.int64)
     if isinstance(value, datetime):
         if value.tzinfo is not None:
-            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+            value = value.astimezone(UTC).replace(tzinfo=None)
         return np.datetime64(value, "ns").astype(np.int64)
     return np.datetime64(value, "ns").astype(np.int64)
 
@@ -59,7 +59,7 @@ class ContextDateAxisItem(pg.DateAxisItem):
             return super().tickStrings(values, scale, spacing)
         try:
             dates = [
-                datetime.fromtimestamp(value, tz=timezone.utc).replace(tzinfo=None)
+                datetime.fromtimestamp(value, tz=UTC).replace(tzinfo=None)
                 for value in values
             ]
         except (OverflowError, ValueError, OSError):
@@ -88,7 +88,7 @@ class ContextDateAxisItem(pg.DateAxisItem):
         self._set_zoom_level_for_span(span)
         fine_format = self.zoomLevel.tickSpecs[-1].format
         midpoint = (low + high) / 2.0
-        dt = datetime.fromtimestamp(midpoint, tz=timezone.utc).replace(tzinfo=None)
+        dt = datetime.fromtimestamp(midpoint, tz=UTC).replace(tzinfo=None)
         return _context_for_tick_format(dt, fine_format)
 
     def _set_zoom_level_for_span(self, span: float) -> None:

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <!-- Table background -->
+  <rect x="5" y="7" width="38" height="34" rx="2"
+        fill="#ffffff" stroke="#333333" stroke-width="2.5"/>
+  <!-- Header row -->
+  <rect x="6.3" y="8.3" width="35.4" height="8"
+        fill="#333333"/>
+  <!-- Header / body separator -->
+  <line x1="5" y1="16.5" x2="43" y2="16.5"
+        stroke="#333333" stroke-width="1.5"/>
+  <!-- Column dividers (data area) -->
+  <line x1="18" y1="16.5" x2="18" y2="41"
+        stroke="#333333" stroke-width="1.5"/>
+  <line x1="31" y1="16.5" x2="31" y2="41"
+        stroke="#333333" stroke-width="1.5"/>
+  <!-- Data row dividers -->
+  <line x1="5" y1="25" x2="43" y2="25"
+        stroke="#333333" stroke-width="1.5"/>
+  <line x1="5" y1="33" x2="43" y2="33"
+        stroke="#333333" stroke-width="1.5"/>
+  <!-- Outer border on top -->
+  <rect x="5" y="7" width="38" height="34" rx="2"
+        fill="none" stroke="#333333" stroke-width="2.5"/>
+</svg>

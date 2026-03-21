@@ -10,16 +10,17 @@ import pickle
 import platform
 import types
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
-import slanrod
 import yaml
 from dascore.utils.progress import track
 from pydantic import Field
 
-from ..core import SlanRodBaseModel
+import derzug
+
+from ..core import DerzugBaseModel
 from ..utils.misc import FauxExecutor, _are_types_compatible
 from ..utils.workflow import (
     ParameterBinder,
@@ -32,7 +33,7 @@ from .provenance import Provenance
 from .task import Task
 
 
-class Pipe(SlanRodBaseModel):
+class Pipe(DerzugBaseModel):
     """
     A directed acyclic graph (DAG) of tasks with dependency resolution and execution.
     """
@@ -279,9 +280,9 @@ class Pipe(SlanRodBaseModel):
                     raise ValueError(
                         "Length of input args exceed number of first task inputs"
                     )
-                # If this is a SlanRod source, we need to unpack it.
+                # If this is a Derzug source, we need to unpack it.
                 # It should be length one or issue warning.
-                if isinstance(arg, slanrod.Source):
+                if isinstance(arg, derzug.Source):
                     arg = arg.get_single_data()
                 kwargs[param_names[i]] = arg
         # Add keyword inputs (these override positional if same name)
@@ -346,7 +347,7 @@ class Pipe(SlanRodBaseModel):
 
     def map(self, source: Any, debug=False, executor=None) -> Any:
         """
-        Apply the pipeline to a source (normal iterable or slanrod.Source).
+        Apply the pipeline to a source (normal iterable or derzug.Source).
 
         Parameters
         ----------
@@ -360,7 +361,7 @@ class Pipe(SlanRodBaseModel):
         """
         pipe = self
         # Add the source provenance if it exists.
-        if isinstance(source, slanrod.Source):
+        if isinstance(source, derzug.Source):
             pipe = pipe.new(source_provenance=source.provenance.to_source_provenance())
         desc = f"Applying pipeline: {pipe} to {source=}"
         exc = FauxExecutor() if executor is None else executor
@@ -377,7 +378,7 @@ class Pipe(SlanRodBaseModel):
         """
         Create a run manifest with complete provenance information.
 
-        The manifest includes the serialized pipeline, slanrod version, creation
+        The manifest includes the serialized pipeline, derzug version, creation
         timestamp, system info, and any additional metadata provided.
 
         Parameters
@@ -395,8 +396,8 @@ class Pipe(SlanRodBaseModel):
         """
         return Provenance(
             pipe=self,
-            slanrod_version=getattr(slanrod, "__version__", "unknown"),
-            created_at=datetime.now(timezone.utc),
+            derzug_version=getattr(derzug, "__version__", "unknown"),
+            created_at=datetime.now(UTC),
             python_version=platform.python_version(),
             system_info={
                 "platform": platform.platform(),

@@ -15,6 +15,7 @@ from AnyQt.QtGui import QKeyEvent
 from AnyQt.QtTest import QTest
 from AnyQt.QtWidgets import QMenu
 from dascore.viz.waterfall import _get_scale as get_dascore_waterfall_scale
+from derzug.annotations_config import AnnotationConfig, save_annotation_config
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.utils.testing import (
     TestPatchInputStateDefaults,
@@ -143,6 +144,14 @@ class _FakeViewBoxDragEvent:
         return self._finish
 
 
+@pytest.fixture(autouse=True)
+def clear_annotation_settings():
+    """Reset global annotation settings around each test."""
+    save_annotation_config(AnnotationConfig(annotator="tester", organization="DerZug"))
+    yield
+    save_annotation_config(AnnotationConfig(annotator="tester", organization="DerZug"))
+
+
 @pytest.fixture
 def waterfall_widget(qtbot):
     """Return a live Waterfall widget."""
@@ -229,6 +238,25 @@ def _build_point_annotation_set(patch: dc.Patch) -> AnnotationSet:
                 semantic_type="generic",
             ),
         ),
+    )
+
+
+def _double_click_viewport_point(
+    waterfall_widget: Waterfall, *, x_index: int, y_index: int
+) -> None:
+    """Create one point annotation via a real viewport double-click."""
+    axes = waterfall_widget._axes
+    assert axes is not None
+    waterfall_widget._annotation_tool = "point"
+    scene_pos = waterfall_widget._plot_item.vb.mapViewToScene(
+        QPointF(float(axes.x_plot[x_index]), float(axes.y_plot[y_index]))
+    )
+    viewport_pos = waterfall_widget._plot_widget.mapFromScene(scene_pos)
+    QTest.mouseDClick(
+        waterfall_widget._plot_widget.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        viewport_pos,
     )
 
 
@@ -356,7 +384,7 @@ class TestWaterfall:
     def test_annotation_input_renders_existing_annotations(
         self, waterfall_widget, monkeypatch
     ):
-        """Incoming annotation input should render matching overlay items."""
+        """Incoming annotation input should render locally without deferred send."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         annotation_set = _build_point_annotation_set(patch)
@@ -367,7 +395,24 @@ class TestWaterfall:
 
         assert waterfall_widget._annotation_set == annotation_set
         assert list(waterfall_widget._annotation_items) == ["input-point"]
-        assert received == [annotation_set]
+        assert received == []
+
+    def test_annotation_input_does_not_become_pending_local_output(
+        self, waterfall_widget, monkeypatch, qtbot
+    ):
+        """Pressing s after receiving input should do nothing until a local edit."""
+        received = _capture_annotation_output(waterfall_widget, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        annotation_set = _build_point_annotation_set(patch)
+        waterfall_widget.set_patch(patch)
+        received.clear()
+
+        waterfall_widget.set_annotation_set(annotation_set)
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
+
+        assert received == []
 
     def test_annotation_input_before_patch_renders_after_matching_patch_arrives(
         self, waterfall_widget
@@ -448,9 +493,9 @@ class TestWaterfall:
         assert "2024-01-02" in waterfall_widget._plot_item.getAxis("left").labelText
 
     def test_datetime_axis_point_annotation_emits_persistable_datetime_value(
-        self, waterfall_widget, monkeypatch
+        self, waterfall_widget, monkeypatch, qtbot
     ):
-        """Point annotations on datetime axes should persist normalized datetimes."""
+        """Datetime point annotations should serialize persistably after s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = _with_datetime_coord(dc.get_example_patch("example_event_2"), "time")
         waterfall_widget.set_patch(patch)
@@ -461,6 +506,9 @@ class TestWaterfall:
             float(axes.x_plot[150]),
             float(axes.y_plot[150]),
         )
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
 
         annotation = received[-1].annotations[0]
         assert annotation.geometry.type == "point"
@@ -758,10 +806,10 @@ class TestWaterfall:
             not in waterfall_widget._annotation_controller.selected_annotation_ids
         )
 
-    def test_create_point_annotation_emits_annotation_set(
-        self, waterfall_widget, monkeypatch
+    def test_create_point_annotation_does_not_emit_until_s(
+        self, waterfall_widget, monkeypatch, qtbot
     ):
-        """Creating one point annotation should emit updated annotation data."""
+        """Creating one point annotation should stay local until the user presses s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
@@ -773,11 +821,95 @@ class TestWaterfall:
             float(axes.y_plot[len(axes.y_plot) // 2]),
         )
 
+        assert received == []
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
+
         assert len(received) == 1
         annotation_set = received[-1]
         assert annotation_set is not None
         assert len(annotation_set.annotations) == 1
         assert annotation_set.annotations[0].geometry.type == "point"
+
+    def test_unsent_annotations_mark_toolbox_title_until_s(
+        self, waterfall_widget, monkeypatch, qtbot
+    ):
+        """The toolbox title should show unsent state until annotations are sent."""
+        _capture_annotation_output(waterfall_widget, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+
+        assert waterfall_widget._annotation_toolbox.title_label.text() == "Annotations"
+
+        waterfall_widget._create_point_annotation(
+            float(axes.x_plot[120]),
+            float(axes.y_plot[120]),
+        )
+
+        assert (
+            waterfall_widget._annotation_toolbox.title_label.text() == "Annotations *"
+        )
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
+
+        assert waterfall_widget._annotation_toolbox.title_label.text() == "Annotations"
+
+    def test_s_without_new_annotation_changes_does_not_reemit(
+        self, waterfall_widget, monkeypatch, qtbot
+    ):
+        """Pressing s twice without new annotation changes should emit only once."""
+        received = _capture_annotation_output(waterfall_widget, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        received.clear()
+        axes = waterfall_widget._axes
+        waterfall_widget._create_point_annotation(
+            float(axes.x_plot[120]),
+            float(axes.y_plot[120]),
+        )
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
+        assert len(received) == 1
+        received.clear()
+
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
+
+        assert received == []
+
+    def test_second_annotation_change_requires_second_s(
+        self, waterfall_widget, monkeypatch, qtbot
+    ):
+        """A later annotation change should remain unsent until another s press."""
+        received = _capture_annotation_output(waterfall_widget, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        received.clear()
+        axes = waterfall_widget._axes
+        waterfall_widget._create_point_annotation(
+            float(axes.x_plot[120]),
+            float(axes.y_plot[120]),
+        )
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
+        assert len(received) == 1
+        received.clear()
+
+        waterfall_widget._create_point_annotation(
+            float(axes.x_plot[140]),
+            float(axes.y_plot[140]),
+        )
+
+        assert received == []
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
+
+        assert len(received) == 1
+        assert len(received[-1].annotations) == 2
 
     def test_point_tool_single_click_does_not_create_annotation(self, waterfall_widget):
         """Single-click release in point mode should leave navigation untouched."""
@@ -850,6 +982,68 @@ class TestWaterfall:
         assert waterfall_widget._annotation_set is not None
         assert len(waterfall_widget._annotation_set.annotations) == 1
         assert waterfall_widget._annotation_set.annotations[0].geometry.type == "point"
+
+    def test_ui_created_points_mark_dirty_and_restore_from_stored_settings(self, qtbot):
+        """Real scene-created points should mark dirty, restore, and keep zoom."""
+        patch = dc.get_example_patch("example_event_2")
+
+        with widget_context(Waterfall) as first:
+            first.show()
+            qtbot.wait(10)
+            first.set_patch(patch)
+            axes = first._axes
+            first._annotation_tool = "point"
+            first._plot_item.vb.setRange(
+                xRange=(float(axes.x_plot[100]), float(axes.x_plot[220])),
+                yRange=(float(axes.y_plot[90]), float(axes.y_plot[210])),
+                padding=0,
+            )
+            before_view = first._plot_item.vb.viewRange()
+
+            for x_index, y_index in ((120, 120), (140, 140), (160, 160)):
+                scene_pos = first._plot_item.vb.mapViewToScene(
+                    QPointF(float(axes.x_plot[x_index]), float(axes.y_plot[y_index]))
+                )
+                handled = first._annotation_controller.handle_scene_event(
+                    _FakeSceneEvent(
+                        QEvent.Type.GraphicsSceneMouseDoubleClick,
+                        scene_pos.x(),
+                        scene_pos.y(),
+                    )
+                )
+                assert handled is True
+
+            assert first._annotation_set is not None
+            assert len(first._annotation_set.annotations) == 3
+            assert first._annotation_toolbox.title_label.text() == "Annotations *"
+
+            saved = first.settingsHandler.pack_data(first)
+
+        with widget_context(Waterfall, stored_settings=saved) as second:
+            second.show()
+            qtbot.wait(10)
+            second.set_patch(patch)
+            after_view = second._plot_item.vb.viewRange()
+
+            assert second._annotation_set is not None
+            assert len(second._annotation_set.annotations) == 3
+            assert len(second._annotation_items) == 3
+            assert second._annotation_toolbox.title_label.text() == "Annotations"
+            assert np.allclose(after_view[0], before_view[0])
+            assert np.allclose(after_view[1], before_view[1])
+
+    def test_viewport_double_click_restores_focus_for_s_shortcut(
+        self, waterfall_widget, qtbot
+    ):
+        """Real viewport annotation creation should return focus to Waterfall."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+
+        _double_click_viewport_point(waterfall_widget, x_index=120, y_index=120)
+
+        assert waterfall_widget._annotation_set is not None
+        assert len(waterfall_widget._annotation_set.annotations) == 1
+        qtbot.waitUntil(lambda: waterfall_widget.hasFocus(), timeout=1000)
 
     def test_creating_point_annotation_does_not_change_view_extents(
         self, waterfall_widget
@@ -1125,10 +1319,11 @@ class TestWaterfall:
         assert annotation.properties["ellipse_source"] == "manual"
 
     def test_delete_active_annotation_removes_it(self, waterfall_widget, monkeypatch):
-        """Delete should remove the active annotation and emit the new set."""
+        """Delete should stay local until the user presses s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
+        received.clear()
         axes = waterfall_widget._axes
         waterfall_widget._create_point_annotation(
             float(axes.x_plot[len(axes.x_plot) // 2]),
@@ -1138,6 +1333,27 @@ class TestWaterfall:
         received.clear()
 
         waterfall_widget._delete_annotation(annotation_id)
+
+        assert received == []
+
+    def test_delete_active_annotation_sends_after_s(
+        self, waterfall_widget, monkeypatch, qtbot
+    ):
+        """Deleting one annotation should emit only after pressing s."""
+        received = _capture_annotation_output(waterfall_widget, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        received.clear()
+        axes = waterfall_widget._axes
+        waterfall_widget._create_point_annotation(
+            float(axes.x_plot[len(axes.x_plot) // 2]),
+            float(axes.y_plot[len(axes.y_plot) // 2]),
+        )
+        annotation_id = waterfall_widget._active_annotation_id
+        waterfall_widget._delete_annotation(annotation_id)
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
 
         assert len(received) == 1
         assert received[-1] is not None
@@ -1167,10 +1383,17 @@ class TestWaterfall:
         assert waterfall_widget._annotation_set is not None
         assert waterfall_widget._annotation_set.annotations == ()
 
-    def test_number_key_groups_selected_annotations_and_emits(
+    def test_number_key_labels_selected_annotations_and_sends_after_s(
         self, waterfall_widget, monkeypatch, qtbot
     ):
-        """Number keys should group the current annotation selection and emit it."""
+        """Number keys should stay local until the user presses s."""
+        save_annotation_config(
+            AnnotationConfig(
+                annotator="tester",
+                organization="DerZug",
+                label_names={"1": "p_pick"},
+            )
+        )
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
@@ -1194,16 +1417,18 @@ class TestWaterfall:
         qtbot.wait(10)
 
         QTest.keyClick(waterfall_widget, Qt.Key_1)
+        assert received == []
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
 
         latest = received[-1]
-        grouped = {annotation.id: annotation.group for annotation in latest.annotations}
-        assert grouped[first_id] == "1"
-        assert grouped[second_id] == "1"
+        labeled = {annotation.id: annotation.label for annotation in latest.annotations}
+        assert labeled[first_id] == "p_pick"
+        assert labeled[second_id] == "p_pick"
 
-    def test_zero_key_clears_selected_annotation_groups_and_emits(
+    def test_zero_key_clears_selected_annotation_labels_and_sends_after_s(
         self, waterfall_widget, monkeypatch, qtbot
     ):
-        """Zero should clear persisted group assignments for the selection."""
+        """Zero should stay local until the user presses s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
@@ -1220,18 +1445,47 @@ class TestWaterfall:
         waterfall_widget.setFocus()
         qtbot.wait(10)
         QTest.keyClick(waterfall_widget, Qt.Key_2)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
         received.clear()
 
         QTest.keyClick(waterfall_widget, Qt.Key_0)
+        assert received == []
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
 
         latest = received[-1]
         assert latest.annotations[0].id == annotation_id
-        assert latest.annotations[0].group is None
+        assert latest.annotations[0].label is None
+
+    def test_created_annotations_send_global_identity_fields_after_s(
+        self, waterfall_widget, monkeypatch, qtbot
+    ):
+        """Created annotations should include global metadata when sent with s."""
+        save_annotation_config(
+            AnnotationConfig(annotator="alice", organization="DASDAE")
+        )
+        received = _capture_annotation_output(waterfall_widget, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        received.clear()
+        axes = waterfall_widget._axes
+
+        waterfall_widget._create_point_annotation(
+            float(axes.x_plot[120]),
+            float(axes.y_plot[120]),
+        )
+        assert received == []
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
+
+        latest = received[-1]
+        assert latest.annotations[0].annotator == "alice"
+        assert latest.annotations[0].organization == "DASDAE"
 
     def test_h_key_fits_hyperbola_from_selected_points_and_emits(
         self, waterfall_widget, monkeypatch, qtbot
     ):
-        """H should fit one hyperbola annotation from the selected point picks."""
+        """H should fit locally, then emit after the user presses s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
@@ -1254,6 +1508,8 @@ class TestWaterfall:
         received.clear()
 
         QTest.keyClick(waterfall_widget, Qt.Key_H)
+        assert received == []
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
 
         latest = received[-1]
         assert len(latest.annotations) == len(source_ids) + 1
@@ -1266,9 +1522,9 @@ class TestWaterfall:
         assert len(hyperbola.geometry.points) > 10
 
     def test_fit_menu_line_creates_annotation_and_emits(
-        self, waterfall_widget, monkeypatch
+        self, waterfall_widget, monkeypatch, qtbot
     ):
-        """The toolbox fit menu should create and emit a fitted line annotation."""
+        """The toolbox fit menu should create locally, then emit after s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
@@ -1289,6 +1545,10 @@ class TestWaterfall:
         received.clear()
 
         waterfall_widget._annotation_toolbox.fit_actions["line"].trigger()
+        assert received == []
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
 
         latest = received[-1]
         line = latest.annotations[-1]
@@ -1300,9 +1560,9 @@ class TestWaterfall:
         assert set(line.properties["derived_from"]) == set(source_ids)
 
     def test_fit_menu_square_creates_annotation_and_emits(
-        self, waterfall_widget, monkeypatch
+        self, waterfall_widget, monkeypatch, qtbot
     ):
-        """The toolbox fit menu should create and emit a fitted square annotation."""
+        """The toolbox fit menu should create locally, then emit after s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
@@ -1323,6 +1583,10 @@ class TestWaterfall:
         received.clear()
 
         waterfall_widget._annotation_toolbox.fit_actions["square"].trigger()
+        assert received == []
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
 
         latest = received[-1]
         square = latest.annotations[-1]
@@ -1413,6 +1677,8 @@ class TestWaterfall:
         received.clear()
 
         QTest.keyClick(waterfall_widget, Qt.Key_E)
+        assert received == []
+        QTest.keyClick(waterfall_widget, Qt.Key_S)
 
         latest = received[-1]
         assert len(latest.annotations) == len(source_ids) + 1
@@ -1520,9 +1786,10 @@ class TestWaterfall:
             def values(self):
                 return {
                     "semantic_type": "arrival_pick",
-                    "text": "picked",
+                    "notes": "picked",
                     "tags": ("arrival", "manual"),
                     "group": "event-1",
+                    "label": "p_pick",
                     "properties": {"confidence": 0.9},
                 }
 
@@ -1543,9 +1810,10 @@ class TestWaterfall:
         annotation = waterfall_widget._annotation_by_id(annotation_id)
         assert annotation is not None
         assert annotation.semantic_type == "arrival_pick"
-        assert annotation.text == "picked"
+        assert annotation.notes == "picked"
         assert annotation.tags == ("arrival", "manual")
         assert annotation.group == "event-1"
+        assert annotation.label == "p_pick"
         assert annotation.properties == {"confidence": 0.9}
 
     def test_only_active_box_shows_resize_handles(self, waterfall_widget):
@@ -1865,6 +2133,126 @@ class TestWaterfall:
             assert received_second[-1].shape == original.shape
             assert received_second[-1].shape[0] < patch.shape[0]
             assert received_second[-1].shape[1] < patch.shape[1]
+
+    def test_stored_settings_persist_full_local_annotation_set(self, qtbot):
+        """Workflow settings should keep the full local Waterfall annotation set."""
+        patch = dc.get_example_patch("example_event_2")
+
+        with widget_context(Waterfall) as first:
+            first.show()
+            qtbot.wait(10)
+            first.set_patch(patch)
+            axes = first._axes
+            first._plot_item.vb.setRange(
+                xRange=(float(axes.x_plot[100]), float(axes.x_plot[200])),
+                yRange=(float(axes.y_plot[100]), float(axes.y_plot[200])),
+                padding=0,
+            )
+            qtbot.wait(10)
+            first._create_point_annotation(
+                float(axes.x_plot[150]),
+                float(axes.y_plot[150]),
+            )
+            inside_id = first._active_annotation_id
+            first._create_point_annotation(
+                float(axes.x_plot[20]),
+                float(axes.y_plot[20]),
+            )
+            saved = first.settingsHandler.pack_data(first)
+
+        payload = saved["saved_annotation_set"]
+        assert payload is not None
+        assert payload["dims"] == list(first._annotation_set.dims)
+        assert [item["id"] for item in payload["annotations"]] == [
+            inside_id,
+            first._active_annotation_id,
+        ]
+
+    def test_stored_settings_keep_annotations_outside_current_view(self, qtbot):
+        """Annotations outside the current view should still persist in Waterfall."""
+        patch = dc.get_example_patch("example_event_2")
+
+        with widget_context(Waterfall) as first:
+            first.show()
+            qtbot.wait(10)
+            first.set_patch(patch)
+            axes = first._axes
+            first._plot_item.vb.setRange(
+                xRange=(float(axes.x_plot[100]), float(axes.x_plot[200])),
+                yRange=(float(axes.y_plot[100]), float(axes.y_plot[200])),
+                padding=0,
+            )
+            qtbot.wait(10)
+            first._create_box_annotation(
+                (float(axes.x_plot[80]), float(axes.y_plot[80])),
+                (float(axes.x_plot[120]), float(axes.y_plot[120])),
+            )
+            saved = first.settingsHandler.pack_data(first)
+
+        payload = saved["saved_annotation_set"]
+        assert payload is not None
+        assert len(payload["annotations"]) == 1
+        assert payload["annotations"][0]["geometry"]["type"] == "box"
+
+    def test_full_local_annotations_restore_from_stored_settings(self, qtbot):
+        """Stored Waterfall annotations should fully restore after the patch loads."""
+        patch = dc.get_example_patch("example_event_2")
+
+        with widget_context(Waterfall) as first:
+            first.show()
+            qtbot.wait(10)
+            first.set_patch(patch)
+            axes = first._axes
+            first._plot_item.vb.setRange(
+                xRange=(float(axes.x_plot[100]), float(axes.x_plot[200])),
+                yRange=(float(axes.y_plot[100]), float(axes.y_plot[200])),
+                padding=0,
+            )
+            qtbot.wait(10)
+            first._create_point_annotation(
+                float(axes.x_plot[150]),
+                float(axes.y_plot[150]),
+            )
+            first._create_point_annotation(
+                float(axes.x_plot[20]),
+                float(axes.y_plot[20]),
+            )
+            saved = first.settingsHandler.pack_data(first)
+
+        with widget_context(Waterfall, stored_settings=saved) as second:
+            second.show()
+            qtbot.wait(10)
+            second.set_patch(patch)
+
+            assert second._annotation_set is not None
+            assert len(second._annotation_set.annotations) == 2
+            assert len(second._annotation_items) == 2
+            assert second._annotation_toolbox.title_label.text() == "Annotations"
+
+    def test_mismatched_saved_annotations_are_ignored(self, qtbot):
+        """Saved Waterfall annotations should be skipped when dims do not match."""
+        patch = dc.get_example_patch("example_event_2")
+
+        with widget_context(Waterfall) as first:
+            first.show()
+            qtbot.wait(10)
+            first.set_patch(patch)
+            saved = first.settingsHandler.pack_data(first)
+
+        saved["saved_annotation_set"] = {
+            "schema_version": "2",
+            "dims": ["distance"],
+            "annotations": [],
+            "provenance": {"data_kind": "patch", "dims": ["distance"]},
+        }
+
+        with widget_context(Waterfall, stored_settings=saved) as second:
+            second.show()
+            qtbot.wait(10)
+            second.set_patch(patch)
+
+            assert second._annotation_set is not None
+            assert second._annotation_set.annotations == ()
 
     def test_no_roi_state_persists_explicitly_in_stored_settings(self, qtbot):
         """Saved workflows without an ROI should record that explicitly."""

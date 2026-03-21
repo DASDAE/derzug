@@ -13,12 +13,26 @@ from AnyQt.QtCore import QEvent, QLineF, QPointF, QRectF, Qt, Signal
 from AnyQt.QtGui import QPainterPath, QPainterPathStroker
 from AnyQt.QtWidgets import QDialog, QGraphicsItem
 
+from derzug.annotations_config import (
+    AnnotationSettingsDialog,
+    load_annotation_config,
+    save_annotation_config,
+)
 from derzug.models.annotations import (
     Annotation,
     AnnotationSet,
     BoxGeometry,
     PathGeometry,
     PointGeometry,
+)
+from derzug.utils.annotation_metadata import (
+    annotation_label_color,
+    annotation_label_from_slot,
+)
+from derzug.utils.annotations import (
+    delete_annotation_by_id,
+    replace_annotation_sequence,
+    upsert_annotation,
 )
 from derzug.utils.plot_axes import map_coord_to_plot_value, map_plot_value_to_coord
 from derzug.widgets.annotation_editor import AnnotationEditorDialog
@@ -27,17 +41,6 @@ from derzug.widgets.annotation_toolbox import AnnotationToolbox
 _ANNOTATION_TOOLS = frozenset(
     {"annotation_select", "point", "line", "ellipse", "hyperbola", "box", "delete"}
 )
-_GROUP_SLOT_COLORS: dict[str, tuple[int, int, int]] = {
-    "1": (0, 200, 255),
-    "2": (255, 170, 0),
-    "3": (80, 225, 120),
-    "4": (255, 95, 95),
-    "5": (190, 120, 255),
-    "6": (255, 210, 70),
-    "7": (0, 220, 185),
-    "8": (255, 120, 210),
-    "9": (175, 235, 255),
-}
 _HYPERBOLA_SAMPLE_COUNT = 96
 _HYPERBOLA_EPSILON = 1e-6
 _POINT_TARGET_PX = 40.0 * (2.0 / 3.0)
@@ -67,20 +70,9 @@ def _format_equation_scalar(value: float | int) -> str:
     return format(float(value), ".6g")
 
 
-def _group_slot(group: str | None) -> str | None:
-    """Return one supported numeric group slot."""
-    if group is None:
-        return None
-    slot = str(group).strip()
-    return slot if slot in _GROUP_SLOT_COLORS else None
-
-
-def _color_for_group(group: str | None) -> tuple[int, int, int]:
-    """Return the base RGB color for one annotation group."""
-    slot = _group_slot(group)
-    if slot is None:
-        return (40, 225, 255)
-    return _GROUP_SLOT_COLORS[slot]
+def _color_for_label(label: str | None) -> tuple[int, int, int]:
+    """Return the base RGB color for one annotation label."""
+    return annotation_label_color(label, load_annotation_config())
 
 
 def _mix_rgb(
@@ -95,51 +87,51 @@ def _mix_rgb(
     )
 
 
-def _inactive_pen(*, interactive: bool, group: str | None = None) -> pg.QtGui.QPen:
+def _inactive_pen(*, interactive: bool, label: str | None = None) -> pg.QtGui.QPen:
     """Return the default high-visibility pen for inactive annotations."""
     alpha = 255 if interactive else 165
-    return pg.mkPen((*_color_for_group(group), alpha), width=3)
+    return pg.mkPen((*_color_for_label(label), alpha), width=3)
 
 
 def _inactive_hover_pen(
-    *, interactive: bool, group: str | None = None
+    *, interactive: bool, label: str | None = None
 ) -> pg.QtGui.QPen:
     """Return the hover pen for inactive annotations."""
     alpha = 255 if interactive else 165
     return pg.mkPen(
-        (*_mix_rgb(_color_for_group(group), (255, 255, 255), 0.65), alpha), width=4
+        (*_mix_rgb(_color_for_label(label), (255, 255, 255), 0.65), alpha), width=4
     )
 
 
-def _active_pen(*, group: str | None = None) -> pg.QtGui.QPen:
+def _active_pen(*, label: str | None = None) -> pg.QtGui.QPen:
     """Return the active high-contrast pen."""
     return pg.mkPen(
-        (*_mix_rgb(_color_for_group(group), (255, 255, 255), 0.8), 255), width=5
+        (*_mix_rgb(_color_for_label(label), (255, 255, 255), 0.8), 255), width=5
     )
 
 
-def _active_hover_pen(*, group: str | None = None) -> pg.QtGui.QPen:
+def _active_hover_pen(*, label: str | None = None) -> pg.QtGui.QPen:
     """Return the active hover pen."""
     return pg.mkPen(
-        (*_mix_rgb(_color_for_group(group), (255, 255, 255), 0.92), 255), width=6
+        (*_mix_rgb(_color_for_label(label), (255, 255, 255), 0.92), 255), width=6
     )
 
 
-def _selected_pen(*, interactive: bool, group: str | None = None) -> pg.QtGui.QPen:
+def _selected_pen(*, interactive: bool, label: str | None = None) -> pg.QtGui.QPen:
     """Return the pen used for selected-but-not-active annotations."""
     alpha = 255 if interactive else 165
     return pg.mkPen(
-        (*_mix_rgb(_color_for_group(group), (255, 255, 255), 0.35), alpha), width=4
+        (*_mix_rgb(_color_for_label(label), (255, 255, 255), 0.35), alpha), width=4
     )
 
 
 def _selected_hover_pen(
-    *, interactive: bool, group: str | None = None
+    *, interactive: bool, label: str | None = None
 ) -> pg.QtGui.QPen:
     """Return the hover pen used for selected-but-not-active annotations."""
     alpha = 255 if interactive else 165
     return pg.mkPen(
-        (*_mix_rgb(_color_for_group(group), (255, 255, 255), 0.6), alpha), width=5
+        (*_mix_rgb(_color_for_label(label), (255, 255, 255), 0.6), alpha), width=5
     )
 
 
@@ -618,11 +610,13 @@ class AnnotationOverlayController:
         ),
         default_tool: str = "point",
         on_tool_changed: Callable[[str], None] | None = None,
+        on_annotation_set_changed: Callable[[], None] | None = None,
     ) -> None:
         self._host = host
         self._editor_class = editor_class
         self._tools = tools
         self._on_tool_changed = on_tool_changed
+        self._on_annotation_set_changed = on_annotation_set_changed
         self._interactive = True
         self.tool = default_tool
         self.layer_active = False
@@ -643,6 +637,11 @@ class AnnotationOverlayController:
         self._install_viewbox_hooks()
         self.position_toolbox()
         self.set_tool(default_tool, notify=False)
+
+    def _notify_annotation_set_changed(self) -> None:
+        """Notify the host that local annotation state changed."""
+        if self._on_annotation_set_changed is not None:
+            self._on_annotation_set_changed()
 
     def _install_viewbox_hooks(self) -> None:
         """Track host view-range changes for screen-stable overlay items."""
@@ -669,8 +668,8 @@ class AnnotationOverlayController:
             event.accept()
             return True
         if Qt.Key_0 <= event.key() <= Qt.Key_9 and self.selected_annotation_ids:
-            group = None if event.key() == Qt.Key_0 else str(event.key() - Qt.Key_0)
-            if self.assign_group_to_selection(group):
+            label = None if event.key() == Qt.Key_0 else str(event.key() - Qt.Key_0)
+            if self.assign_label_to_selection(label):
                 event.accept()
                 return True
         if event.key() == Qt.Key_E and self.selected_annotation_ids:
@@ -693,23 +692,23 @@ class AnnotationOverlayController:
                 return True
         return False
 
-    def assign_group_to_selection(self, group: str | None) -> bool:
-        """Assign one persisted group label to the current annotation selection."""
+    def assign_label_to_selection(self, label: str | None) -> bool:
+        """Assign one persisted label to the current annotation selection."""
         if self.annotation_set is None or not self.selected_annotation_ids:
             return False
         selected = set(self.selected_annotation_ids)
-        normalized_group = None if group is None else str(group)
+        normalized_label = annotation_label_from_slot(label, load_annotation_config())
         changed = False
         updated_annotations: list[Annotation] = []
         for annotation in self.annotation_set.annotations:
             if annotation.id not in selected:
                 updated_annotations.append(annotation)
                 continue
-            if annotation.group == normalized_group:
+            if annotation.label == normalized_label:
                 updated_annotations.append(annotation)
                 continue
             updated_annotations.append(
-                annotation.model_copy(update={"group": normalized_group})
+                annotation.model_copy(update={"label": normalized_label})
             )
             changed = True
         if not changed:
@@ -718,7 +717,50 @@ class AnnotationOverlayController:
             update={"annotations": tuple(updated_annotations)}
         )
         self.rebuild_items()
+        self._notify_annotation_set_changed()
         return True
+
+    def _ensure_annotation_identity_config(self):
+        """Return identity config, prompting until both fields are defined."""
+        config = load_annotation_config()
+        while not (config.annotator and config.organization):
+            dialog = AnnotationSettingsDialog(config, self._host)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+            config = dialog.config()
+            if config.annotator and config.organization:
+                save_annotation_config(config)
+                break
+        return config
+
+    def _annotation_identity_fields(self) -> dict[str, str | None] | None:
+        """Return current global identity fields copied onto new annotations."""
+        config = self._ensure_annotation_identity_config()
+        if config is None:
+            return None
+        return {
+            "annotator": config.annotator or None,
+            "organization": config.organization or None,
+        }
+
+    def _new_annotation(
+        self,
+        *,
+        geometry,
+        semantic_type: str = "generic",
+        properties: dict[str, Any] | None = None,
+    ) -> Annotation | None:
+        """Build one new annotation with shared default identity metadata."""
+        identity_fields = self._annotation_identity_fields()
+        if identity_fields is None:
+            return None
+        return Annotation(
+            id=f"annotation-{uuid4().hex[:8]}",
+            geometry=geometry,
+            semantic_type=semantic_type,
+            properties=properties or {},
+            **identity_fields,
+        )
 
     def fit_shape_from_selection(self, shape: str) -> bool:
         """Fit one named shape from the currently selected point annotations."""
@@ -1252,40 +1294,31 @@ class AnnotationOverlayController:
         self.ensure_annotation_set()
         if self.annotation_set is None:
             return
-        annotations = list(self.annotation_set.annotations)
-        for index, existing in enumerate(annotations):
-            if existing.id == annotation.id:
-                annotations[index] = annotation
-                break
-        else:
-            annotations.append(annotation)
-        self.annotation_set = self.annotation_set.model_copy(
-            update={"annotations": tuple(annotations)}
-        )
+        self.annotation_set = upsert_annotation(self.annotation_set, annotation)
         self.rebuild_items()
         self.set_active_annotation(annotation.id)
+        self._notify_annotation_set_changed()
 
     def _store_annotation_set(self, annotations: list[Annotation]) -> None:
         """Replace the full annotation collection without changing selection state."""
         if self.annotation_set is None:
             return
-        self.annotation_set = self.annotation_set.model_copy(
-            update={"annotations": tuple(annotations)}
+        self.annotation_set = replace_annotation_sequence(
+            self.annotation_set, annotations
         )
         self.rebuild_items()
+        self._notify_annotation_set_changed()
 
     def delete_annotation(self, annotation_id: str) -> None:
         """Delete one annotation from the current set."""
         if self.annotation_set is None:
             return
-        annotations = tuple(
-            item for item in self.annotation_set.annotations if item.id != annotation_id
-        )
-        self.annotation_set = self.annotation_set.model_copy(
-            update={"annotations": annotations}
+        self.annotation_set = delete_annotation_by_id(
+            self.annotation_set, annotation_id
         )
         self.rebuild_items()
         self.set_active_annotation(None)
+        self._notify_annotation_set_changed()
 
     def edit_annotation(self, annotation_id: str) -> bool:
         """Open the modal editor and update the chosen annotation."""
@@ -1305,8 +1338,7 @@ class AnnotationOverlayController:
         axes = self._host._axes
         if dims is None or axes is None:
             return
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=PointGeometry(
                 dims=dims,
                 values=(
@@ -1314,8 +1346,9 @@ class AnnotationOverlayController:
                     map_plot_value_to_coord(plot_y, axes.y_plot, axes.y_coord),
                 ),
             ),
-            semantic_type="generic",
         )
+        if annotation is None:
+            return
         self.store_annotation(annotation)
 
     def create_box_annotation(
@@ -1332,8 +1365,7 @@ class AnnotationOverlayController:
         y0, y1 = sorted((start[1], end[1]))
         if abs(x1 - x0) < 1e-12 or abs(y1 - y0) < 1e-12:
             return
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=BoxGeometry(
                 dims=dims,
                 min_corner=(
@@ -1345,8 +1377,9 @@ class AnnotationOverlayController:
                     map_plot_value_to_coord(y1, axes.y_plot, axes.y_coord),
                 ),
             ),
-            semantic_type="generic",
         )
+        if annotation is None:
+            return
         self.store_annotation(annotation)
 
     def create_line_annotation(
@@ -1361,8 +1394,7 @@ class AnnotationOverlayController:
             return
         if abs(end[0] - start[0]) < 1e-12 and abs(end[1] - start[1]) < 1e-12:
             return
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=PathGeometry(
                 dims=dims,
                 points=(
@@ -1376,8 +1408,9 @@ class AnnotationOverlayController:
                     ),
                 ),
             ),
-            semantic_type="generic",
         )
+        if annotation is None:
+            return
         self.store_annotation(annotation)
 
     def create_default_line_annotation(self, plot_x: float, plot_y: float) -> None:
@@ -1401,8 +1434,7 @@ class AnnotationOverlayController:
         xs, ys = self._sample_hyperbola_plot_points(params)
         if len(xs) < 2:
             return
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=PathGeometry(
                 dims=dims,
                 points=tuple(
@@ -1425,6 +1457,8 @@ class AnnotationOverlayController:
                 "hyperbola_source": "manual",
             },
         )
+        if annotation is None:
+            return
         self.store_annotation(annotation)
 
     def create_default_hyperbola_annotation(self, plot_x: float, plot_y: float) -> None:
@@ -1447,8 +1481,7 @@ class AnnotationOverlayController:
         xs, ys = self._sample_hyperbola_plot_points(params)
         if len(xs) < 2:
             return
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=PathGeometry(
                 dims=dims,
                 points=tuple(
@@ -1471,6 +1504,8 @@ class AnnotationOverlayController:
                 "hyperbola_source": "manual",
             },
         )
+        if annotation is None:
+            return
         self.store_annotation(annotation)
 
     def create_ellipse_annotation(
@@ -1487,8 +1522,7 @@ class AnnotationOverlayController:
         xs, ys = self._sample_ellipse_plot_points(params)
         if len(xs) < 3:
             return
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=PathGeometry(
                 dims=dims,
                 points=tuple(
@@ -1510,6 +1544,8 @@ class AnnotationOverlayController:
                 "ellipse_source": "manual",
             },
         )
+        if annotation is None:
+            return
         self.store_annotation(annotation)
 
     def create_default_ellipse_annotation(self, plot_x: float, plot_y: float) -> None:
@@ -1543,8 +1579,7 @@ class AnnotationOverlayController:
             self._show_host_warning("ellipse_fit_failed")
             return False
         xs, ys = self._sample_ellipse_plot_points(params)
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=PathGeometry(
                 dims=self.annotation_set.dims,
                 points=tuple(
@@ -1567,6 +1602,8 @@ class AnnotationOverlayController:
                 "derived_from": [annotation.id for annotation in point_annotations],
             },
         )
+        if annotation is None:
+            return False
         self.store_annotation(annotation)
         self._show_host_warning("ellipse_fit_failed", clear_only=True)
         return True
@@ -1587,8 +1624,7 @@ class AnnotationOverlayController:
         except ValueError:
             self._show_host_warning("line_fit_failed")
             return False
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=PathGeometry(
                 dims=self.annotation_set.dims,
                 points=(
@@ -1617,6 +1653,8 @@ class AnnotationOverlayController:
                 "derived_from": [annotation.id for annotation in point_annotations],
             },
         )
+        if annotation is None:
+            return False
         self.store_annotation(annotation)
         self._show_host_warning("line_fit_failed", clear_only=True)
         return True
@@ -1639,8 +1677,7 @@ class AnnotationOverlayController:
         center_y = (min_y + max_y) / 2.0
         side = max(max_x - min_x, max_y - min_y, _HYPERBOLA_EPSILON)
         half_side = side / 2.0
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=BoxGeometry(
                 dims=self.annotation_set.dims,
                 min_corner=(
@@ -1667,6 +1704,8 @@ class AnnotationOverlayController:
                 "derived_from": [annotation.id for annotation in point_annotations],
             },
         )
+        if annotation is None:
+            return False
         self.store_annotation(annotation)
         return True
 
@@ -1687,8 +1726,7 @@ class AnnotationOverlayController:
             self._show_host_warning("hyperbola_fit_failed")
             return False
         xs, ys = self._sample_hyperbola_plot_points(params)
-        annotation = Annotation(
-            id=f"annotation-{uuid4().hex[:8]}",
+        annotation = self._new_annotation(
             geometry=PathGeometry(
                 dims=self.annotation_set.dims,
                 points=tuple(
@@ -1712,6 +1750,8 @@ class AnnotationOverlayController:
                 "derived_from": [annotation.id for annotation in point_annotations],
             },
         )
+        if annotation is None:
+            return False
         self.store_annotation(annotation)
         self._show_host_warning("hyperbola_fit_failed", clear_only=True)
         return True
@@ -1983,23 +2023,23 @@ class AnnotationOverlayController:
         """Update pen and handle visibility based on active state."""
         for annotation_id, item in self.annotation_items.items():
             annotation = self.annotation_by_id(annotation_id)
-            group = None if annotation is None else annotation.group
+            label = None if annotation is None else annotation.label
             active = self._interactive and annotation_id == self.active_annotation_id
             selected = (
                 self._interactive and annotation_id in self.selected_annotation_ids
             )
             if active:
-                pen = _active_pen(group=group)
-                hover_pen = _active_hover_pen(group=group)
+                pen = _active_pen(label=label)
+                hover_pen = _active_hover_pen(label=label)
             elif selected:
-                pen = _selected_pen(interactive=self._interactive, group=group)
+                pen = _selected_pen(interactive=self._interactive, label=label)
                 hover_pen = _selected_hover_pen(
-                    interactive=self._interactive, group=group
+                    interactive=self._interactive, label=label
                 )
             else:
-                pen = _inactive_pen(interactive=self._interactive, group=group)
+                pen = _inactive_pen(interactive=self._interactive, label=label)
                 hover_pen = _inactive_hover_pen(
-                    interactive=self._interactive, group=group
+                    interactive=self._interactive, label=label
                 )
             item.setPen(pen)
             if hasattr(item, "setHoverPen"):
@@ -2267,8 +2307,8 @@ class AnnotationOverlayController:
         if axes is None:
             return None
         geometry = annotation.geometry
-        pen = _inactive_pen(interactive=True, group=annotation.group)
-        hover_pen = _inactive_hover_pen(interactive=True, group=annotation.group)
+        pen = _inactive_pen(interactive=True, label=annotation.label)
+        hover_pen = _inactive_hover_pen(interactive=True, label=annotation.label)
         if isinstance(geometry, PointGeometry):
             plot_x = map_coord_to_plot_value(
                 geometry.values[0], axes.x_coord, axes.x_plot

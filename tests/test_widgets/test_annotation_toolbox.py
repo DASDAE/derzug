@@ -43,6 +43,18 @@ def test_toolbox_renders_annotations_title(qtbot):
     assert toolbox.title_label.text() == "Annotations"
 
 
+def test_toolbox_title_reflects_dirty_state(qtbot):
+    """The toolbox title should mark and clear unsent state."""
+    toolbox = AnnotationToolbox(tools=("point",))
+    qtbot.addWidget(toolbox)
+
+    toolbox.set_dirty(True)
+    assert toolbox.title_label.text() == "Annotations *"
+
+    toolbox.set_dirty(False)
+    assert toolbox.title_label.text() == "Annotations"
+
+
 def test_toolbox_hide_button_emits_signal(qtbot):
     """The compact hide button should emit the hide request signal."""
     toolbox = AnnotationToolbox(tools=("point",))

@@ -14,13 +14,13 @@ from typing import ClassVar, Generic, Literal, Self, TypeVar
 import pandas as pd
 from pydantic import Field
 
-from ..core import SlanRodModel
+from ..core import DerzugModel
 from .provenance import Provenance
 
 DataType = TypeVar("DataType")
 
 
-class Source(SlanRodModel, ABC, Generic[DataType]):
+class Source(DerzugModel, ABC, Generic[DataType]):
     """
     A Source of pipe inputs.
 
@@ -85,7 +85,7 @@ class FileSystemSource(Source, ABC, Generic[DataType]):
         """
         Load a source from a provenance or data path.
         """
-        from slanrod.workflow.sink import get_provmap_and_fingerprints_from_path
+        from derzug.workflow.sink import get_provmap_and_fingerprints_from_path
 
         path = Path(path)
         if provenance is not None:

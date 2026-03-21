@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
 from contextlib import suppress
 from copy import deepcopy
@@ -36,6 +37,7 @@ from AnyQt.QtWidgets import (
     QAbstractSpinBox,
     QAction,
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -69,6 +71,11 @@ from orangewidget.workflow.widgetsscheme import (
     WidgetsSignalManager,
 )
 
+from derzug.annotations_config import (
+    AnnotationSettingsDialog,
+    load_annotation_config,
+    save_annotation_config,
+)
 from derzug.core.zugwidget import ZugWidget
 from derzug.utils.misc import (
     load_example_workflow_entrypoints,
@@ -107,6 +114,19 @@ _APP_ACTIVE_SOURCE_MANAGER = None
 _APP_ACTIVE_SOURCE_MAIN_WINDOW = None
 _EXPERIMENTAL_WARNING_GROUP = "startup"
 _EXPERIMENTAL_WARNING_HIDE_KEY = "hide-experimental-warning"
+
+
+def _derzug_settings() -> QSettings:
+    """Return a settings object scoped to DerZug's real app identity."""
+    organization = getattr(DerZugConfig, "OrganizationName", None) or getattr(
+        DerZugConfig, "OrganizationDomain", ""
+    )
+    return QSettings(
+        QSettings.IniFormat,
+        QSettings.UserScope,
+        str(organization),
+        DerZugConfig.ApplicationName,
+    )
 
 
 def _reserved_node_metadata(properties: object) -> dict[str, object]:
@@ -159,6 +179,7 @@ class _CanvasCompositeController(QObject):
         """Return the context menu for one clicked node, if any."""
         document = self._main_window.current_document()
         selected_nodes = list(document.selectedNodes())
+        menu = None
         if (
             len(selected_nodes) == 1
             and selected_nodes[0] is node
@@ -166,16 +187,23 @@ class _CanvasCompositeController(QObject):
         ):
             menu = QMenu(self._main_window)
             menu.addAction("Ungroup", lambda: self.ungroup_node(node))
-            return menu
-        if (
+        elif (
             len(selected_nodes) >= 2
             and node in selected_nodes
             and self._can_group(selected_nodes)
         ):
             menu = QMenu(self._main_window)
             menu.addAction("Group", lambda: self.group_nodes(selected_nodes))
-            return menu
-        return None
+
+        source_widget = self._source_widget_for_node(node)
+        if source_widget is not None:
+            if menu is None:
+                menu = QMenu(self._main_window)
+            menu.addAction(
+                "Set Active Source",
+                lambda: self._set_active_source_widget(source_widget),
+            )
+        return menu
 
     def _is_composite_node(self, node) -> bool:
         """Return True when the node stores one composite payload."""
@@ -184,6 +212,24 @@ class _CanvasCompositeController(QObject):
     def _can_group(self, nodes: list[object]) -> bool:
         """Return True when the node selection can become one composite."""
         return all(not self._is_composite_node(node) for node in nodes)
+
+    def _source_widget_for_node(self, node):
+        """Return one source-capable widget for the given node, if available."""
+        document = self._main_window.current_document()
+        scheme = document.scheme()
+        if scheme is None:
+            return None
+        widget = scheme.widget_for_node(node)
+        if ActiveSourceManager._is_source_widget(widget):
+            return widget
+        return None
+
+    def _set_active_source_widget(self, widget) -> None:
+        """Promote the clicked source widget to the active source."""
+        manager = self._main_window.active_source_manager
+        if manager is None:
+            return
+        manager._set_active_widget(self._main_window, widget)
 
     def group_nodes(self, nodes: list[object]) -> object | None:
         """Replace a selected subgraph with one composite widget node."""
@@ -1188,7 +1234,9 @@ class DerZugKeyboardShortcutsDialog(QDialog):
 class DerZugConfig(OrangeConfig):
     """Application config for DerZug."""
 
-    ApplicationName = "🚂 DerZug 🚂"
+    OrganizationDomain = "dasdae"
+    OrganizationName = "dasdae"
+    ApplicationName = "DerZug"
     AppUserModelID = "DASDAE.DerZug"
 
     @staticmethod
@@ -1335,7 +1383,6 @@ class DerZugMain(OMain):
         global _APP_ACTIVE_SOURCE_MAIN_WINDOW
         _APP_ACTIVE_SOURCE_MAIN_WINDOW = window
         self.application.active_source_main_window = window
-        window.install_active_source_controls()
         window.install_dev_controls()
         if self.show_demo:
             QTimer.singleShot(0, window.examples_dialog)
@@ -1382,6 +1429,9 @@ class DerZugMainWindow(OrangeMainWindow):
         self.startup_open_widget_ids: list[int] = []
         self.dev_menu: QMenu | None = None
         self.hot_reload_action: QAction | None = None
+        self.edit_config_file_action: QAction | None = None
+        self.annotation_settings_action: QAction | None = None
+        self._hot_reload_in_progress = False
         self._startup_warning_shown = False
         self._canvas_composite_controller = _CanvasCompositeController(self)
         self._canvas_traceback_filter = _CanvasTracebackIconFilter(self)
@@ -1408,12 +1458,22 @@ class DerZugMainWindow(OrangeMainWindow):
     def _customize_shell(self) -> None:
         """Trim inherited Orange shell actions down to the DerZug UX."""
         self._customize_help_menu()
+        self._remove_toolbar_help_action()
         self._prune_menu_actions("File", {"Open Report..."})
         self._prune_menu_actions("View", {"Window Groups", "Show report"})
         self._prune_menu_actions(
             "Options",
             {"Add-ons...", "Reset Widget Settings..."},
         )
+        self._install_annotation_settings_action()
+
+    def _remove_toolbar_help_action(self) -> None:
+        """Remove the quick-help toggle from the canvas toolbar."""
+        action = getattr(self, "dock_help_action", None)
+        toolbar = getattr(self, "canvas_toolbar", None)
+        if action is None or toolbar is None:
+            return
+        toolbar.removeAction(action)
 
     def _customize_help_menu(self) -> None:
         """Keep only the DerZug-relevant help actions."""
@@ -1463,12 +1523,47 @@ class DerZugMainWindow(OrangeMainWindow):
                 return action.menu()
         return None
 
+    def _install_annotation_settings_action(self) -> None:
+        """Add the global annotation settings entry to the Options menu."""
+        options_menu = self._menu_by_name("Options")
+        if options_menu is None:
+            return
+        if self.annotation_settings_action is None:
+            action = QAction("Annotation Settings...", self)
+            action.setObjectName("annotation-settings-action")
+            action.triggered.connect(self.open_annotation_settings)
+            self.annotation_settings_action = action
+        existing = [
+            action
+            for action in options_menu.actions()
+            if action is self.annotation_settings_action
+        ]
+        if existing:
+            return
+        insert_before = next(
+            (
+                action
+                for action in options_menu.actions()
+                if action.text().replace("&", "") == "Settings"
+            ),
+            None,
+        )
+        if insert_before is None:
+            options_menu.addAction(self.annotation_settings_action)
+        else:
+            options_menu.insertAction(insert_before, self.annotation_settings_action)
+        self._cleanup_menu_separators(options_menu)
+
     @staticmethod
     def _cleanup_menu_separators(menu: QMenu) -> None:
-        """Hide leading, trailing, and doubled separators."""
+        """Hide empty actions plus leading, trailing, and doubled separators."""
         actions = list(menu.actions())
         previous_was_separator = True
         for action in actions:
+            label = action.text().replace("&", "").strip()
+            if not action.isSeparator() and not label:
+                action.setVisible(False)
+                continue
             if action.isSeparator():
                 keep = not previous_was_separator
                 action.setVisible(keep)
@@ -1717,18 +1812,6 @@ class DerZugMainWindow(OrangeMainWindow):
         """No-op: DerZug no longer forces widget windows above the canvas."""
         return
 
-    def install_active_source_controls(self) -> None:
-        """Install canvas action for choosing the active source."""
-        self.set_active_source_action = QAction("Set Active Source", self)
-        self.set_active_source_action.setObjectName("set-active-source-action")
-        self.set_active_source_action.setToolTip(
-            "Set selected source node as global active source"
-        )
-        self.set_active_source_action.triggered.connect(self._set_active_source)
-        self.addAction(self.set_active_source_action)
-        if hasattr(self, "canvas_toolbar"):
-            self.canvas_toolbar.addAction(self.set_active_source_action)
-
     def install_dev_controls(self) -> None:
         """Install development-only hot-reload controls."""
         if not self.dev_mode:
@@ -1743,12 +1826,18 @@ class DerZugMainWindow(OrangeMainWindow):
             action.triggered.connect(self._trigger_hot_reload)
             self.hot_reload_action = action
             self.addAction(action)
-            if hasattr(self, "canvas_toolbar"):
-                self.canvas_toolbar.addAction(action)
+        if self.edit_config_file_action is None:
+            action = QAction("Edit Config File", self)
+            action.setObjectName("edit-config-file-action")
+            action.setToolTip("Open the DerZug user config file")
+            action.triggered.connect(self._open_config_file)
+            self.edit_config_file_action = action
+            self.addAction(action)
         if self.dev_menu is None:
             menu = QMenu("Dev", self)
             menu.setObjectName("dev-menu")
             menu.addAction(self.hot_reload_action)
+            menu.addAction(self.edit_config_file_action)
             self.dev_menu = menu
         menu_bar = self.menuBar()
         if (
@@ -1758,28 +1847,27 @@ class DerZugMainWindow(OrangeMainWindow):
             menu_bar.addMenu(self.dev_menu)
 
     def _trigger_hot_reload(self) -> None:
-        """Restart the app in development mode after handling unsaved work."""
+        """Restart the app in development mode from one temp workflow snapshot."""
         if not self.dev_mode:
             return
-        restart_workflow = self._workflow_path_for_reload()
-        if self._current_workflow_is_modified():
-            decision = self._prompt_hot_reload_unsaved_changes()
-            if decision == QMessageBox.Cancel:
-                return
-            if decision == QMessageBox.Save:
-                if not self._save_current_workflow_for_reload():
-                    return
-                restart_workflow = self._workflow_path_for_reload()
         open_widget_ids = self._collect_open_widget_node_ids()
-        command = self._build_hot_reload_command(restart_workflow, open_widget_ids)
         try:
+            restart_workflow = self._workflow_path_for_reload()
+            command = self._build_hot_reload_command(restart_workflow, open_widget_ids)
             subprocess.Popen(command)
         except Exception as exc:
             QMessageBox.critical(self, "Hot Reload Failed", str(exc))
             return
+        self._hot_reload_in_progress = True
         app = QApplication.instance()
         if app is not None:
             QTimer.singleShot(0, app.quit)
+
+    def ask_save_changes(self):
+        """Bypass the normal save prompt when quitting only for hot reload."""
+        if self._hot_reload_in_progress:
+            return QDialog.Accepted
+        return super().ask_save_changes()
 
     def _current_document_path(self) -> str | None:
         """Return the current document path, if any."""
@@ -1791,28 +1879,46 @@ class DerZugMainWindow(OrangeMainWindow):
 
     def _workflow_path_for_reload(self) -> str | None:
         """Return the workflow path to reopen after a hot reload."""
-        return self._current_document_path() or self.startup_workflow_path
+        if self.current_document() is not None:
+            return self._save_temp_workflow_for_reload()
+        return self.startup_workflow_path
 
-    def _current_workflow_is_modified(self) -> bool:
-        """Return True when the active workflow has unsaved changes."""
+    def _hot_reload_temp_workflow_path(self) -> str:
+        """Return the stable temp workflow path used for hot reload snapshots."""
+        return str(Path(tempfile.gettempdir()) / "derzug-hot-reload.ows")
+
+    def _save_temp_workflow_for_reload(self) -> str:
+        """Serialize the current live workflow to the hot-reload temp path."""
         document = self.current_document()
-        return bool(document is not None and document.isModified())
+        if document is None:
+            raise RuntimeError("No current workflow is available for hot reload.")
+        scheme = document.scheme()
+        if scheme is None:
+            raise RuntimeError(
+                "No current workflow scheme is available for hot reload."
+            )
+        workflow_path = self._hot_reload_temp_workflow_path()
+        if not self.save_scheme_to(scheme, workflow_path):
+            raise RuntimeError("Failed to save hot reload workflow snapshot.")
+        return workflow_path
 
-    def _prompt_hot_reload_unsaved_changes(self) -> int:
-        """Ask how to handle unsaved workflow edits before hot reload."""
-        return QMessageBox.question(
-            self,
-            "Hot Reload",
-            "The current workflow has unsaved changes. Save before reloading?",
-            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-            QMessageBox.Save,
-        )
+    def _config_file_path(self) -> str:
+        """Return the user config file path for DerZug."""
+        return _derzug_settings().fileName()
 
-    def _save_current_workflow_for_reload(self) -> bool:
-        """Save the current workflow, prompting Save As when needed."""
-        if self._current_document_path():
-            return bool(self.save_scheme())
-        return bool(self.save_scheme_as())
+    def _open_config_file(self) -> None:
+        """Open the DerZug user config file in the OS default editor."""
+        try:
+            settings = _derzug_settings()
+            path = Path(self._config_file_path())
+            path.parent.mkdir(parents=True, exist_ok=True)
+            settings.sync()
+            path.touch(exist_ok=True)
+            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            if not opened:
+                raise RuntimeError(f"Could not open config file: {path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Open Config File Failed", str(exc))
 
     def _build_hot_reload_command(
         self,
@@ -1830,12 +1936,6 @@ class DerZugMainWindow(OrangeMainWindow):
                 ["--open-widgets", ",".join(str(i) for i in open_widget_ids)]
             )
         return command
-
-    def _set_active_source(self) -> None:
-        """Set active source from the currently selected canvas node."""
-        if self.active_source_manager is None:
-            return
-        self.active_source_manager.set_active_source_from_selection(self)
 
     def open_about(self):
         """Show the DerZug about dialog."""
@@ -1855,9 +1955,16 @@ class DerZugMainWindow(OrangeMainWindow):
         dlg.show()
         dlg.raise_()
 
+    def open_annotation_settings(self) -> None:
+        """Show the global annotation settings dialog."""
+        dialog = AnnotationSettingsDialog(load_annotation_config(), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        save_annotation_config(dialog.config())
+
     def should_show_experimental_warning(self) -> bool:
         """Return True when the startup experimental warning is enabled."""
-        settings = QSettings()
+        settings = _derzug_settings()
         settings.beginGroup(_EXPERIMENTAL_WARNING_GROUP)
         hidden = settings.value(_EXPERIMENTAL_WARNING_HIDE_KEY, False, type=bool)
         settings.endGroup()
@@ -1865,9 +1972,16 @@ class DerZugMainWindow(OrangeMainWindow):
 
     def set_experimental_warning_hidden(self, hidden: bool) -> None:
         """Persist whether the startup experimental warning should stay hidden."""
-        settings = QSettings()
+        settings = _derzug_settings()
         settings.beginGroup(_EXPERIMENTAL_WARNING_GROUP)
         settings.setValue(_EXPERIMENTAL_WARNING_HIDE_KEY, bool(hidden))
+        settings.endGroup()
+
+    def clear_experimental_warning_hidden(self) -> None:
+        """Clear the persisted startup experimental warning preference."""
+        settings = _derzug_settings()
+        settings.beginGroup(_EXPERIMENTAL_WARNING_GROUP)
+        settings.remove(_EXPERIMENTAL_WARNING_HIDE_KEY)
         settings.endGroup()
 
     def maybe_show_experimental_warning(self) -> None:
@@ -1882,6 +1996,8 @@ class DerZugMainWindow(OrangeMainWindow):
 class ExperimentalWarningDialog(QDialog):
     """Modal startup warning for DerZug's experimental status."""
 
+    TITLE = "🚨 Experimental Warning"
+    HEADING = "DerZug Is Experimental"
     MESSAGE = (
         "Warning: Derzug is a highly experimental proof of concept. "
         "It should not be used for anything important. "
@@ -1890,26 +2006,89 @@ class ExperimentalWarningDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Warning")
+        self.setWindowTitle(self.TITLE)
         self.setModal(True)
-        self.resize(460, 180)
+        self.resize(520, 230)
         self.hide_future_warnings = False
+        self.setObjectName("experimental-warning-dialog")
+        self.setStyleSheet(
+            """
+            QDialog#experimental-warning-dialog {
+                background-color: #fff4f4;
+            }
+            QFrame#experimental-warning-panel {
+                background-color: #fffafa;
+                border: 1px solid #d7a1a1;
+                border-left: 6px solid #b63a3a;
+                border-radius: 10px;
+            }
+            QLabel#experimental-warning-heading {
+                color: #7f1d1d;
+                font-size: 22px;
+                font-weight: 700;
+            }
+            QLabel#experimental-warning-body {
+                color: #4a1f1f;
+                font-size: 14px;
+                line-height: 1.35;
+            }
+            QPushButton#experimental-warning-ok {
+                background-color: #b63a3a;
+                border: 1px solid #962f2f;
+                border-radius: 6px;
+                color: white;
+                font-weight: 700;
+                padding: 6px 16px;
+            }
+            QPushButton#experimental-warning-ok:hover {
+                background-color: #c44343;
+            }
+            QPushButton#experimental-warning-hide {
+                border-radius: 6px;
+                padding: 6px 16px;
+            }
+            QCheckBox#experimental-warning-checkbox {
+                color: #4a1f1f;
+                font-size: 13px;
+                spacing: 8px;
+            }
+            """
+        )
 
         layout = QVBoxLayout(self)
-        label = QLabel(self.MESSAGE, self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        panel = QWidget(self)
+        panel.setObjectName("experimental-warning-panel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(18, 16, 18, 16)
+        panel_layout.setSpacing(8)
+
+        heading = QLabel(self.HEADING, panel)
+        heading.setObjectName("experimental-warning-heading")
+        heading.setWordWrap(True)
+        panel_layout.addWidget(heading)
+
+        label = QLabel(self.MESSAGE, panel)
+        label.setObjectName("experimental-warning-body")
         label.setWordWrap(True)
-        layout.addWidget(label)
+        panel_layout.addWidget(label)
+
+        layout.addWidget(panel)
+
+        self._hide_checkbox = QCheckBox("Don't show this message again", self)
+        self._hide_checkbox.setObjectName("experimental-warning-checkbox")
+        layout.addWidget(self._hide_checkbox)
 
         buttons = QDialogButtonBox(self)
         ok_button = QPushButton("OK", self)
-        hide_button = QPushButton("Don't show this message again", self)
+        ok_button.setObjectName("experimental-warning-ok")
         buttons.addButton(ok_button, QDialogButtonBox.ButtonRole.AcceptRole)
-        buttons.addButton(hide_button, QDialogButtonBox.ButtonRole.ActionRole)
-        ok_button.clicked.connect(self.accept)
-        hide_button.clicked.connect(self._accept_and_hide_future)
+        ok_button.clicked.connect(self._accept_for_now)
         layout.addWidget(buttons)
 
-    def _accept_and_hide_future(self) -> None:
-        """Accept the dialog and suppress future startup warnings."""
-        self.hide_future_warnings = True
+    def _accept_for_now(self) -> None:
+        """Accept the dialog without suppressing future startup warnings."""
+        self.hide_future_warnings = self._hide_checkbox.isChecked()
         self.accept()

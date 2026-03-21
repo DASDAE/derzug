@@ -11,19 +11,20 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 from pydantic import computed_field, field_validator
-from slanrod.constants import yaml_extensions
 
-from ..core import SlanRodModel
+from derzug.constants import yaml_extensions
+
+from ..core import DerzugModel
 
 if TYPE_CHECKING:
     from .pipe import Pipe
 
 
-class Provenance(SlanRodModel):
+class Provenance(DerzugModel):
     """Structured record of pipeline provenance and run metadata."""
 
     pipe: Pipe
-    slanrod_version: str
+    derzug_version: str
     created_at: datetime
     python_version: str
     system_info: dict[str, str]
@@ -116,13 +117,13 @@ class Provenance(SlanRodModel):
         return cls.model_validate(data)
 
 
-class ProvenanceMap(SlanRodModel):
+class ProvenanceMap(DerzugModel):
     """A serializable provenance map."""
 
     data: dict[str, Provenance]
 
 
-class FingerPrintTuple(SlanRodModel):
+class FingerPrintTuple(DerzugModel):
     """Serializable tuple for provenance fingerprints."""
 
     data: tuple[str, ...]

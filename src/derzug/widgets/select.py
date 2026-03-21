@@ -43,7 +43,7 @@ class Select(SelectionControlsMixin, ZugWidget):
 
         patch = Input("Patch", dc.Patch)
         spool = Input("Spool", dc.BaseSpool)
-        annotation_set = Input("Annotations", AnnotationSet, auto_summary=False)
+        annotation_set = Input("Annotations", AnnotationSet)
 
     class Outputs:
         """Output signal definitions."""

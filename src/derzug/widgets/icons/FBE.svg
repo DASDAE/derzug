@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect x="4" y="4" width="40" height="40" rx="2"
+        fill="#ffffff" stroke="#333333" stroke-width="2.5"/>
+  <!-- Baseline -->
+  <line x1="6" y1="39" x2="42" y2="39"
+        stroke="#333333" stroke-width="1.5"/>
+  <!-- Spectrum bars (left to right, varying heights) -->
+  <!-- Bar 1 -->
+  <rect x="8" y="30" width="5" height="9"
+        fill="#333333" opacity="0.35"/>
+  <!-- Bar 2 -->
+  <rect x="15" y="22" width="5" height="17"
+        fill="#333333" opacity="0.35"/>
+  <!-- Bar 3 (highlighted / selected band) -->
+  <rect x="22" y="13" width="5" height="26"
+        fill="#333333"/>
+  <!-- Bar 4 -->
+  <rect x="29" y="25" width="5" height="14"
+        fill="#333333" opacity="0.35"/>
+  <!-- Bar 5 -->
+  <rect x="36" y="32" width="5" height="7"
+        fill="#333333" opacity="0.35"/>
+  <!-- Selection bracket around bar 3 -->
+  <rect x="20.5" y="11.5" width="8" height="29"
+        fill="none" stroke="#333333" stroke-width="1.5"/>
+</svg>

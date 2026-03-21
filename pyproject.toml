@@ -29,14 +29,14 @@ authors = [
 description = "A DAS application for interactive visualizations."
 readme = "README.md"
 license = "GPL-3.0-or-later"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Environment :: X11 Applications :: Qt",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Visualization",
 ]
@@ -46,7 +46,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
-     "dascore",
+     "dascore>=0.1.15",
      "pyqtgraph",
      "orange3",
      "typer",
@@ -86,6 +86,7 @@ Analytic = "derzug.widgets.analytic"
 Calculus = "derzug.widgets.calculus"
 PlayAudio = "derzug.widgets.playaudio"
 DataFrameLoader = "derzug.widgets.dataframe_loader"
+Annotations = "derzug.widgets.annotations"
 Table2Annotation = "derzug.widgets.table2annotation"
 Annotation2DataFrame = "derzug.widgets.annotation2dataframe"
 
@@ -99,12 +100,6 @@ zug = "derzug.dascore:ZugSpoolNameSpace"
 "derzug" = ["static/*.png"]
 "derzug.workflows" = ["*.ows"]
 
-[tool.setuptools.data-files]
-"share/applications" = ["resources/linux/derzug.desktop"]
-"share/icons/hicolor/64x64/apps" = ["resources/linux/icons/hicolor/64x64/apps/derzug.png"]
-"share/icons/hicolor/128x128/apps" = ["resources/linux/icons/hicolor/128x128/apps/derzug.png"]
-"share/icons/hicolor/256x256/apps" = ["resources/linux/icons/hicolor/256x256/apps/derzug.png"]
-"share/icons/hicolor/512x512/apps" = ["resources/linux/icons/hicolor/512x512/apps/derzug.png"]
 
 [project.optional-dependencies]
 
@@ -184,7 +179,7 @@ exclude = [
 ]
 
 # lowest python version supported
-target-version = "py310"
+target-version = "py313"
 
 lint.fixable = ["ALL"]
 

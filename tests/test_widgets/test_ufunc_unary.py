@@ -36,7 +36,17 @@ class TestUFunc:
             ufunc_widget._op_combo.itemText(i)
             for i in range(ufunc_widget._op_combo.count())
         ]
-        expected = {"abs", "real", "imag", "conj", "angle", "exp", "log", "log10", "log2"}
+        expected = {
+            "abs",
+            "real",
+            "imag",
+            "conj",
+            "angle",
+            "exp",
+            "log",
+            "log10",
+            "log2",
+        }
         assert set(labels) == expected
 
     def test_none_patch_emits_none(self, ufunc_widget, monkeypatch, qtbot):
@@ -50,7 +60,7 @@ class TestUFunc:
         assert not ufunc_widget.Error.operation_failed.is_shown()
 
     def test_abs_emits_patch(self, ufunc_widget, monkeypatch, qtbot):
-        """abs operation on a real patch emits a patch with non-negative data."""
+        """Abs operation on a real patch emits a patch with non-negative data."""
         received = capture_output(ufunc_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_1")
 
@@ -150,7 +160,7 @@ class TestUFunc:
         assert not ufunc_widget.Error.operation_failed.is_shown()
 
     def test_log_emits_patch(self, ufunc_widget, monkeypatch, qtbot):
-        """log operation emits a patch of the same shape."""
+        """Log operation emits a patch of the same shape."""
         received = capture_output(ufunc_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_1")
         ufunc_widget._op_combo.setCurrentText("log")

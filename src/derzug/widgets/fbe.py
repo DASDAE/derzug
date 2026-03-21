@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import ast
-from typing import Any
+from typing import Any, ClassVar
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
@@ -22,7 +21,7 @@ class FBE(PatchDimWidget):
 
     name = "FBE"
     description = "Extract one frequency band energy feature from a patch"
-    icon = "icons/Stft.svg"
+    icon = "icons/FBE.svg"
     category = "Transform"
     keywords = ("fbe", "stft", "frequency", "band", "energy")
     priority = 21.14
@@ -37,12 +36,19 @@ class FBE(PatchDimWidget):
     fbe_lower = Setting("")
     fbe_upper = Setting("")
 
+    _WINDOW_TYPES: ClassVar[tuple[str, ...]] = (
+        "hann",
+        "hamming",
+        "blackman",
+        "nuttall",
+    )
+
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""
 
+        invalid_patch = Msg("FBE requires a patch with a 'time' dimension")
         invalid_window_length = Msg("Invalid window length '{}': {}")
         invalid_overlap = Msg("Invalid overlap '{}': {}")
-        invalid_taper_window = Msg("Invalid taper window '{}': {}")
         invalid_fbe_lower = Msg("Invalid FBE lower '{}': {}")
         invalid_fbe_upper = Msg("Invalid FBE upper '{}': {}")
         invalid_fbe_band = Msg("Invalid FBE band: {}")
@@ -80,13 +86,13 @@ class FBE(PatchDimWidget):
             label="Overlap",
             callback=self.run,
         )
-        gui.lineEdit(
-            box,
-            self,
-            "taper_window",
-            label="Taper Window",
-            callback=self.run,
-        )
+        gui.widgetLabel(box, "Taper Window")
+        self._taper_window_combo = QComboBox(box)
+        self._taper_window_combo.addItems(self._WINDOW_TYPES)
+        if self.taper_window not in self._WINDOW_TYPES:
+            self.taper_window = self._WINDOW_TYPES[0]
+        self._taper_window_combo.setCurrentText(self.taper_window)
+        box.layout().addWidget(self._taper_window_combo)
         gui.checkBox(
             box,
             self,
@@ -117,6 +123,9 @@ class FBE(PatchDimWidget):
         )
 
         self._dim_combo.currentTextChanged.connect(self._on_dim_changed)
+        self._taper_window_combo.currentTextChanged.connect(
+            self._on_taper_window_changed
+        )
 
     @Inputs.patch
     def set_patch(self, patch: dc.Patch | None) -> None:
@@ -124,9 +133,32 @@ class FBE(PatchDimWidget):
         self._set_patch_input(patch)
         self.run()
 
+    def _refresh_dims(self) -> None:
+        """Restrict FBE to the time dimension only."""
+        has_time = self._patch is not None and "time" in self._patch.dims
+        self._available_dims = ("time",) if has_time else ()
+
+        self._dim_combo.blockSignals(True)
+        self._dim_combo.clear()
+        if has_time:
+            self.selected_dim = "time"
+            self._dim_combo.addItem("time")
+            self._dim_combo.setCurrentText("time")
+        self._dim_combo.setEnabled(False)
+        self._dim_combo.blockSignals(False)
+
     def _on_dim_changed(self, value: str) -> None:
         """Persist the selected dimension and rerun."""
-        self.selected_dim = value
+        self.selected_dim = "time" if value == "time" else ""
+        self._dim_combo.blockSignals(True)
+        if self._available_dims:
+            self._dim_combo.setCurrentText("time")
+        self._dim_combo.blockSignals(False)
+        self.run()
+
+    def _on_taper_window_changed(self, value: str) -> None:
+        """Persist the selected taper window and rerun."""
+        self.taper_window = value
         self.run()
 
     def _parse_window_length(self) -> Any:
@@ -147,18 +179,16 @@ class FBE(PatchDimWidget):
             return value * percent
         return parse_patch_text_value(text, allow_none=True, required=False)
 
-    def _parse_taper_window(self) -> str | tuple:
-        """Parse one taper-window specification."""
-        value = self.taper_window.strip()
-        if not value:
-            raise ValueError("value must not be empty")
-        try:
-            parsed = ast.literal_eval(value)
-        except (SyntaxError, ValueError):
-            parsed = value
-        if isinstance(parsed, str | tuple):
-            return parsed
-        raise ValueError("expected a string name or tuple specification")
+    def _coerce_taper_window(self) -> str:
+        """Return the selected taper window or reset to the default."""
+        if self.taper_window in self._WINDOW_TYPES:
+            return self.taper_window
+        default = self._WINDOW_TYPES[0]
+        self.taper_window = default
+        self._taper_window_combo.blockSignals(True)
+        self._taper_window_combo.setCurrentText(default)
+        self._taper_window_combo.blockSignals(False)
+        return default
 
     def _parse_fbe_bound(self, text: str) -> Any | None:
         """Parse one optional FBE frequency-band endpoint."""
@@ -200,6 +230,9 @@ class FBE(PatchDimWidget):
         """Apply STFT power-band extraction and return the reduced patch."""
         if self._patch is None:
             return None
+        if "time" not in self._patch.dims:
+            self._show_error_message("invalid_patch")
+            return None
 
         dim = self._get_dim()
         if dim is None:
@@ -217,11 +250,7 @@ class FBE(PatchDimWidget):
             self._show_exception("invalid_overlap", exc, self.overlap)
             return None
 
-        try:
-            taper_window = self._parse_taper_window()
-        except Exception as exc:
-            self._show_exception("invalid_taper_window", exc, self.taper_window)
-            return None
+        taper_window = self._coerce_taper_window()
 
         try:
             stft_patch = self._patch.stft(

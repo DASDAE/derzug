@@ -139,6 +139,32 @@ class _RefreshWidget(ZugWidget):
         self.refresh_count += 1
 
 
+class _SendPendingWidget(ZugWidget):
+    """Concrete test widget used to verify deferred send shortcut behavior."""
+
+    name = "Send Pending Widget"
+    description = "Test widget for send-pending shortcuts"
+    category = "Test"
+
+    def __init__(self):
+        super().__init__()
+        box = gui.widgetBox(self.controlArea, "Inputs")
+        self.input_edit = QLineEdit(box)
+        box.layout().addWidget(self.input_edit)
+        self.input_combo = QComboBox(box)
+        self.input_combo.addItems(["one", "two"])
+        box.layout().addWidget(self.input_combo)
+        self.flushed_outputs: list[str] = []
+
+    def _delayed_output_names(self) -> tuple[str, ...]:
+        return ("annotation_set",)
+
+    def _flush_delayed_output(self, name: str) -> bool:
+        self.flushed_outputs.append(name)
+        self._clear_output_dirty(name)
+        return True
+
+
 class _SidebarGrowthWidget(ZugWidget):
     """Concrete test widget whose sidebar widens during refresh."""
 
@@ -183,6 +209,15 @@ def shortcut_widget(qtbot):
         yield widget
 
 
+@pytest.fixture
+def send_pending_widget(qtbot):
+    """Return a live widget instance for pending-send shortcut tests."""
+    with widget_context(_SendPendingWidget) as widget:
+        widget.show()
+        qtbot.wait(10)
+        yield widget
+
+
 class TestZugWidgetShortcuts:
     """Tests for common keyboard shortcuts implemented on ZugWidget."""
 
@@ -214,6 +249,32 @@ class TestZugWidgetShortcuts:
         qtbot.keyClick(shortcut_widget, Qt.Key_F, modifier=Qt.ControlModifier)
 
         assert not shortcut_widget.window().isFullScreen()
+
+    def test_s_sends_pending_state(self, send_pending_widget, qtbot):
+        """Pressing s should flush pending delayed state."""
+        assert send_pending_widget.flushed_outputs == []
+        send_pending_widget._mark_output_dirty("annotation_set")
+
+        qtbot.keyClick(send_pending_widget, Qt.Key_S)
+
+        assert send_pending_widget.flushed_outputs == ["annotation_set"]
+
+    def test_s_without_pending_state_does_nothing(self, send_pending_widget, qtbot):
+        """Pressing s without dirty delayed outputs should be a no-op."""
+        qtbot.keyClick(send_pending_widget, Qt.Key_S)
+
+        assert send_pending_widget.flushed_outputs == []
+
+    def test_s_ignored_while_typing(self, send_pending_widget, qtbot):
+        """Pressing s in a text input should not trigger send-pending behavior."""
+        send_pending_widget.input_edit.setFocus()
+        qtbot.wait(10)
+        send_pending_widget._mark_output_dirty("annotation_set")
+
+        qtbot.keyClick(send_pending_widget.input_edit, Qt.Key_S)
+
+        assert send_pending_widget.input_edit.text() == "s"
+        assert send_pending_widget.flushed_outputs == []
 
     def test_ctrl_q_closes_window(self, shortcut_widget, qtbot):
         """Pressing Ctrl+Q closes the widget window."""
@@ -316,6 +377,7 @@ class TestZugWidgetShortcuts:
 
         assert "Ctrl+Q" in rendered
         assert "Ctrl+R" in rendered
+        assert "S" in rendered
         assert "F1" in rendered
 
 

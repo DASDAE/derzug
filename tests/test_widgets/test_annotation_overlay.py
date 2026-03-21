@@ -10,6 +10,7 @@ import pyqtgraph as pg
 import pytest
 from AnyQt.QtCore import QEvent, QPointF, Qt
 from AnyQt.QtWidgets import QDialog, QWidget
+from derzug.annotations_config import AnnotationConfig, save_annotation_config
 from derzug.models.annotations import Annotation, PathGeometry
 from derzug.widgets.annotation_overlay import (
     AnnotationOverlayController,
@@ -119,6 +120,14 @@ def overlay_host(qtbot):
     return host, controller
 
 
+@pytest.fixture(autouse=True)
+def clear_annotation_settings():
+    """Reset global annotation settings around each test."""
+    save_annotation_config(AnnotationConfig(annotator="tester", organization="DerZug"))
+    yield
+    save_annotation_config(AnnotationConfig(annotator="tester", organization="DerZug"))
+
+
 def test_build_empty_set_returns_none_without_axes(overlay_host):
     """No axes means the controller cannot infer annotation dimensions."""
     host, controller = overlay_host
@@ -181,8 +190,15 @@ def test_handle_key_press_cancels_draw_and_deletes_active_annotation(overlay_hos
     assert controller.annotation_set.annotations == ()
 
 
-def test_handle_key_press_assigns_numeric_group_to_selection(overlay_host):
-    """Number keys should persist group slots onto the selected annotations."""
+def test_handle_key_press_assigns_numeric_label_to_selection(overlay_host):
+    """Number keys should persist label slots onto the selected annotations."""
+    save_annotation_config(
+        AnnotationConfig(
+            annotator="tester",
+            organization="DerZug",
+            label_names={"3": "p_pick", "1": "1", "2": "2"},
+        )
+    )
     _host, controller = overlay_host
     controller.create_point_annotation(1.0, 11.0)
     first_id = controller.active_annotation_id
@@ -194,32 +210,101 @@ def test_handle_key_press_assigns_numeric_group_to_selection(overlay_host):
     assert controller.handle_key_press(key) is True
     assert key.accepted is True
     assert {
-        annotation.id: annotation.group
+        annotation.id: annotation.label
         for annotation in controller.annotation_set.annotations
-    } == {first_id: "3", second_id: "3"}
+    } == {first_id: "p_pick", second_id: "p_pick"}
 
 
-def test_handle_key_press_zero_clears_group_from_selection(overlay_host):
-    """Zero should clear group assignments from the selected annotations."""
+def test_handle_key_press_zero_clears_label_from_selection(overlay_host):
+    """Zero should clear label assignments from the selected annotations."""
     _host, controller = overlay_host
     controller.create_point_annotation(1.0, 11.0)
     annotation_id = controller.active_annotation_id
     controller.set_selected_annotations({annotation_id})
-    controller.assign_group_to_selection("4")
+    controller.assign_label_to_selection("4")
     key = _FakeKeyEvent(Qt.Key_0)
 
     assert controller.handle_key_press(key) is True
     assert key.accepted is True
-    assert controller.annotation_by_id(annotation_id).group is None
+    assert controller.annotation_by_id(annotation_id).label is None
 
 
-def test_handle_key_press_group_shortcuts_ignore_empty_selection(overlay_host):
-    """Grouping keys should do nothing without an active selection."""
+def test_handle_key_press_label_shortcuts_ignore_empty_selection(overlay_host):
+    """Label keys should do nothing without an active selection."""
     _host, controller = overlay_host
     key = _FakeKeyEvent(Qt.Key_1)
 
     assert controller.handle_key_press(key) is False
     assert key.accepted is False
+
+
+def test_create_point_annotation_uses_global_identity_settings(overlay_host):
+    """New annotations should copy the current global annotator and organization."""
+    save_annotation_config(AnnotationConfig(annotator="alice", organization="DASDAE"))
+    _host, controller = overlay_host
+
+    controller.create_point_annotation(1.0, 11.0)
+
+    annotation = controller.annotation_set.annotations[0]
+    assert annotation.annotator == "alice"
+    assert annotation.organization == "DASDAE"
+
+
+def test_create_point_annotation_prompts_until_identity_is_defined(
+    overlay_host, monkeypatch
+):
+    """Creation should reopen settings until both user and org are defined."""
+    save_annotation_config(AnnotationConfig())
+    _host, controller = overlay_host
+    opened: list[AnnotationConfig] = []
+    returned = iter(
+        [
+            AnnotationConfig(),
+            AnnotationConfig(annotator="alice", organization="DASDAE"),
+        ]
+    )
+
+    class _FakeAnnotationSettingsDialog:
+        def __init__(self, config, parent=None):
+            opened.append(config)
+            self._config = next(returned)
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def config(self):
+            return self._config
+
+    monkeypatch.setattr(
+        "derzug.widgets.annotation_overlay.AnnotationSettingsDialog",
+        _FakeAnnotationSettingsDialog,
+    )
+
+    controller.create_point_annotation(1.0, 11.0)
+
+    assert len(opened) == 2
+    annotation = controller.annotation_set.annotations[0]
+    assert annotation.annotator == "alice"
+    assert annotation.organization == "DASDAE"
+
+
+def test_label_shortcuts_fall_back_to_digit_for_blank_slot(overlay_host):
+    """Blank slot names should keep the numeric default label."""
+    save_annotation_config(
+        AnnotationConfig(
+            annotator="tester",
+            organization="DerZug",
+            label_names={"4": ""},
+        )
+    )
+    _host, controller = overlay_host
+    controller.create_point_annotation(1.0, 11.0)
+    annotation_id = controller.active_annotation_id
+    controller.set_selected_annotations({annotation_id})
+
+    controller.handle_key_press(_FakeKeyEvent(Qt.Key_4))
+
+    assert controller.annotation_by_id(annotation_id).label == "4"
 
 
 def test_handle_scene_event_ignores_missing_patch_or_axes(overlay_host):
@@ -296,8 +381,8 @@ def test_annotation_select_drag_box_selects_and_highlights_matching_items(overla
     assert selected_color != unselected_color
 
 
-def test_grouped_annotations_use_slot_colors(overlay_host):
-    """Assigned numeric groups should drive deterministic annotation colors."""
+def test_labeled_annotations_use_slot_colors(overlay_host):
+    """Assigned numeric labels should drive deterministic annotation colors."""
     _host, controller = overlay_host
     controller.create_box_annotation((0.9, 10.9), (1.1, 11.1))
     first_id = controller.active_annotation_id
@@ -306,9 +391,9 @@ def test_grouped_annotations_use_slot_colors(overlay_host):
     controller.create_box_annotation((2.9, 12.9), (3.1, 13.1))
     third_id = controller.active_annotation_id
     controller.set_selected_annotations({first_id})
-    controller.assign_group_to_selection("1")
+    controller.assign_label_to_selection("1")
     controller.set_selected_annotations({second_id})
-    controller.assign_group_to_selection("2")
+    controller.assign_label_to_selection("2")
     controller.set_selected_annotations(set())
 
     first_color = controller.annotation_items[first_id].currentPen.color().getRgb()
