@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from importlib import import_module
 from math import isfinite
 
 import dascore as dc
@@ -26,11 +27,30 @@ from derzug.core.zugwidget import ZugWidget
 from derzug.orange import Setting
 from derzug.utils.display import format_display
 
-try:
-    from PyQt6.QtMultimedia import QAudio, QAudioFormat, QAudioSink
 
+def _load_qt_multimedia():
+    """Load QtMultimedia from the supported PyQt6 binding."""
+    try:
+        module = import_module("PyQt6.QtMultimedia")
+    except (ImportError, OSError):
+        return None
+    sink = getattr(module, "QAudioSink", None)
+    if sink is None:
+        return None
+    return module.QAudio, module.QAudioFormat, sink, "PyQt6.QtMultimedia"
+
+
+_qt_multimedia = _load_qt_multimedia()
+if _qt_multimedia is not None:
+    (
+        QAudio,
+        QAudioFormat,
+        QAudioSink,
+        _QT_MULTIMEDIA_MODULE,
+    ) = _qt_multimedia
     _QT_MULTIMEDIA_AVAILABLE = True
-except ModuleNotFoundError:
+else:
+    _QT_MULTIMEDIA_MODULE = None
     _QT_MULTIMEDIA_AVAILABLE = False
 
     class QAudio:
@@ -81,7 +101,7 @@ except ModuleNotFoundError:
         """Fallback sink that raises when playback is attempted without QtMultimedia."""
 
         def __init__(self, *_args, **_kwargs) -> None:
-            raise RuntimeError("PyQt6.QtMultimedia is not available")
+            raise RuntimeError("QtMultimedia is not available")
 
 
 _AUDIBLE_MIN_HZ = 20.0

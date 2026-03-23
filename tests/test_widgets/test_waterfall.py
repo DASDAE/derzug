@@ -144,6 +144,58 @@ class _FakeViewBoxDragEvent:
         return self._finish
 
 
+class _FakeRoiDragEvent:
+    """Minimal drag event for driving ROI translation directly."""
+
+    def __init__(
+        self,
+        roi: pg.ROI,
+        *,
+        start_parent: tuple[float, float],
+        pos_parent: tuple[float, float],
+        start: bool = False,
+        finish: bool = False,
+    ) -> None:
+        self._roi = roi
+        self._button = Qt.MouseButton.LeftButton
+        self._start = start
+        self._finish = finish
+        self._accepted = False
+        self._ignored = False
+        self._button_down_pos = pg.Point(roi.mapFromParent(QPointF(*start_parent)))
+        self._pos = pg.Point(roi.mapFromParent(QPointF(*pos_parent)))
+
+    def accept(self) -> None:
+        self._accepted = True
+
+    def ignore(self) -> None:
+        self._ignored = True
+
+    def isStart(self) -> bool:
+        return self._start
+
+    def isFinish(self) -> bool:
+        return self._finish
+
+    def button(self):
+        return self._button
+
+    def modifiers(self):
+        return Qt.KeyboardModifier.NoModifier
+
+    def buttonDownPos(self):
+        return self._button_down_pos
+
+    def pos(self):
+        return self._pos
+
+    def buttonDownScenePos(self):
+        return self._roi.mapToScene(self._button_down_pos)
+
+    def scenePos(self):
+        return self._roi.mapToScene(self._pos)
+
+
 @pytest.fixture(autouse=True)
 def clear_annotation_settings():
     """Reset global annotation settings around each test."""
@@ -1912,19 +1964,31 @@ class TestWaterfall:
         start_scene = waterfall_widget._plot_item.vb.mapViewToScene(center_plot)
         start_viewport = waterfall_widget._plot_widget.mapFromScene(start_scene)
         end_viewport = start_viewport + QPointF(24, 18).toPoint()
+        end_scene = waterfall_widget._plot_widget.mapToScene(end_viewport)
+        end_plot = waterfall_widget._plot_item.vb.mapSceneToView(end_scene)
 
-        QTest.mousePress(
-            waterfall_widget._plot_widget.viewport(),
-            Qt.MouseButton.LeftButton,
-            Qt.KeyboardModifier.NoModifier,
-            start_viewport,
+        roi.mouseDragEvent(
+            _FakeRoiDragEvent(
+                roi,
+                start_parent=(float(center_plot.x()), float(center_plot.y())),
+                pos_parent=(float(center_plot.x()), float(center_plot.y())),
+                start=True,
+            )
         )
-        QTest.mouseMove(waterfall_widget._plot_widget.viewport(), end_viewport)
-        QTest.mouseRelease(
-            waterfall_widget._plot_widget.viewport(),
-            Qt.MouseButton.LeftButton,
-            Qt.KeyboardModifier.NoModifier,
-            end_viewport,
+        roi.mouseDragEvent(
+            _FakeRoiDragEvent(
+                roi,
+                start_parent=(float(center_plot.x()), float(center_plot.y())),
+                pos_parent=(float(end_plot.x()), float(end_plot.y())),
+            )
+        )
+        roi.mouseDragEvent(
+            _FakeRoiDragEvent(
+                roi,
+                start_parent=(float(center_plot.x()), float(center_plot.y())),
+                pos_parent=(float(end_plot.x()), float(end_plot.y())),
+                finish=True,
+            )
         )
 
         after = (float(roi.pos().x()), float(roi.pos().y()))
@@ -1959,19 +2023,31 @@ class TestWaterfall:
         start_scene = waterfall_widget._plot_item.vb.mapViewToScene(center_plot)
         start_viewport = waterfall_widget._plot_widget.mapFromScene(start_scene)
         end_viewport = start_viewport + QPointF(24, 18).toPoint()
+        end_scene = waterfall_widget._plot_widget.mapToScene(end_viewport)
+        end_plot = waterfall_widget._plot_item.vb.mapSceneToView(end_scene)
 
-        QTest.mousePress(
-            waterfall_widget._plot_widget.viewport(),
-            Qt.MouseButton.LeftButton,
-            Qt.KeyboardModifier.NoModifier,
-            start_viewport,
+        roi.mouseDragEvent(
+            _FakeRoiDragEvent(
+                roi,
+                start_parent=(float(center_plot.x()), float(center_plot.y())),
+                pos_parent=(float(center_plot.x()), float(center_plot.y())),
+                start=True,
+            )
         )
-        QTest.mouseMove(waterfall_widget._plot_widget.viewport(), end_viewport)
-        QTest.mouseRelease(
-            waterfall_widget._plot_widget.viewport(),
-            Qt.MouseButton.LeftButton,
-            Qt.KeyboardModifier.NoModifier,
-            end_viewport,
+        roi.mouseDragEvent(
+            _FakeRoiDragEvent(
+                roi,
+                start_parent=(float(center_plot.x()), float(center_plot.y())),
+                pos_parent=(float(end_plot.x()), float(end_plot.y())),
+            )
+        )
+        roi.mouseDragEvent(
+            _FakeRoiDragEvent(
+                roi,
+                start_parent=(float(center_plot.x()), float(center_plot.y())),
+                pos_parent=(float(end_plot.x()), float(end_plot.y())),
+                finish=True,
+            )
         )
 
         after_view = waterfall_widget._plot_item.vb.viewRange()

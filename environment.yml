@@ -2,11 +2,15 @@ name: derzug
 channels:
   - conda-forge
 dependencies:
-  - pip
+  - python>=3.13
   - dascore>=0.1.15
-  - pyqtgraph
-  - orange3>=3.40.0
-  - typer
+  - orange3
   - pyqt6
-  - tiledb
-  - duckdb
+  - pyqtgraph
+  - typer
+  - coverage>=7.4,<8
+  - prek
+  - pytest
+  - pytest-cov>=4
+  - pytest-qt
+  - pip

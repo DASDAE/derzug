@@ -133,9 +133,8 @@ warnings.filterwarnings("ignore")
 # real windows on the user's desktop.
 if not _show_mode_requested(sys.argv):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-# Force AnyQt to use PyQt6 in tests.
-os.environ.setdefault("QT_API", "pyqt6")
+    # Headless test runs use the PyQt6 binding by default.
+    os.environ.setdefault("QT_API", "pyqt6")
 
 from AnyQt.QtCore import QCoreApplication  # noqa
 import dascore.core.attrs as _dascore_attrs  # noqa

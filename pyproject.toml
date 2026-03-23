@@ -47,12 +47,10 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 
 dependencies = [
      "dascore>=0.1.15",
+     "PyQt6!=6.8.*",
      "pyqtgraph",
      "orange3",
      "typer",
-     "PyQt6",
-     "tiledb",
-     "duckdb",
 ]
 
 [project.scripts]
@@ -130,7 +128,7 @@ dev = ["derzug[test]"]
 "Source" = "https://github.com/DASDAE/derzug"
 
 [tool.uv]
-trusted-publishing = "never"
+trusted-publishing = "always"
 
 [[tool.uv.index]]
 name = "testpypi"

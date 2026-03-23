@@ -14,13 +14,16 @@ import tempfile
 from collections.abc import Iterable
 from contextlib import suppress
 from copy import deepcopy
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_dist_version
 from pathlib import Path
 from typing import ClassVar
 from xml.sax.saxutils import escape
 
-import PyQt6.sip as sip
+# isort: off
+# Must run before AnyQt imports on macOS.
+import derzug._anyqt_patch  # noqa: F401
 from AnyQt.QtCore import QDir, QEvent, QObject, QPointF, Qt, QTimer, QUrl
 from AnyQt.QtGui import (
     QBrush,
@@ -53,6 +56,8 @@ from AnyQt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+# isort: on
 from Orange.canvas.__main__ import OMain
 from Orange.canvas.config import Config as OrangeConfig
 from Orange.canvas.mainwindow import MainWindow as OrangeMainWindow
@@ -114,6 +119,11 @@ _APP_ACTIVE_SOURCE_MANAGER = None
 _APP_ACTIVE_SOURCE_MAIN_WINDOW = None
 _EXPERIMENTAL_WARNING_GROUP = "startup"
 _EXPERIMENTAL_WARNING_HIDE_KEY = "hide-experimental-warning"
+
+try:
+    sip = import_module("PyQt6.sip")
+except ModuleNotFoundError:
+    sip = import_module("sip")
 
 
 def _derzug_settings() -> QSettings:
@@ -470,9 +480,7 @@ def _install_derzug_exception_handler() -> None:
     if not isinstance(sys.excepthook, ExceptHook):
         return
     with suppress((TypeError, RuntimeError)):
-        sys.excepthook.handledException.disconnect(orange_handle_exception)
-    with suppress((TypeError, RuntimeError)):
-        sys.excepthook.handledException.disconnect(handle_derzug_exception)
+        sys.excepthook.handledException.disconnect()
     with suppress((TypeError, RuntimeError)):
         sys.excepthook.handledException.connect(handle_derzug_exception)
 
@@ -1153,10 +1161,11 @@ class DerZugAboutDialog(QDialog):
                 return _pkg_dist_version(name)
             return "n/a"
 
+        qt_binding_name = "PyQt6" if _pkg_version("PyQt6") != "n/a" else "Qt Binding"
         deps = [
             ("Orange3", "orange3"),
             ("DASCore", "dascore"),
-            ("PyQt6", "PyQt6"),
+            (qt_binding_name, qt_binding_name),
             ("pyqtgraph", "pyqtgraph"),
             ("tiledb", "tiledb"),
             ("duckdb", "duckdb"),

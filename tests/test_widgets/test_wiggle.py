@@ -162,9 +162,9 @@ class TestWiggle:
         assert state.color_levels is None
         assert state.y_dim == "ϵ / s"
 
-    def test_2d_state_derives_series_metadata(self, example_patch_2d):
+    def test_2d_state_derives_series_metadata(self, small_patch_2d):
         """The 2D builder should choose the non-X dim as the series dimension."""
-        patch = example_patch_2d
+        patch = small_patch_2d
 
         state = Wiggle._build_time_series_state_2d(
             patch,
@@ -188,10 +188,10 @@ class TestWiggle:
         assert state.y_dim == "ϵ / s"
 
     def test_2d_state_falls_back_to_default_levels_for_stale_color_limits(
-        self, example_patch_2d
+        self, small_patch_2d
     ):
         """Out-of-range persisted color limits should not collapse all trace colors."""
-        patch = example_patch_2d
+        patch = small_patch_2d
 
         state = Wiggle._build_time_series_state_2d(
             patch,
@@ -207,9 +207,9 @@ class TestWiggle:
             )
         )
 
-    def test_build_offset_state_2d_applies_stride(self, example_patch_2d):
+    def test_build_offset_state_2d_applies_stride(self, small_patch_2d):
         """The offset builder should subsample traces via stride before plotting."""
-        patch = example_patch_2d
+        patch = small_patch_2d
 
         state = Wiggle._build_offset_state_2d(
             patch,
@@ -370,11 +370,11 @@ class TestWiggle:
         assert wiggle_widget.selected_trace_dim == other_dim
 
     def test_later_patches_do_not_overwrite_stride(
-        self, wiggle_widget, example_patch_2d, small_patch_2d
+        self, wiggle_widget, medium_patch_2d, small_patch_2d
     ):
         """Only the first 2D patch should auto-initialize the stride."""
         first_patch = small_patch_2d
-        second_patch = example_patch_2d
+        second_patch = medium_patch_2d
 
         wiggle_widget.set_patch(first_patch)
         assert wiggle_widget.stride == 1
@@ -433,31 +433,31 @@ class TestWiggle:
         assert wiggle_widget.selected_x_dim == patch.dims[1]
         assert wiggle_widget._x_axis_combo.currentText() == patch.dims[1]
 
-    def test_datetime_x_axis_uses_date_axis_item(self, wiggle_widget):
+    def test_datetime_x_axis_uses_date_axis_item(self, wiggle_widget, small_patch_2d):
         """Datetime x coordinates should render with an absolute-time date axis."""
-        patch = _with_datetime_coord(dc.get_example_patch("example_event_2"), "time")
+        patch = _with_datetime_coord(small_patch_2d, "time")
 
         wiggle_widget.set_patch(patch)
 
         assert isinstance(wiggle_widget._plot_item.getAxis("bottom"), pg.DateAxisItem)
         assert "2024-01-02" in wiggle_widget._plot_item.getAxis("bottom").labelText
 
-    def test_datetime_trace_axis_uses_date_axis_item(self, wiggle_widget):
+    def test_datetime_trace_axis_uses_date_axis_item(
+        self, wiggle_widget, small_patch_2d
+    ):
         """Datetime trace offsets should render with an absolute-time date axis."""
-        patch = _with_datetime_coord(
-            dc.get_example_patch("example_event_2"), "distance"
-        )
+        patch = _with_datetime_coord(small_patch_2d, "distance")
 
         wiggle_widget.set_patch(patch)
 
         assert isinstance(wiggle_widget._plot_item.getAxis("left"), pg.DateAxisItem)
         assert "2024-01-02" in wiggle_widget._plot_item.getAxis("left").labelText
 
-    def test_zoomed_datetime_x_axis_shows_omitted_context(self, wiggle_widget):
+    def test_zoomed_datetime_x_axis_shows_omitted_context(
+        self, wiggle_widget, small_patch_2d
+    ):
         """Fine datetime zooms should add omitted higher-level context to the label."""
-        patch = _with_millisecond_datetime_coord(
-            dc.get_example_patch("example_event_2"), "time"
-        )
+        patch = _with_millisecond_datetime_coord(small_patch_2d, "time")
 
         wiggle_widget.set_patch(patch)
         x, _y = wiggle_widget._curve.getData()
@@ -496,9 +496,11 @@ class TestWiggle:
         assert "y=" in text
         assert f"value={format_display(expected)}" in text
 
-    def test_cursor_readout_shows_datetime_x_values(self, wiggle_widget):
+    def test_cursor_readout_shows_datetime_x_values(
+        self, wiggle_widget, small_patch_2d
+    ):
         """Datetime x axes should preserve absolute datetime text in the readout."""
-        patch = _with_datetime_coord(dc.get_example_patch("example_event_2"), "time")
+        patch = _with_datetime_coord(small_patch_2d, "time")
         wiggle_widget.set_patch(patch)
         state = wiggle_widget._render_state
         x_index = len(state.x_plot) // 3
@@ -637,10 +639,10 @@ class TestWiggle:
         assert wiggle_widget.gain == slider.minimum()
 
     def test_lowering_gain_after_stride_change_shrinks_rendered_curve_excursion(
-        self, wiggle_widget, example_patch_2d
+        self, wiggle_widget, small_patch_2d
     ):
         """After changing stride, lowering gain should reduce the rendered excursion."""
-        wiggle_widget.set_patch(example_patch_2d)
+        wiggle_widget.set_patch(small_patch_2d)
         wiggle_widget._gain_slider.setValue(1000)
         wiggle_widget._stride_spin.setValue(1)
 
@@ -668,10 +670,10 @@ class TestWiggle:
         assert low_excursion < high_excursion
 
     def test_lowering_gain_after_stride_change_reduces_trace_excursion(
-        self, wiggle_widget, example_patch_2d
+        self, wiggle_widget, small_patch_2d
     ):
         """Lowering gain should shrink rendered traces even after a stride change."""
-        wiggle_widget.set_patch(example_patch_2d)
+        wiggle_widget.set_patch(small_patch_2d)
 
         wiggle_widget._gain_slider.setValue(1000)
         wiggle_widget._stride_spin.setValue(1)
@@ -1091,9 +1093,16 @@ class TestWiggleStateDefaults(TestPatchInputStateDefaults):
 
     __test__ = True
     widget = Wiggle
-    compatible_patch = dc.get_example_patch("example_event_1")
-    incompatible_patch = dc.get_example_patch("example_event_2").rename_coords(
-        time="shot"
+    compatible_patch = (
+        dc.get_example_patch("example_event_1")
+        .select(time=(0, 80), samples=True)
+        .select(distance=(0, 40), samples=True)
+    )
+    incompatible_patch = (
+        dc.get_example_patch("example_event_2")
+        .select(time=(0, 80), samples=True)
+        .select(distance=(0, 40), samples=True)
+        .rename_coords(time="shot")
     )
 
     def arrange_persisted_input_state(self, widget_object):

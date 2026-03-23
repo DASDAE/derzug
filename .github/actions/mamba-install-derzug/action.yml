@@ -30,14 +30,16 @@ runs:
   steps:
     - uses: mamba-org/setup-micromamba@v2
       with:
-        micromamba-version: '2.0.5-0' # versions: https://github.com/mamba-org/micromamba-releases
+        micromamba-version: '2.5.0-2' # versions: https://github.com/mamba-org/micromamba-releases
         environment-file: ${{ inputs.environment-file }}
         init-shell: >-
           bash
           powershell
         cache-environment: true
-        cache-environment-key: environment-${{ runner.os }}-${{ inputs.python-version }}-${{ inputs.environment-file }}-${{ inputs.cache-number }}
-        post-cleanup: "shell-init"
+        cache-environment-key: environment-${{ runner.os }}-${{ inputs.python-version }}-${{ hashFiles(inputs.environment-file, 'pyproject.toml') }}-${{ inputs.cache-number }}
+        # GitHub-hosted runners are ephemeral; skip post-job cleanup to avoid
+        # setup-micromamba Windows post-step failures.
+        post-cleanup: "none"
         create-args: >-
           python=${{ inputs.python-version }}
 
@@ -55,6 +57,13 @@ runs:
       run: |
         python --version
 
+    - name: install Linux Qt runtime libs
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libegl1 libgl1
+
     - name: get tags for correct versioning
       shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
       run: |
@@ -64,7 +73,9 @@ runs:
       if: "${{ inputs.install-package == 'true' }}"
       shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
       run: |
-        pip install -e .${{ inputs.install-group-str }}
+        # Install only the editable package from the checkout. Runtime and test
+        # dependencies come from the conda-forge environment file.
+        pip install -e .${{ inputs.install-group-str }} --no-deps
 
     # Print out the package info for current environment
     - name: print package info

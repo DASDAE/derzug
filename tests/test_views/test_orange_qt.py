@@ -405,7 +405,7 @@ class TestDerZugMainWindow:
         window.edit_config_file_action.trigger()
 
         assert config_path.exists()
-        assert opened == [str(config_path)]
+        assert [Path(item) for item in opened] == [config_path]
 
     def test_edit_config_file_action_reports_open_failure(
         self, derzug_app, monkeypatch, tmp_path
@@ -1997,8 +1997,8 @@ class TestDerZugCanvasWorkflow:
         spool_dir.mkdir()
         base = dc.get_example_patch()
         attrs = base.attrs.model_dump()
-        first = base.update(attrs={**attrs, "tag": "reload-first"})
-        second = base.update(attrs={**attrs, "tag": "reload-second"})
+        first = base.update(attrs={**attrs, "tag": "reload_first"})
+        second = base.update(attrs={**attrs, "tag": "reload_second"})
         dc.examples.spool_to_directory(dc.spool([first, second]), spool_dir)
 
         spool_widget.show()

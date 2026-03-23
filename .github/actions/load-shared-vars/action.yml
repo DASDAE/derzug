@@ -20,7 +20,6 @@ runs:
       run: |
         python_default="3.13"
         python_test_matrix='["3.13","3.14"]'
-        python_min_deps_matrix='["3.13","3.14"]'
 
         echo "PYTHON_DEFAULT=$python_default" >> "$GITHUB_ENV"
         echo "python-test-matrix=$python_test_matrix" >> "$GITHUB_OUTPUT"

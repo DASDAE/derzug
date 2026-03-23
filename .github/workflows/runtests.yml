@@ -17,7 +17,7 @@ on:
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
-  CACHE_NUMBER: 1
+  CACHE_NUMBER: 3
   # Ensure matplotlib doesn't try to show figures in CI
   MPLBACKEND: Agg
   QT_QPA_PLATFORM: offscreen
@@ -66,6 +66,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache-number: ${{ env.CACHE_NUMBER }}
+
+#
+#      - name: Setup tmate session
+#        uses: mxschmitt/action-tmate@v3
 
       # Runs test suite and calculates coverage
       - name: run test suite (Linux / macOS)
