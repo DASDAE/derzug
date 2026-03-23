@@ -22,6 +22,13 @@ try:
             pass
 
     _anyqt_fixes.fix_pyqt6_qtgui_qaction_menu = _guarded
-    del _orig, _guarded
+    # Pytest imports AnyQt.QtCore in conftest before derzug.views.orange on macOS.
+    # At that point AnyQt has already copied the original fixer into GLOBAL_FIXES,
+    # so replacing only the module attribute is too late for later QtGui imports.
+    for _api_name, _fixers in list(_anyqt_fixes.GLOBAL_FIXES.items()):
+        _anyqt_fixes.GLOBAL_FIXES[_api_name] = [
+            _guarded if fixer is _orig else fixer for fixer in _fixers
+        ]
+    del _api_name, _fixers, _orig, _guarded
 except Exception:
     pass
