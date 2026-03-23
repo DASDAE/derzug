@@ -30,7 +30,7 @@ runs:
   steps:
     - uses: mamba-org/setup-micromamba@v2
       with:
-        micromamba-version: '2.0.6-0' # versions: https://github.com/mamba-org/micromamba-releases
+        micromamba-version: '2.5.0-2' # versions: https://github.com/mamba-org/micromamba-releases
         environment-file: ${{ inputs.environment-file }}
         init-shell: >-
           bash
