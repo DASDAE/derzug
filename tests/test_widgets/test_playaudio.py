@@ -13,14 +13,13 @@ from derzug.widgets.playaudio import PlayAudio
 
 
 def _import_qt_multimedia():
-    """Import QtMultimedia from any supported PyQt binding."""
-    for module_name in ("PyQt6.QtMultimedia", "PyQt5.QtMultimedia"):
-        try:
-            return import_module(module_name)
-        except (ImportError, OSError):
-            continue
+    """Import QtMultimedia from the supported PyQt6 binding."""
+    try:
+        return import_module("PyQt6.QtMultimedia")
+    except (ImportError, OSError):
+        pass
     pytest.skip(
-        "Neither PyQt6.QtMultimedia nor PyQt5.QtMultimedia is available",
+        "PyQt6.QtMultimedia is not available",
         allow_module_level=True,
     )
 

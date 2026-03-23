@@ -1157,10 +1157,7 @@ class DerZugAboutDialog(QDialog):
                 return _pkg_dist_version(name)
             return "n/a"
 
-        qt_binding_name = next(
-            (name for name in ("PyQt6", "PyQt5") if _pkg_version(name) != "n/a"),
-            "Qt Binding",
-        )
+        qt_binding_name = "PyQt6" if _pkg_version("PyQt6") != "n/a" else "Qt Binding"
         deps = [
             ("Orange3", "orange3"),
             ("DASCore", "dascore"),

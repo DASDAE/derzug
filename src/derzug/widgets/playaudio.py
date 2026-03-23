@@ -29,20 +29,15 @@ from derzug.utils.display import format_display
 
 
 def _load_qt_multimedia():
-    """Load QtMultimedia from whichever PyQt binding is available."""
-    for module_name, sink_name, backend in (
-        ("PyQt6.QtMultimedia", "QAudioSink", "pyqt6"),
-        ("PyQt5.QtMultimedia", "QAudioOutput", "pyqt5"),
-    ):
-        try:
-            module = import_module(module_name)
-        except (ImportError, OSError):
-            continue
-        sink = getattr(module, sink_name, None)
-        if sink is None:
-            continue
-        return module.QAudio, module.QAudioFormat, sink, module_name, backend
-    return None
+    """Load QtMultimedia from the supported PyQt6 binding."""
+    try:
+        module = import_module("PyQt6.QtMultimedia")
+    except (ImportError, OSError):
+        return None
+    sink = getattr(module, "QAudioSink", None)
+    if sink is None:
+        return None
+    return module.QAudio, module.QAudioFormat, sink, "PyQt6.QtMultimedia"
 
 
 _qt_multimedia = _load_qt_multimedia()
@@ -52,12 +47,10 @@ if _qt_multimedia is not None:
         QAudioFormat,
         QAudioSink,
         _QT_MULTIMEDIA_MODULE,
-        _QT_MULTIMEDIA_BACKEND,
     ) = _qt_multimedia
     _QT_MULTIMEDIA_AVAILABLE = True
 else:
     _QT_MULTIMEDIA_MODULE = None
-    _QT_MULTIMEDIA_BACKEND = None
     _QT_MULTIMEDIA_AVAILABLE = False
 
     class QAudio:
@@ -656,13 +649,7 @@ class PlayAudio(ZugWidget):
         audio_format = QAudioFormat()
         audio_format.setSampleRate(int(sample_rate_hz))
         audio_format.setChannelCount(1)
-        if _QT_MULTIMEDIA_BACKEND == "pyqt5":
-            audio_format.setCodec("audio/pcm")
-            audio_format.setSampleSize(16)
-            audio_format.setSampleType(QAudioFormat.SignedInt)
-            audio_format.setByteOrder(QAudioFormat.LittleEndian)
-        else:
-            audio_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        audio_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
         return audio_format
 
     def _create_audio_sink(self, audio_format: QAudioFormat) -> QAudioSink:
