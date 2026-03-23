@@ -23,7 +23,7 @@ inputs:
   cache-number:
     description: "Cache number. Use != 1 to reset data cache"
     required: false
-    default: "4"
+    default: "1"
 
 runs:
   using: "composite"
