@@ -1891,7 +1891,9 @@ class TestWaterfall:
             handle.isVisible() for handle in waterfall_widget._roi.getHandles()
         )
 
-    def test_user_can_drag_roi_from_center_in_select_mode(self, waterfall_widget):
+    def test_user_can_drag_roi_from_center_in_select_mode(
+        self, waterfall_widget, qtbot
+    ):
         """Press-dragging the ROI center through the viewport should move the ROI."""
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
@@ -1926,6 +1928,7 @@ class TestWaterfall:
             Qt.KeyboardModifier.NoModifier,
             end_viewport,
         )
+        qtbot.wait(10)
 
         after = (float(roi.pos().x()), float(roi.pos().y()))
         assert after != pytest.approx(before)

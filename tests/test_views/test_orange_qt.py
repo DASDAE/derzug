@@ -405,7 +405,7 @@ class TestDerZugMainWindow:
         window.edit_config_file_action.trigger()
 
         assert config_path.exists()
-        assert opened == [str(config_path)]
+        assert [Path(item) for item in opened] == [config_path]
 
     def test_edit_config_file_action_reports_open_failure(
         self, derzug_app, monkeypatch, tmp_path
