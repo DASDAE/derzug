@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import ClassVar
 from xml.sax.saxutils import escape
 
+# isort: off
+# Must run before AnyQt imports on macOS.
+import derzug._anyqt_patch  # noqa: F401
 from AnyQt.QtCore import QDir, QEvent, QObject, QPointF, Qt, QTimer, QUrl
 from AnyQt.QtGui import (
     QBrush,
@@ -53,6 +56,8 @@ from AnyQt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+# isort: on
 from Orange.canvas.__main__ import OMain
 from Orange.canvas.config import Config as OrangeConfig
 from Orange.canvas.mainwindow import MainWindow as OrangeMainWindow
@@ -71,7 +76,6 @@ from orangewidget.workflow.widgetsscheme import (
     WidgetsSignalManager,
 )
 
-import derzug._anyqt_patch  # noqa: F401 - imported for side effects before AnyQt.QtGui  # noqa: F401 - imported for side effects before AnyQt.QtGui
 from derzug.annotations_config import (
     AnnotationSettingsDialog,
     load_annotation_config,

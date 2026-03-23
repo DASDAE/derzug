@@ -17,7 +17,7 @@ on:
 
 env:
   # used to manually trigger cache reset. Just increment if needed.
-  CACHE_NUMBER: 2
+  CACHE_NUMBER: 3
   # Ensure matplotlib doesn't try to show figures in CI
   MPLBACKEND: Agg
   QT_QPA_PLATFORM: offscreen
