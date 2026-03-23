@@ -69,8 +69,8 @@ jobs:
           cache-number: ${{ env.CACHE_NUMBER }}
 
 #
-#      - name: Setup tmate session
-#        uses: mxschmitt/action-tmate@v3
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
 
       # Runs test suite and calculates coverage
       - name: run test suite (Linux / macOS)
