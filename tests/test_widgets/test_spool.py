@@ -1343,8 +1343,8 @@ class TestSpool:
         self, spool_widget, monkeypatch, tmp_path, qtbot
     ):
         """Patch input persists into a directory-backed spool and reloads it."""
-        first = _patch_with_tag("dir-first")
-        second = _patch_with_tag("dir-second")
+        first = _patch_with_tag("dir_first")
+        second = _patch_with_tag("dir_second")
         directory = tmp_path / "spool_dir"
         directory.mkdir()
         dc.examples.spool_to_directory(dc.spool([first]), directory)

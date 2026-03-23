@@ -476,9 +476,7 @@ def _install_derzug_exception_handler() -> None:
     if not isinstance(sys.excepthook, ExceptHook):
         return
     with suppress((TypeError, RuntimeError)):
-        sys.excepthook.handledException.disconnect(orange_handle_exception)
-    with suppress((TypeError, RuntimeError)):
-        sys.excepthook.handledException.disconnect(handle_derzug_exception)
+        sys.excepthook.handledException.disconnect()
     with suppress((TypeError, RuntimeError)):
         sys.excepthook.handledException.connect(handle_derzug_exception)
 
