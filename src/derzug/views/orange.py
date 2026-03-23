@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import ClassVar
 from xml.sax.saxutils import escape
 
-import derzug._anyqt_patch  # noqa: F401 - imported for side effects before AnyQt.QtGui
 from AnyQt.QtCore import QDir, QEvent, QObject, QPointF, Qt, QTimer, QUrl
 from AnyQt.QtGui import (
     QBrush,
@@ -71,6 +70,8 @@ from orangewidget.workflow.widgetsscheme import (
     WidgetsScheme,
     WidgetsSignalManager,
 )
+
+import derzug._anyqt_patch  # noqa: F401 - imported for side effects before AnyQt.QtGui
 from derzug.annotations_config import (
     AnnotationSettingsDialog,
     load_annotation_config,

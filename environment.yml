@@ -4,4 +4,11 @@ channels:
 dependencies:
   - dascore>=0.1.15
   - Orange3
+  - coverage>=7.4,<8
+  - prek
+  - pyqt6
   - pyqtgraph
+  - pytest
+  - pytest-cov>=4
+  - pytest-qt
+  - typer

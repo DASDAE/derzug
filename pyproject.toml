@@ -47,7 +47,6 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 
 dependencies = [
      "dascore>=0.1.15",
-     "PyQt5",
      "PyQt6!=6.8.*",
      "pyqtgraph",
      "orange3",
