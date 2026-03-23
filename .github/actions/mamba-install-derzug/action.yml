@@ -73,42 +73,9 @@ runs:
       if: "${{ inputs.install-package == 'true' }}"
       shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
       run: |
-        # The conda env already provides the Qt/Orange stack. Avoid letting pip
-        # replace those packages with wheel builds inside CI.
+        # Install only the editable package from the checkout. Runtime and test
+        # dependencies come from the conda-forge environment file.
         pip install -e .${{ inputs.install-group-str }} --no-deps
-
-    - name: export macOS PyQt6 plugin paths
-      if: runner.os == 'macOS'
-      shell: bash -el {0}
-      run: |
-        python - <<'PY' >> "$GITHUB_ENV"
-        from importlib.util import find_spec
-        from pathlib import Path
-
-        spec = find_spec("PyQt6")
-        if spec is None or spec.origin is None:
-            raise SystemExit("PyQt6 is not installed in the CI environment.")
-
-        package_root = Path(spec.origin).resolve().parent
-        plugin_root = next(
-            (
-                candidate
-                for candidate in (
-                    package_root / "Qt6" / "plugins",
-                    package_root / "Qt" / "plugins",
-                )
-                if candidate.exists()
-            ),
-            None,
-        )
-        if plugin_root is None:
-            raise SystemExit(f"Could not find a Qt plugin directory under {package_root}.")
-
-        print(f"QT_PLUGIN_PATH={plugin_root}")
-        platforms = plugin_root / "platforms"
-        if platforms.exists():
-            print(f"QT_QPA_PLATFORM_PLUGIN_PATH={platforms}")
-        PY
 
     # Print out the package info for current environment
     - name: print package info
