@@ -295,16 +295,45 @@ def _emit_task(
         else:
             output_patch = None
     else:
-        patches = [
-            next(iter(display_spool[row : row + 1]))
-            for row in sorted(selected_source_rows)
-        ]
+        patches = _spool_rows_to_patches(display_spool, selected_source_rows)
         output_spool = dc.spool(patches)
         if unpack_single and len(selected_source_rows) == 1:
             output_patch = extract_single_patch(output_spool)
         else:
             output_patch = None
     return output_spool, output_patch
+
+
+def _ordered_spool_patches(spool: dc.BaseSpool) -> list[dc.Patch]:
+    """Return spool patches in the widget's deterministic default order."""
+    patches = list(spool)
+    if not isinstance(spool, DirectorySpool) or len(patches) < 2:
+        return patches
+    by_name = {}
+    for patch in patches:
+        try:
+            by_name[str(get_patch_names(patch).iloc[0])] = patch
+        except Exception:
+            continue
+    ordered_df = Spool._ordered_contents_df(spool)
+    ordered_names = []
+    if "path" in ordered_df.columns:
+        ordered_names = [Path(value).stem for value in ordered_df["path"].tolist()]
+    ordered = [by_name[name] for name in ordered_names if name in by_name]
+    if len(ordered) != len(patches):
+        return patches
+    return ordered
+
+
+def _spool_rows_to_patches(
+    spool: dc.BaseSpool,
+    selected_rows: set[int] | frozenset[int],
+) -> list[dc.Patch]:
+    """Return selected patches, preserving direct slicing for non-directory spools."""
+    if isinstance(spool, DirectorySpool):
+        ordered_patches = _ordered_spool_patches(spool)
+        return [ordered_patches[row] for row in sorted(selected_rows)]
+    return [next(iter(spool[row : row + 1])) for row in sorted(selected_rows)]
 
 
 class Spool(ConcurrentWidgetMixin, ZugWidget):
@@ -335,6 +364,7 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
     select_col = Setting("")
     select_val = Setting("")
     selected_source_row = Setting(None)
+    selected_source_patch_name = Setting("")
     unpack_single_patch = Setting(True)
 
     class Error(ZugWidget.Error):
@@ -777,12 +807,10 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
 
     def _restored_selected_source_rows(self) -> frozenset[int]:
         """Return the persisted row selection while a hidden restore is pending."""
-        if self.selected_source_row is None:
+        source_row = self._resolved_selected_source_row()
+        if source_row is None:
             return frozenset()
-        try:
-            return frozenset({int(self.selected_source_row)})
-        except (TypeError, ValueError):
-            return frozenset()
+        return frozenset({source_row})
 
     def _on_combo_changed(self, index: int) -> None:
         """Sync selected combo entry to Setting and run the widget."""
@@ -1332,13 +1360,14 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
             self._disconnect_table_selection_model()
             self._table.setModel(None)
             self.selected_source_row = None
+            self.selected_source_patch_name = ""
             self._reset_chunk_controls()
             return
         try:
-            df = spool.get_contents()
+            df = self._ordered_contents_df(spool)
             self._set_chunk_dims_from_contents(df)
             select_df = (
-                self._source_spool.get_contents()
+                self._ordered_contents_df(self._source_spool)
                 if self._source_spool is not None
                 else df
             )
@@ -1352,6 +1381,7 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
             self._disconnect_table_selection_model()
             self._table.setModel(None)
             self.selected_source_row = None
+            self.selected_source_patch_name = ""
             self.Warning.general(str(exc))
 
     def _build_table_model(self, df) -> _SpoolContentsTableModel:
@@ -1405,8 +1435,7 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
         selected_rows: set[int],
     ) -> dc.BaseSpool:
         """Return a spool containing only the requested source rows."""
-        patches = [next(iter(spool[row : row + 1])) for row in sorted(selected_rows)]
-        return dc.spool(patches)
+        return dc.spool(_spool_rows_to_patches(spool, selected_rows))
 
     def _emit_current_output(self) -> None:
         """Emit the current output spool and optional unpacked patch."""
@@ -1562,13 +1591,17 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
     def _persist_selected_row(self) -> None:
         """Persist the currently selected source row for workflow round-tripping."""
         selected_source_rows = self._snapshot_selected_source_rows()
-        self.selected_source_row = (
-            min(selected_source_rows) if selected_source_rows else None
-        )
+        if not selected_source_rows:
+            self.selected_source_row = None
+            self.selected_source_patch_name = ""
+            return
+        source_row = min(selected_source_rows)
+        self.selected_source_row = source_row
+        self.selected_source_patch_name = self._patch_name_for_source_row(source_row)
 
     def _restore_saved_row_selection(self, model: _SpoolContentsTableModel) -> None:
         """Restore the persisted source-row selection when it is still visible."""
-        source_row = self.selected_source_row
+        source_row = self._resolved_selected_source_row()
         if source_row is None:
             self._pending_restore_emit = False
             return
@@ -1576,11 +1609,13 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
             view_row = model.view_row_for_source_row(int(source_row))
         except (IndexError, TypeError, ValueError):
             self.selected_source_row = None
+            self.selected_source_patch_name = ""
             self._pending_restore_emit = False
             return
         selection_model = self._table.selectionModel()
         if selection_model is None:
             self.selected_source_row = None
+            self.selected_source_patch_name = ""
             self._pending_restore_emit = False
             return
         selection_model.blockSignals(True)
@@ -1590,6 +1625,68 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
         if self._pending_restore_emit:
             self._pending_restore_emit = False
             QTimer.singleShot(0, self._schedule_emit)
+
+    def _resolved_selected_source_row(self) -> int | None:
+        """Return the persisted source row, remapped by patch name when possible."""
+        patch_name = str(self.selected_source_patch_name or "").strip()
+        if patch_name and self._source_spool is not None:
+            source_row = self._source_row_for_patch_name(patch_name)
+            if source_row is not None:
+                self.selected_source_row = source_row
+                return source_row
+        if self.selected_source_row is None:
+            return None
+        try:
+            return int(self.selected_source_row)
+        except (TypeError, ValueError):
+            return None
+
+    def _patch_name_for_source_row(self, source_row: int) -> str:
+        """Return the persisted patch name for one source-spool row."""
+        if self._source_spool is None:
+            return ""
+        try:
+            patch = _ordered_spool_patches(self._source_spool)[source_row]
+        except Exception:
+            return ""
+        try:
+            return str(get_patch_names(patch).iloc[0])
+        except Exception:
+            return ""
+
+    def _source_row_for_patch_name(self, patch_name: str) -> int | None:
+        """Return the current source-spool row for a persisted patch name."""
+        if self._source_spool is None:
+            return None
+        for index, patch in enumerate(_ordered_spool_patches(self._source_spool)):
+            try:
+                candidate = str(get_patch_names(patch).iloc[0])
+            except Exception:
+                continue
+            if candidate == patch_name:
+                return index
+        return None
+
+    @staticmethod
+    def _ordered_contents_df(spool: dc.BaseSpool):
+        """Return spool contents in the widget's deterministic default order."""
+        df = spool.get_contents()
+        if not isinstance(spool, DirectorySpool) or df.empty:
+            return df
+        ordered = df.copy()
+        ordered["_original_row"] = np.arange(len(ordered), dtype=np.int64)
+        sort_cols = [
+            column
+            for column in ("path", "tag", "station", "network", "time_min", "time_max")
+            if column in ordered.columns
+        ]
+        sort_cols.append("_original_row")
+        ordered = ordered.sort_values(
+            by=sort_cols,
+            kind="mergesort",
+            na_position="last",
+        )
+        return ordered.drop(columns="_original_row").reset_index(drop=True)
 
     def _initialize_active_source_selection(self) -> None:
         """Best-effort active-source registration for the first source widget."""

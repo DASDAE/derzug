@@ -1997,8 +1997,8 @@ class TestDerZugCanvasWorkflow:
         spool_dir.mkdir()
         base = dc.get_example_patch()
         attrs = base.attrs.model_dump()
-        first = base.update(attrs={**attrs, "tag": "reload-first"})
-        second = base.update(attrs={**attrs, "tag": "reload-second"})
+        first = base.update(attrs={**attrs, "tag": "reload_first"})
+        second = base.update(attrs={**attrs, "tag": "reload_second"})
         dc.examples.spool_to_directory(dc.spool([first, second]), spool_dir)
 
         spool_widget.show()

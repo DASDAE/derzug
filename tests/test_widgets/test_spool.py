@@ -613,6 +613,36 @@ class TestSpool:
         assert received[0] is not None
         assert len(list(received[0])) > 0
 
+    def test_directory_spool_rows_use_deterministic_default_order(
+        self, spool_widget, tmp_path, qtbot
+    ):
+        """Directory-backed spool rows should default to a stable sorted order."""
+        base = dc.get_example_patch()
+        attrs = base.attrs.model_dump()
+        first = base.update(attrs={**attrs, "tag": "b_tag"})
+        second = base.update(attrs={**attrs, "tag": "a_tag"})
+        directory = tmp_path / "ordered_spool"
+        directory.mkdir()
+        dc.examples.spool_to_directory(dc.spool([first, second]), directory)
+
+        spool_widget.file_input = str(directory)
+        spool_widget.raw_input = ""
+        spool_widget.spool_input = None
+        _run_and_wait(spool_widget, qtbot)
+
+        model = spool_widget._table.model()
+        tag_col = next(
+            i
+            for i in range(model.columnCount())
+            if model.headerData(i, Qt.Horizontal) == "Tag"
+        )
+        tags = [
+            model.data(model.index(row, tag_col), Qt.ItemDataRole.DisplayRole)
+            for row in range(model.rowCount())
+        ]
+
+        assert tags == ["a_tag", "b_tag"]
+
     def test_update_button_reruns_loader_for_source_backed_spools(
         self, spool_widget, monkeypatch
     ):
