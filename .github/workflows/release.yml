@@ -35,7 +35,34 @@ jobs:
         shell: bash -l {0}
         run: |
           python -m pip install build
-          python -m build
+          git describe --tags --dirty --always
+          git status --short
+          python -m build --no-isolation
+
+      - name: verify built version matches tag
+        shell: bash -l {0}
+        env:
+          EXPECTED_VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import glob
+          import os
+          import sys
+
+          expected = os.environ["EXPECTED_VERSION"].removeprefix("v")
+          artifacts = sorted(glob.glob("dist/*"))
+          print("artifacts:", [os.path.basename(x) for x in artifacts])
+          if not artifacts:
+              raise SystemExit("No build artifacts were created.")
+          for path in artifacts:
+              name = os.path.basename(path)
+              if "dirty" in name or "+" in name:
+                  raise SystemExit(f"Invalid release artifact name: {name}")
+              if f"-{expected}" not in name:
+                  raise SystemExit(
+                      f"Artifact version does not match tag {expected}: {name}"
+                  )
+          PY
 
       - name: publish package
         uses: pypa/gh-action-pypi-publish@release/v1
