@@ -1,5 +1,5 @@
-# Upload to PyPI when a new release tag is made.
-name: PublishPackage
+# Upload to PyPI when a release is published.
+name: Release
 on:
   release:
     types:
@@ -8,11 +8,16 @@ on:
 jobs:
   upload:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: pypi
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-tags: "true"
-          fetch-depth: '0'
+          fetch-depth: "0"
 
       - uses: ./.github/actions/load-shared-vars
 
@@ -34,5 +39,3 @@ jobs:
 
       - name: publish package
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_TOKEN }}
