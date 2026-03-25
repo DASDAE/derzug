@@ -10,7 +10,6 @@ from AnyQt.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -18,19 +17,31 @@ from AnyQt.QtWidgets import (
 
 _ANNOTATION_ICON_DIR = Path(__file__).resolve().parent / "icons" / "annotations"
 _TOOL_METADATA = {
-    "select": ("Select ROI", "select"),
-    "annotation_select": (
-        "Select and move annotations. Double-click an annotation to edit.",
-        "pointer",
+    "point": (
+        "Point annotation. Double-click or Shift+click to place. "
+        "Double-click an annotation to edit.",
+        "point",
     ),
-    "point": ("Point annotation. Double-click an annotation to edit.", "point"),
-    "line": ("Line annotation. Double-click an annotation to edit.", "line"),
-    "ellipse": ("Ellipse annotation. Drag to draw a fitted ellipse.", "ellipse"),
+    "line": (
+        "Line annotation. Double-click or Shift+click to anchor, then click to finish. "
+        "Double-click an annotation to edit.",
+        "line",
+    ),
+    "ellipse": (
+        "Ellipse annotation. Double-click or Shift+click to place. "
+        "Drag selected ellipses to edit.",
+        "ellipse",
+    ),
     "hyperbola": (
-        "Hyperbola annotation. Drag to draw one visible branch.",
+        "Hyperbola annotation. Double-click or Shift+click to place. "
+        "Drag selected hyperbolas to edit.",
         "hyperbola",
     ),
-    "box": ("Box annotation. Double-click an annotation to edit.", "box"),
+    "box": (
+        "Box annotation. Double-click or Shift+click to place. "
+        "Double-click an annotation to edit.",
+        "box",
+    ),
     "delete": ("Delete annotation", "delete"),
 }
 
@@ -41,19 +52,19 @@ class AnnotationToolbox(QFrame):
     _BASE_TITLE = "Annotations"
 
     toolChanged = Signal(str)  # noqa: N815
-    fitRequested = Signal(str)  # noqa: N815
     hideRequested = Signal()  # noqa: N815
+    snapToggled = Signal(bool)  # noqa: N815
 
     def __init__(
         self, parent: QWidget | None = None, *, tools: tuple[str, ...]
     ) -> None:
         super().__init__(parent)
         self._tools = tools
+        self._active_tool: str | None = None
+        self._pressed_tool: str | None = None
         self.tool_buttons: dict[str, QToolButton] = {}
         self.hide_button: QToolButton | None = None
-        self.fit_button: QToolButton | None = None
-        self.fit_menu: QMenu | None = None
-        self.fit_actions: dict[str, object] = {}
+        self.snap_button: QToolButton | None = None
         self.header_frame: QFrame | None = None
         self._drag_offset: QPoint | None = None
         self._user_moved = False
@@ -61,24 +72,32 @@ class AnnotationToolbox(QFrame):
 
     def set_tool(self, tool: str) -> None:
         """Update the checked button to match the active tool."""
-        button = self.tool_buttons.get(tool)
-        if button is not None:
-            button.setChecked(True)
+        if tool not in self.tool_buttons:
+            self.clear_tool()
+            return
+        for name, button in self.tool_buttons.items():
+            button.setChecked(name == tool)
+        self._active_tool = tool
 
     def clear_tool(self) -> None:
         """Clear any checked tool button to leave the toolbox in a neutral state."""
-        buttons = tuple(self.tool_buttons.values())
-        for button in buttons:
-            button.setAutoExclusive(False)
-        for button in buttons:
+        for button in self.tool_buttons.values():
             button.setChecked(False)
-        for button in buttons:
-            button.setAutoExclusive(True)
+        self._active_tool = None
 
     def set_dirty(self, dirty: bool) -> None:
         """Reflect unsent annotation changes in the toolbox title."""
         suffix = " *" if dirty else ""
         self.title_label.setText(f"{self._BASE_TITLE}{suffix}")
+
+    def set_snap_enabled(self, enabled: bool) -> None:
+        """Update the snap toggle without requiring direct button access."""
+        if self.snap_button is not None:
+            self.snap_button.setChecked(bool(enabled))
+
+    def snap_enabled(self) -> bool:
+        """Return True when the toolbox snap toggle is enabled."""
+        return bool(self.snap_button is not None and self.snap_button.isChecked())
 
     @property
     def user_moved(self) -> bool:
@@ -176,6 +195,7 @@ class AnnotationToolbox(QFrame):
 
         title = QLabel(self._BASE_TITLE, self)
         title.setObjectName("annotation-toolbox-title")
+        title.setToolTip("Press S to send annotations")
         header.addWidget(title)
         self.title_label = title
 
@@ -205,38 +225,41 @@ class AnnotationToolbox(QFrame):
             tooltip, icon_name = _TOOL_METADATA[name]
             button = QToolButton(self)
             button.setCheckable(True)
-            button.setAutoExclusive(True)
             button.setFixedSize(24, 24)
             button.setIconSize(QSize(14, 14))
             button.setIcon(QIcon(str(_ANNOTATION_ICON_DIR / f"{icon_name}.svg")))
             button.setToolTip(tooltip)
+            button.pressed.connect(
+                lambda tool=name: setattr(self, "_pressed_tool", tool)
+            )
             button.clicked.connect(
-                lambda _checked=False, tool=name: self.toolChanged.emit(tool)
+                lambda _checked=False, tool=name: self._on_tool_button_clicked(tool)
             )
             row.addWidget(button)
             self.tool_buttons[name] = button
 
-        fit_button = QToolButton(self)
-        fit_button.setText("Fit")
-        fit_button.setFixedHeight(24)
-        fit_button.setToolTip("Fit a shape from the selected point annotations")
-        fit_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        fit_menu = QMenu(fit_button)
-        for shape in ("line", "ellipse", "square", "hyperbola"):
-            action = fit_menu.addAction(shape.capitalize())
-            action.triggered.connect(
-                lambda _checked=False, fit_shape=shape: self.fitRequested.emit(
-                    fit_shape
-                )
-            )
-            self.fit_actions[shape] = action
-        fit_button.setMenu(fit_menu)
-        row.addWidget(fit_button)
-        self.fit_button = fit_button
-        self.fit_menu = fit_menu
+        snap_button = QToolButton(self)
+        snap_button.setText("Snap")
+        snap_button.setCheckable(True)
+        snap_button.setFixedHeight(24)
+        snap_button.setToolTip("Snap point, line, and box edits to nearby annotations")
+        snap_button.toggled.connect(self.snapToggled.emit)
+        row.addWidget(snap_button)
+        self.snap_button = snap_button
 
         self.hide()
         self.raise_()
+
+    def _on_tool_button_clicked(self, tool: str) -> None:
+        """Toggle one tool button on or off and emit the resulting selection."""
+        was_active = self._pressed_tool == tool and self._active_tool == tool
+        self._pressed_tool = None
+        if was_active:
+            self.clear_tool()
+            self.toolChanged.emit("")
+            return
+        self.set_tool(tool)
+        self.toolChanged.emit(tool)
 
 
 __all__ = ("AnnotationToolbox",)

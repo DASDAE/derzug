@@ -43,12 +43,14 @@ from derzug.views.orange import (
     DerZugErrorDialog,
     DerZugMain,
     ExperimentalWarningDialog,
+    _ActiveSourceNavigator,
     _build_exception_report_data,
     _CanvasEscapeDefocuser,
     _CanvasZOrderToggler,
     _configure_linux_desktop_integration,
     _install_derzug_exception_handler,
     _linux_desktop_entry_contents,
+    _TabWindowCycler,
     ensure_linux_desktop_entry,
 )
 from derzug.views.orange_errors import _build_issue_body, _build_issue_url
@@ -2609,3 +2611,79 @@ class TestCanvasEscapeDefocuser:
         event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key_Escape, Qt.NoModifier)
 
         assert defocuser.eventFilter(window, event) is False
+
+
+class TestDerZugMainTeardown:
+    """Tests for DerZugMain app-global teardown behavior."""
+
+    def test_application_filter_teardown_removes_filters_and_clears_globals(
+        self, qapp, monkeypatch
+    ):
+        """DerZug should uninstall app event filters and clear globals on teardown."""
+        main = DerZugMain()
+        main.application = qapp
+        manager = ActiveSourceManager()
+        main.active_source_manager = manager
+        main._tab_window_cycler = _TabWindowCycler(qapp)
+        main._active_source_navigator = _ActiveSourceNavigator(manager)
+        main._canvas_z_order_toggler = _CanvasZOrderToggler(qapp)
+        main._canvas_escape_defocuser = _CanvasEscapeDefocuser(qapp)
+        expected_filters = [
+            main._tab_window_cycler,
+            main._active_source_navigator,
+            main._canvas_z_order_toggler,
+            main._canvas_escape_defocuser,
+        ]
+        removed: list[object] = []
+
+        monkeypatch.setattr(qapp, "removeEventFilter", removed.append)
+        monkeypatch.setattr(orange_view, "_APP_ACTIVE_SOURCE_MANAGER", manager)
+        monkeypatch.setattr(orange_view, "_APP_ACTIVE_SOURCE_MAIN_WINDOW", object())
+        qapp.active_source_manager = manager
+        qapp.active_source_main_window = object()
+
+        main._tear_down_application_filters()
+
+        assert removed == expected_filters
+        assert main._tab_window_cycler is None
+        assert main._active_source_navigator is None
+        assert main._canvas_z_order_toggler is None
+        assert main._canvas_escape_defocuser is None
+        assert main.active_source_manager is None
+        assert orange_view._APP_ACTIVE_SOURCE_MANAGER is None
+        assert orange_view._APP_ACTIVE_SOURCE_MAIN_WINDOW is None
+        assert qapp.active_source_manager is None
+        assert qapp.active_source_main_window is None
+
+    def test_tear_down_application_runs_filter_teardown_before_base(
+        self, qapp, monkeypatch
+    ):
+        """DerZug should clean its app-global hooks before delegating to Orange."""
+        main = DerZugMain()
+        main.application = qapp
+        calls: list[str] = []
+
+        monkeypatch.setattr(
+            DerZugMain,
+            "_tear_down_application_filters",
+            lambda self: calls.append("filters"),
+        )
+        monkeypatch.setattr(
+            orange_view.OMain,
+            "tear_down_application",
+            lambda self: calls.append("base"),
+        )
+
+        main.tear_down_application()
+
+        assert calls == ["filters", "base"]
+
+    def test_tear_down_sys_redirections_is_idempotent(self, monkeypatch):
+        """Repeated teardown should tolerate already-disconnected hook wiring."""
+        main = DerZugMain()
+        hook = ExceptHook(stream=None)
+        monkeypatch.setattr(sys, "excepthook", hook)
+        hook.handledException.connect(orange_view.handle_derzug_exception)
+
+        main.tear_down_sys_redirections()
+        main.tear_down_sys_redirections()

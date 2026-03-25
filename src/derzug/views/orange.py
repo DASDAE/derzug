@@ -1351,6 +1351,32 @@ class DerZugMain(OMain):
         self.application.installEventFilter(self._canvas_z_order_toggler)
         self.application.installEventFilter(self._canvas_escape_defocuser)
 
+    def _tear_down_application_filters(self) -> None:
+        """Remove DerZug-installed QApplication event filters and globals."""
+        app = getattr(self, "application", None)
+        for attr_name in (
+            "_tab_window_cycler",
+            "_active_source_navigator",
+            "_canvas_z_order_toggler",
+            "_canvas_escape_defocuser",
+        ):
+            event_filter = getattr(self, attr_name, None)
+            if event_filter is not None and app is not None:
+                with suppress((TypeError, RuntimeError)):
+                    app.removeEventFilter(event_filter)
+            setattr(self, attr_name, None)
+
+        global _APP_ACTIVE_SOURCE_MANAGER, _APP_ACTIVE_SOURCE_MAIN_WINDOW
+        _APP_ACTIVE_SOURCE_MANAGER = None
+        _APP_ACTIVE_SOURCE_MAIN_WINDOW = None
+        self.active_source_manager = None
+
+        if app is not None:
+            with suppress(AttributeError):
+                app.active_source_manager = None
+            with suppress(AttributeError):
+                app.active_source_main_window = None
+
     def setup_sys_redirections(self):
         """Install stdout/stderr redirection and DerZug's exception dialog hook."""
         super().setup_sys_redirections()
@@ -1366,6 +1392,11 @@ class DerZugMain(OMain):
             with suppress((TypeError, RuntimeError)):
                 sys.excepthook.handledException.connect(orange_handle_exception)
         super().tear_down_sys_redirections()
+
+    def tear_down_application(self):
+        """Remove DerZug app-global hooks before base QApplication teardown."""
+        self._tear_down_application_filters()
+        super().tear_down_application()
 
     def splash_screen(self):
         """Disable splash screen for the DerZug app."""

@@ -394,21 +394,17 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._annotation_controller = AnnotationOverlayController(
             self,
             tools=(
-                "annotation_select",
                 "point",
                 "line",
+                "box",
                 "ellipse",
                 "hyperbola",
-                "box",
             ),
-            default_tool="select",
+            default_tool=None,
             on_tool_changed=self._on_overlay_tool_changed,
             on_annotation_set_changed=self._on_local_annotation_set_changed,
         )
         self._annotation_controller._editor_class = _AnnotationEditorDialog
-        self._annotation_controller.toolbox.fitRequested.connect(
-            self._on_annotation_fit_requested
-        )
 
         self._cmap_combo.currentTextChanged.connect(self._on_colormap_changed)
         self._add_selection_button.clicked.connect(self._add_selection_from_view)
@@ -423,7 +419,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._plot_item.vb.menu.viewAll.triggered.connect(self._delete_active_roi)
         self._plot_item.vb.sigRangeChanged.connect(self._on_view_range_changed)
         self._apply_colormap(self.colormap)
-        self._set_overlay_mode("select", sync_tool=False)
+        self._set_overlay_mode("select")
         self._install_view_menu_actions()
         self._open_annotations_button.setChecked(not self._annotation_toolbox_hidden)
         self._toggle_annotations_action.setChecked(not self._annotation_toolbox_hidden)
@@ -485,28 +481,21 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         return False
 
     def _deactivate_selection_roi(self) -> None:
-        """Clear select/select-annotation mode or cancel back to annotation select."""
-        toolbox_hidden = self._annotation_toolbox_hidden
+        """Clear ROI focus and return to implicit annotation-selection mode."""
         if self._roi is not None:
             self._roi.clearFocus()
             self._roi.setSelected(False)
             scene = self._plot_widget.scene()
             if scene is not None and scene.focusItem() is self._roi:
                 scene.setFocusItem(None)
-        current_tool = self._annotation_controller.tool
-        if current_tool in {"select", "annotation_select"}:
-            if current_tool == "select":
-                self._annotation_controller.tool = "annotation_select"
-            self._set_overlay_mode("neutral", sync_tool=False)
-            return
-        self._annotation_controller.set_tool("annotation_select")
-        if toolbox_hidden:
-            self._annotation_controller.hide_toolbox()
+        self._annotation_controller.enter_annotation_selection_mode(notify=False)
 
     def _cancel_active_interactions(self) -> None:
         """Cancel active annotation draws and selection-focused overlay state."""
         if self._annotation_controller.draw_start is not None:
             self._annotation_controller.cancel_draw()
+        if self._annotation_controller.selected_annotation_ids:
+            self._annotation_controller.set_selected_annotations(set())
         self._deactivate_selection_roi()
 
     @Inputs.patch
@@ -610,12 +599,20 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             self._axis_kinds = {"bottom": "numeric", "left": "numeric"}
 
     @property
-    def _annotation_tool(self) -> str:
+    def _annotation_tool(self) -> str | None:
         """Compatibility shim for tests and host access."""
         return self._annotation_controller.tool
 
     @_annotation_tool.setter
-    def _annotation_tool(self, value: str) -> None:
+    def _annotation_tool(self, value: str | None) -> None:
+        if value in {"select", None}:
+            self._toggle_annotation_toolbox(False)
+            return
+        if value == "annotation_select":
+            self._toggle_annotation_toolbox(True)
+            self._annotation_controller.enter_annotation_selection_mode(notify=False)
+            return
+        self._toggle_annotation_toolbox(True)
         self._annotation_controller.set_tool(value)
 
     @property
@@ -624,7 +621,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
     @_annotation_layer_active.setter
     def _annotation_layer_active(self, value: bool) -> None:
-        self._set_overlay_mode("annotate" if value else "select", sync_tool=False)
+        self._toggle_annotation_toolbox(value)
 
     @property
     def _annotation_toolbox_hidden(self) -> bool:
@@ -745,14 +742,10 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         return self._annotation_controller.edit_annotation(annotation_id)
 
     def _activate_annotation_layer(self) -> None:
-        if self._annotation_controller.tool == "select":
-            self._annotation_controller.set_tool("annotation_select")
-            return
-        self._set_overlay_mode("annotate", sync_tool=False)
-        self._annotation_controller.activate_layer()
+        self._toggle_annotation_toolbox(True)
 
     def _hide_annotation_toolbox(self) -> None:
-        self._annotation_controller.hide_toolbox()
+        self._toggle_annotation_toolbox(False)
 
     def _refresh_ui(self) -> None:
         """Render the current patch and synchronize visible controls."""
@@ -1002,31 +995,6 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             ev.accept()
             return
         if (
-            self._overlay_mode == "neutral"
-            and ev.button() == Qt.LeftButton
-            and not ev.double()
-        ):
-            item = self._annotation_controller._annotation_item_at_scene_pos(
-                ev.scenePos()
-            )
-            if item is not None:
-                self._annotation_controller.set_tool("annotation_select")
-                self._annotation_controller.on_item_clicked(item, None)
-                ev.accept()
-                return
-            if isinstance(
-                self._roi, _SelectionROI
-            ) and self._roi.sceneBoundingRect().contains(ev.scenePos()):
-                self._annotation_controller.tool = "select"
-                self._set_overlay_mode("select", sync_tool=False)
-                self._roi.setSelected(True)
-                self._roi.setFocus()
-                scene = self._plot_widget.scene()
-                if scene is not None:
-                    scene.setFocusItem(self._roi)
-                ev.accept()
-                return
-        if (
             self._overlay_mode == "annotate"
             and ev.button() == Qt.LeftButton
             and not ev.double()
@@ -1188,8 +1156,10 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         """Show or hide the floating annotation toolbox from the View menu."""
         if visible:
             self._annotation_controller.show_toolbox()
+            self._annotation_controller.enter_annotation_selection_mode(notify=False)
         else:
             self._annotation_controller.hide_toolbox()
+        self._set_overlay_mode("annotate" if visible else "select")
         action = getattr(self, "_toggle_annotations_action", None)
         if action is not None and action.isChecked() != visible:
             action.setChecked(visible)
@@ -1203,14 +1173,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             self._mark_output_dirty("annotation_set")
 
     def _on_overlay_tool_changed(self, tool: str) -> None:
-        """Treat the selected toolbox button as the active overlay mode."""
-        if tool == "select":
-            self._set_overlay_mode("select", sync_tool=False)
-            return
-        self._annotation_controller.activate_layer()
-        self._set_overlay_mode("annotate", sync_tool=False)
+        """Keep the interaction mode aligned with toolbox visibility."""
+        _ = tool
+        self._set_overlay_mode(
+            "annotate" if not self._annotation_toolbox_hidden else "select"
+        )
 
-    def _set_overlay_mode(self, mode: str, *, sync_tool: bool = True) -> None:
+    def _set_overlay_mode(self, mode: str) -> None:
         """Switch between selection-ROI and annotation interaction."""
         self._overlay_mode = mode
         annotation_interactive = mode == "annotate"
@@ -1218,20 +1187,6 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._annotation_controller.set_interactive(annotation_interactive)
         self._set_roi_interactive(mode == "select")
         self._add_selection_button.setChecked(mode == "select")
-        if mode == "annotate":
-            self._annotation_controller.set_tool(
-                self._annotation_controller.tool, notify=False
-            )
-        else:
-            self._annotation_controller.clear_tool_selection()
-        if sync_tool:
-            tool = "select" if mode == "select" else self._annotation_controller.tool
-            if mode == "annotate" and tool == "select":
-                tool = "annotation_select"
-            if mode == "neutral":
-                self._annotation_controller.clear_tool_selection()
-            else:
-                self._annotation_controller.set_tool(tool)
 
     def _set_roi_interactive(self, interactive: bool) -> None:
         """Keep the ROI visible while enabling only active-mode affordances."""

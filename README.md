@@ -1,8 +1,10 @@
 # DerZug
 
-**Experimental:** DerZug is an early-stage DAS application with frequent breaking
-changes and limited compatibility guarantees. It is best suited for evaluation,
-internal workflows, and contributor testing.
+> [!WARNING]
+> ## Experimental Software
+> DerZug is an early-stage proof of concept.
+> Expect bugs, incomplete behavior, data-loss risks, and frequent breaking changes.
+> The creators make no promises of further development or maintenance.
 
 <img src="https://raw.githubusercontent.com/dasdae/derzug/main/docs/static/logo_v2.png" width="500">
 
@@ -10,10 +12,7 @@ DerZug is powered by the [Orange3](https://orangedatamining.com/),
 [PyQtGraph](https://www.pyqtgraph.org/), and [DASDAE](https://dasdae.org)
 ecosystems.
 
-It has the following goals:
-
-- Provide interactive visualizations of fiber-optic sensing datasets.
-- Allow users to interactively create, modify, and share reproducible workflows.
+It's goal is to allow users to **interactively create, debug, and share reproducible DFOS workflows**.
 
 It can be launched as a standalone application, or used for interactive exploration (in code).
 
@@ -25,13 +24,20 @@ Install from PyPI with:
 pip install derzug
 ```
 
-For example, launching the full application:
+> [!TIP]
+> DerZug can be installed on any of the listed Python versions, but Qt-related issues are still possible.
+> The smoothest experience is generally on Python 3.13. It may help to first create a mamba/conda environment 
+> with Orange3 installed, then install DerZug into that. 
+
+## Basic Usage
+
+DerZug is a full-fledged application that can be launched from the command line like so:
 
 ```bash
 derzug
 ```
 
-Conversely, you can use DerZug directly from python for some quick interactive visualization:
+Conversely, DerZug can be used interactively in code: 
 
 ```python
 import dascore as dc
@@ -40,21 +46,4 @@ patch = dc.get_example_patch("example_event_2")
 
 # Launches a waterfall window for viewing a patch 
 patch.zug.waterfall()
-```
-
-## Development
-
-Install the development dependencies, then install the git hooks with `prek`:
-
-```bash
-uv sync --extra test
-uv run prek install -f
-```
-
-The repo hook configuration lives in `prek.toml`.
-
-Run the repo checks locally with:
-
-```bash
-uv run prek run --all-files
 ```
