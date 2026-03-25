@@ -2,7 +2,11 @@
 # --- Build system configuration
 
 [build-system]
-requires = [ "setuptools>=69", "setuptools-git-versioning", "scikit-build"]
+requires = [
+    "setuptools>=69",
+    "setuptools-git-versioning",
+    "scikit-build",
+]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools-git-versioning]
