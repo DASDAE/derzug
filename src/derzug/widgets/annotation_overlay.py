@@ -39,13 +39,14 @@ from derzug.widgets.annotation_editor import AnnotationEditorDialog
 from derzug.widgets.annotation_toolbox import AnnotationToolbox
 
 _ANNOTATION_TOOLS = frozenset(
-    {"annotation_select", "point", "line", "ellipse", "hyperbola", "box", "delete"}
+    {"point", "line", "ellipse", "hyperbola", "box", "delete"}
 )
 _HYPERBOLA_SAMPLE_COUNT = 96
 _HYPERBOLA_EPSILON = 1e-6
 _POINT_TARGET_PX = 40.0 * (2.0 / 3.0)
 _POINT_FALLBACK_SIZE = 2.0 * (2.0 / 3.0)
 _POINT_HIT_RADIUS_FACTOR = 0.75
+_ANNOTATION_SNAP_RADIUS_PX = 12.0
 
 
 class _HyperbolaFitError(ValueError):
@@ -70,6 +71,13 @@ def _format_equation_scalar(value: float | int) -> str:
     return format(float(value), ".6g")
 
 
+def _plot_distance_sq(first: tuple[float, float], second: tuple[float, float]) -> float:
+    """Return the squared distance between two plot-space points."""
+    dx = float(first[0]) - float(second[0])
+    dy = float(first[1]) - float(second[1])
+    return (dx * dx) + (dy * dy)
+
+
 def _color_for_label(label: str | None) -> tuple[int, int, int]:
     """Return the base RGB color for one annotation label."""
     return annotation_label_color(label, load_annotation_config())
@@ -84,6 +92,26 @@ def _mix_rgb(
     return tuple(
         max(0, min(255, round((1 - amount) * src + amount * dst)))
         for src, dst in zip(rgb, target, strict=True)
+    )
+
+
+def _local_hit_stroke_width(
+    item: QGraphicsItem,
+    *,
+    pen_width: float,
+    extra_scene_px: float = 8.0,
+) -> float:
+    """Return one local-coordinate stroke width for a target scene-pixel hit area."""
+    transform = item.sceneTransform()
+    origin = transform.map(QPointF(0.0, 0.0))
+    unit_x = transform.map(QPointF(1.0, 0.0))
+    unit_y = transform.map(QPointF(0.0, 1.0))
+    scale_x = math.hypot(float(unit_x.x() - origin.x()), float(unit_x.y() - origin.y()))
+    scale_y = math.hypot(float(unit_y.x() - origin.x()), float(unit_y.y() - origin.y()))
+    valid_scales = [value for value in (scale_x, scale_y) if value > 1e-12]
+    scene_units_per_local = min(valid_scales) if valid_scales else 1.0
+    return max(
+        (max(float(pen_width), 1.0) + extra_scene_px) / scene_units_per_local, 1e-6
     )
 
 
@@ -146,16 +174,17 @@ class AnnotationHost(Protocol):
     def _set_cursor_readout(self, fields) -> None: ...
 
 
-def _handle_shift_translate_drag(roi: pg.ROI, ev) -> bool:
-    """Translate an ROI while Shift is held.
+def _handle_modified_translate_drag(roi: pg.ROI, ev) -> bool:
+    """Translate an ROI while Shift or Control is held.
 
     Bypasses pyqtgraph's default modifier map.
     """
     modifiers = ev.modifiers() if hasattr(ev, "modifiers") else Qt.NoModifier
-    shift_drag = bool(modifiers & Qt.KeyboardModifier.ShiftModifier) or getattr(
-        roi, "_shift_translate_active", False
-    )
-    if not shift_drag or ev.button() != Qt.MouseButton.LeftButton:
+    modified_drag = bool(
+        modifiers
+        & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier)
+    ) or getattr(roi, "_shift_translate_active", False)
+    if not modified_drag or ev.button() != Qt.MouseButton.LeftButton:
         return False
     if ev.isStart():
         if not getattr(roi, "translatable", False):
@@ -194,7 +223,7 @@ class _AnnotationPointROI(pg.EllipseROI):
 
     def mouseDragEvent(self, ev) -> None:
         """Remember when a Shift-drag should translate the whole selection."""
-        if _handle_shift_translate_drag(self, ev):
+        if _handle_modified_translate_drag(self, ev):
             if ev.isFinish():
                 self._group_drag_pending = self._group_drag_active
                 self._group_drag_active = False
@@ -357,7 +386,7 @@ class _AnnotationRectROI(pg.RectROI):
 
     def mouseDragEvent(self, ev) -> None:
         """Remember when a Shift-drag should translate the whole selection."""
-        if _handle_shift_translate_drag(self, ev):
+        if _handle_modified_translate_drag(self, ev):
             if ev.isFinish():
                 self._group_drag_pending = self._group_drag_active
                 self._group_drag_active = False
@@ -390,7 +419,7 @@ class _AnnotationLineROI(pg.LineSegmentROI):
 
     def mouseDragEvent(self, ev) -> None:
         """Remember when a Shift-drag should translate the whole selection."""
-        if _handle_shift_translate_drag(self, ev):
+        if _handle_modified_translate_drag(self, ev):
             if ev.isFinish():
                 self._group_drag_pending = self._group_drag_active
                 self._group_drag_active = False
@@ -409,6 +438,11 @@ class _AnnotationLineROI(pg.LineSegmentROI):
         self.sigDoubleClicked.emit(self)
         ev.accept()
 
+    def plot_endpoints(self) -> tuple[QPointF, QPointF]:
+        """Return the current line endpoints in parent/plot coordinates."""
+        start, end = self.endpoints
+        return self.mapToParent(start.pos()), self.mapToParent(end.pos())
+
 
 class _AnnotationPathROI(pg.ROI):
     """One transformable ROI wrapper for sampled path annotations."""
@@ -420,6 +454,7 @@ class _AnnotationPathROI(pg.ROI):
         annotation_id: str,
         *,
         points: tuple[tuple[float, float], ...],
+        roi_kind: str = "path",
         pen=None,
         hoverPen=None,  # noqa: N803
         handlePen=None,  # noqa: N803
@@ -442,12 +477,48 @@ class _AnnotationPathROI(pg.ROI):
             **kwargs,
         )
         self.annotation_id = annotation_id
+        self.roi_kind = roi_kind
         self._normalized_points = tuple(
             ((float(x) - xmin) / width, (float(y) - ymin) / height) for x, y in points
         )
         self.handleSize = 14
         self._group_drag_pending = False
         self._group_drag_active = False
+
+    def normalized_center(self) -> tuple[float, float]:
+        """Return the ROI center in normalized local coordinates."""
+        return (0.5, 0.5)
+
+    def local_center(self) -> QPointF:
+        """Return the ROI center in local coordinates."""
+        size = self.size()
+        return QPointF(float(size.x()) / 2.0, float(size.y()) / 2.0)
+
+    def centroid_plot_pos(self) -> QPointF:
+        """Return the current ROI center in parent/plot coordinates."""
+        return self.mapToParent(self.local_center())
+
+    def set_angle_about_center(
+        self, angle: float, *, update: bool = True, finish: bool = True
+    ) -> None:
+        """Rotate the ROI around its geometric center."""
+        self.setAngle(
+            angle,
+            center=self.normalized_center(),
+            update=update,
+            finish=finish,
+        )
+
+    def set_size_about_center(
+        self, size: tuple[float, float], *, update: bool = True, finish: bool = True
+    ) -> None:
+        """Resize the ROI while keeping its geometric center fixed."""
+        self.setSize(
+            size,
+            center=self.normalized_center(),
+            update=update,
+            finish=finish,
+        )
 
     def _path(self) -> QPainterPath:
         """Return the current path in local ROI coordinates."""
@@ -461,6 +532,17 @@ class _AnnotationPathROI(pg.ROI):
             path.lineTo(point_x * width, point_y * height)
         return path
 
+    def _hit_path(self) -> QPainterPath:
+        """Return the local path used for hover and click hit testing."""
+        if self.roi_kind != "ellipse":
+            return self._path()
+        size = self.size()
+        width = float(size.x())
+        height = float(size.y())
+        path = QPainterPath()
+        path.addEllipse(QRectF(0.0, 0.0, width, height))
+        return path
+
     def boundingRect(self) -> QRectF:
         """Return the painted path bounds with a small interaction margin."""
         return self.shape().boundingRect()
@@ -468,8 +550,10 @@ class _AnnotationPathROI(pg.ROI):
     def shape(self) -> QPainterPath:
         """Return a widened stroke path for hover and click handling."""
         stroker = QPainterPathStroker()
-        stroker.setWidth(max(float(self.currentPen.widthF()), 1.0) + 8.0)
-        return stroker.createStroke(self._path())
+        stroker.setWidth(
+            _local_hit_stroke_width(self, pen_width=float(self.currentPen.widthF()))
+        )
+        return stroker.createStroke(self._hit_path())
 
     def paint(self, painter, *_args) -> None:
         """Draw the sampled path with the current transform-aware ROI state."""
@@ -493,7 +577,7 @@ class _AnnotationPathROI(pg.ROI):
 
     def mouseDragEvent(self, ev) -> None:
         """Remember when a Shift-drag should translate the whole selection."""
-        if _handle_shift_translate_drag(self, ev):
+        if _handle_modified_translate_drag(self, ev):
             if ev.isFinish():
                 self._group_drag_pending = self._group_drag_active
                 self._group_drag_active = False
@@ -519,11 +603,20 @@ class _AnnotationPathDisplayItem(pg.GraphicsObject):
     sigClicked = Signal(object, object)  # noqa: N815
     sigDoubleClicked = Signal(object)  # noqa: N815
 
-    def __init__(self, annotation_id: str, *, points, pen=None, hoverPen=None) -> None:  # noqa: N803
+    def __init__(
+        self,
+        annotation_id: str,
+        *,
+        points,
+        pen=None,
+        hover_pen=None,
+        roi_kind: str = "path",
+    ) -> None:
         super().__init__()
         self.annotation_id = annotation_id
+        self.roi_kind = roi_kind
         self.currentPen = pen or _inactive_pen(interactive=True)
-        self._hover_pen = hoverPen or self.currentPen
+        self._hover_pen = hover_pen or self.currentPen
         self._hovered = False
         self._path = QPainterPath()
         first_x, first_y = points[0]
@@ -537,11 +630,26 @@ class _AnnotationPathDisplayItem(pg.GraphicsObject):
         """Return the painted path bounds with a small interaction margin."""
         return self.shape().boundingRect()
 
+    def _hit_path(self) -> QPainterPath:
+        """Return the local path used for hover and click hit testing."""
+        if self.roi_kind != "ellipse":
+            return self._path
+        bounds = self._path.boundingRect()
+        path = QPainterPath()
+        path.addEllipse(bounds)
+        return path
+
+    def _hit_contains(self, local_pos: QPointF) -> bool:
+        """Return True when one local point should count as a hover/click hit."""
+        return self.shape().contains(local_pos)
+
     def shape(self) -> QPainterPath:
         """Return a widened stroke path for hover and click handling."""
         stroker = QPainterPathStroker()
-        stroker.setWidth(max(float(self.currentPen.widthF()), 1.0) + 8.0)
-        return stroker.createStroke(self._path)
+        stroker.setWidth(
+            _local_hit_stroke_width(self, pen_width=float(self.currentPen.widthF()))
+        )
+        return stroker.createStroke(self._hit_path())
 
     def paint(self, painter, *_args) -> None:
         """Draw the sampled polyline with the current hover-aware pen."""
@@ -568,9 +676,24 @@ class _AnnotationPathDisplayItem(pg.GraphicsObject):
 
     def hoverEnterEvent(self, event) -> None:
         """Switch to the hover pen on pointer enter."""
-        self._hovered = True
+        hovered = self._hit_contains(event.pos())
+        self._hovered = hovered
         self.update()
-        event.accept()
+        if hovered:
+            event.accept()
+        else:
+            event.ignore()
+
+    def hoverMoveEvent(self, event) -> None:
+        """Track hover only while the pointer stays near the visible path."""
+        hovered = self._hit_contains(event.pos())
+        if hovered != self._hovered:
+            self._hovered = hovered
+            self.update()
+        if hovered:
+            event.accept()
+        else:
+            event.ignore()
 
     def hoverLeaveEvent(self, event) -> None:
         """Restore the normal pen on pointer exit."""
@@ -580,7 +703,9 @@ class _AnnotationPathDisplayItem(pg.GraphicsObject):
 
     def mousePressEvent(self, event) -> None:
         """Emit click selection on left-button press."""
-        if event.button() != Qt.MouseButton.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton or not self._hit_contains(
+            event.pos()
+        ):
             event.ignore()
             return
         self.sigClicked.emit(self, event)
@@ -588,6 +713,9 @@ class _AnnotationPathDisplayItem(pg.GraphicsObject):
 
     def mouseDoubleClickEvent(self, event) -> None:
         """Emit metadata-edit activation on double-click."""
+        if not self._hit_contains(event.pos()):
+            event.ignore()
+            return
         self.sigDoubleClicked.emit(self)
         event.accept()
 
@@ -608,7 +736,7 @@ class AnnotationOverlayController:
             "box",
             "delete",
         ),
-        default_tool: str = "point",
+        default_tool: str | None = None,
         on_tool_changed: Callable[[str], None] | None = None,
         on_annotation_set_changed: Callable[[], None] | None = None,
     ) -> None:
@@ -618,7 +746,7 @@ class AnnotationOverlayController:
         self._on_tool_changed = on_tool_changed
         self._on_annotation_set_changed = on_annotation_set_changed
         self._interactive = True
-        self.tool = default_tool
+        self.tool: str | None = default_tool
         self.layer_active = False
         self.toolbox_hidden = True
         self.annotation_set: AnnotationSet | None = None
@@ -627,16 +755,23 @@ class AnnotationOverlayController:
         self.selected_annotation_ids: set[str] = set()
         self.draw_start: tuple[float, float] | None = None
         self.preview_item: pg.GraphicsObject | pg.PlotDataItem | None = None
+        self._consume_next_release = False
         self._group_drag_state: dict[str, Any] | None = None
         self._point_drag_state: dict[str, Any] | None = None
+        self._snap_to_annotations = False
+        self._applying_live_snap = False
 
         self.toolbox = AnnotationToolbox(self._host._plot_widget, tools=self._tools)
         self.toolbox.toolChanged.connect(self.set_tool)
         self.toolbox.hideRequested.connect(self.hide_toolbox)
+        self.toolbox.snapToggled.connect(self.set_snap_to_annotations)
         self.tool_buttons = self.toolbox.tool_buttons
         self._install_viewbox_hooks()
         self.position_toolbox()
-        self.set_tool(default_tool, notify=False)
+        if default_tool is None:
+            self.enter_annotation_selection_mode(notify=False)
+        else:
+            self.set_tool(default_tool, notify=False)
 
     def _notify_annotation_set_changed(self) -> None:
         """Notify the host that local annotation state changed."""
@@ -665,6 +800,10 @@ class AnnotationOverlayController:
             return False
         if event.key() == Qt.Key_Escape and self.draw_start is not None:
             self.cancel_draw()
+            event.accept()
+            return True
+        if event.key() == Qt.Key_Escape and self.selected_annotation_ids:
+            self.set_selected_annotations(set())
             event.accept()
             return True
         if Qt.Key_0 <= event.key() <= Qt.Key_9 and self.selected_annotation_ids:
@@ -873,8 +1012,13 @@ class AnnotationOverlayController:
                 Qt.MouseButton.LeftButton if interactive else Qt.MouseButton.NoButton
             )
 
-    def set_tool(self, tool: str, *, notify: bool = True) -> None:
+    def set_tool(self, tool: str | None, *, notify: bool = True) -> None:
         """Switch the active annotation tool."""
+        if tool in {None, "annotation_select"}:
+            self.enter_annotation_selection_mode(notify=notify)
+            return
+        if tool != self.tool:
+            self.cancel_draw()
         self.tool = tool
         button = self.tool_buttons.get(tool)
         if button is not None:
@@ -882,13 +1026,31 @@ class AnnotationOverlayController:
         if notify and self._on_tool_changed is not None:
             self._on_tool_changed(tool)
 
+    def enter_annotation_selection_mode(self, *, notify: bool = True) -> None:
+        """Clear the active draw tool and return to annotation selection mode."""
+        self.cancel_draw()
+        self.tool = None
+        self.toolbox.clear_tool()
+        if notify and self._on_tool_changed is not None:
+            self._on_tool_changed("")
+
+    def set_snap_to_annotations(self, enabled: bool) -> None:
+        """Enable or disable snapping to existing annotation anchors."""
+        self._snap_to_annotations = bool(enabled)
+        self.toolbox.set_snap_enabled(self._snap_to_annotations)
+
     def clear_tool_selection(self) -> None:
         """Clear the visible toolbox selection without changing the remembered tool."""
         self.toolbox.clear_tool()
 
     def is_annotation_tool(self, tool: str | None = None) -> bool:
         """Return True when the given tool name is an annotation-editing tool."""
-        return (tool or self.tool) in _ANNOTATION_TOOLS
+        current_tool = self.tool if tool is None else tool
+        return current_tool in _ANNOTATION_TOOLS
+
+    def in_annotation_selection_mode(self) -> bool:
+        """Return True when annotation interactions should select, not draw."""
+        return self.tool is None
 
     def scene_to_plot(self, scene_pos) -> tuple[float, float] | None:
         """Map a scene position into plot coordinates when inside the plot."""
@@ -899,7 +1061,7 @@ class AnnotationOverlayController:
 
     def handle_scene_event(self, event) -> bool:
         """Drive annotation draw gestures from scene events."""
-        if not self._interactive or not self.is_annotation_tool():
+        if not self._interactive:
             return False
         if self._host._axes is None or self._host._patch is None:
             return False
@@ -919,7 +1081,8 @@ class AnnotationOverlayController:
                 event.accept()
                 return True
             if self.tool == "line":
-                self.create_default_line_annotation(*plot_pos)
+                self.draw_start = plot_pos
+                self.start_preview(plot_pos)
                 event.accept()
                 return True
             if self.tool == "ellipse":
@@ -943,6 +1106,12 @@ class AnnotationOverlayController:
             plot_pos = self.scene_to_plot(event.scenePos())
             if plot_pos is None:
                 return False
+            if self.tool == "line" and self.draw_start is not None:
+                self.activate_layer()
+                self.finish_draw(plot_pos)
+                self._consume_next_release = True
+                event.accept()
+                return True
             item_at_pos = self._annotation_item_at_scene_pos(event.scenePos())
             if item_at_pos is None and modifiers & Qt.KeyboardModifier.ShiftModifier:
                 item_at_pos = self._point_item_near_plot_pos(plot_pos)
@@ -952,7 +1121,7 @@ class AnnotationOverlayController:
                 else self.annotation_by_id(item_at_pos.annotation_id)
             )
             if (
-                self.tool == "annotation_select"
+                self.in_annotation_selection_mode()
                 and clicked_annotation is not None
                 and isinstance(clicked_annotation.geometry, PointGeometry)
             ):
@@ -991,7 +1160,7 @@ class AnnotationOverlayController:
                 self.create_point_annotation(*plot_pos)
                 event.accept()
                 return True
-            if self.tool == "annotation_select":
+            if self.in_annotation_selection_mode():
                 self.draw_start = plot_pos
                 self.start_preview(plot_pos)
                 event.accept()
@@ -1015,6 +1184,10 @@ class AnnotationOverlayController:
         if event_type == QEvent.Type.GraphicsSceneMouseRelease:
             if event.button() != Qt.MouseButton.LeftButton:
                 return False
+            if self._consume_next_release:
+                self._consume_next_release = False
+                event.accept()
+                return True
             if self._point_drag_state is not None:
                 if not self._host._plot_item.sceneBoundingRect().contains(
                     event.scenePos()
@@ -1081,7 +1254,7 @@ class AnnotationOverlayController:
                     self._store_annotation_set(updated_annotations)
                 event.accept()
                 return True
-            if self.draw_start is not None and self.tool == "annotation_select":
+            if self.draw_start is not None and self.in_annotation_selection_mode():
                 plot_pos = self.scene_to_plot(event.scenePos())
                 if plot_pos is None:
                     self.cancel_draw()
@@ -1108,7 +1281,7 @@ class AnnotationOverlayController:
         self.clear_preview()
         x0, y0 = start
         preview_pen = pg.mkPen((55, 125, 255, 200), width=2, style=Qt.PenStyle.DashLine)
-        if self.tool == "annotation_select":
+        if self.in_annotation_selection_mode():
             preview = pg.RectROI(
                 [x0, y0],
                 [1e-12, 1e-12],
@@ -1159,6 +1332,8 @@ class AnnotationOverlayController:
             return
         x0, y0 = self.draw_start
         x1, y1 = end
+        if self.tool in {"line", "box"}:
+            x1, y1 = self._snap_plot_pos((x1, y1))
         if self.tool == "line" and isinstance(self.preview_item, pg.PlotDataItem):
             self.preview_item.setData([x0, x1], [y0, y1])
             return
@@ -1174,7 +1349,7 @@ class AnnotationOverlayController:
             )
             self.preview_item.setData(xs, ys)
             return
-        if self.tool in {"annotation_select", "box"} and isinstance(
+        if (self.in_annotation_selection_mode() or self.tool == "box") and isinstance(
             self.preview_item, pg.ROI
         ):
             xmin, xmax = sorted((x0, x1))
@@ -1223,6 +1398,7 @@ class AnnotationOverlayController:
     def cancel_draw(self, *, clear_only: bool = False) -> None:
         """Cancel the current draw gesture."""
         self.draw_start = None
+        self._consume_next_release = False
         self.clear_preview()
         if not clear_only:
             self._host._set_cursor_readout(None)
@@ -1338,6 +1514,7 @@ class AnnotationOverlayController:
         axes = self._host._axes
         if dims is None or axes is None:
             return
+        plot_x, plot_y = self._snap_plot_pos((plot_x, plot_y))
         annotation = self._new_annotation(
             geometry=PointGeometry(
                 dims=dims,
@@ -1361,6 +1538,7 @@ class AnnotationOverlayController:
         axes = self._host._axes
         if dims is None or axes is None:
             return
+        end = self._snap_plot_pos(end)
         x0, x1 = sorted((start[0], end[0]))
         y0, y1 = sorted((start[1], end[1]))
         if abs(x1 - x0) < 1e-12 or abs(y1 - y0) < 1e-12:
@@ -1392,6 +1570,7 @@ class AnnotationOverlayController:
         axes = self._host._axes
         if dims is None or axes is None:
             return
+        end = self._snap_plot_pos(end)
         if abs(end[0] - start[0]) < 1e-12 and abs(end[1] - start[1]) < 1e-12:
             return
         annotation = self._new_annotation(
@@ -1408,17 +1587,11 @@ class AnnotationOverlayController:
                     ),
                 ),
             ),
+            semantic_type="line",
         )
         if annotation is None:
             return
         self.store_annotation(annotation)
-
-    def create_default_line_annotation(self, plot_x: float, plot_y: float) -> None:
-        """Create one default line annotation centered on the target position."""
-        dx, dy = self._default_shape_half_spans()
-        self.create_line_annotation(
-            (plot_x - dx, plot_y - dy), (plot_x + dx, plot_y + dy)
-        )
 
     def create_hyperbola_annotation(
         self,
@@ -1803,6 +1976,26 @@ class AnnotationOverlayController:
         self.set_active_annotation(item.annotation_id)
         self.edit_annotation(item.annotation_id)
 
+    def on_item_changing(self, item) -> None:
+        """Apply live snap preview while a point/line/box ROI is being dragged."""
+        if not self._interactive or self._applying_live_snap:
+            return
+        existing = self.annotation_by_id(item.annotation_id)
+        if existing is None:
+            return
+        try:
+            annotation = self._annotation_from_item(item.annotation_id, item)
+        except Exception:
+            return
+        snapped = self._snap_annotation_edit(existing, annotation)
+        if snapped == annotation:
+            return
+        self._applying_live_snap = True
+        try:
+            self._apply_annotation_to_item(item, snapped)
+        finally:
+            self._applying_live_snap = False
+
     def on_item_changed(self, item) -> None:
         """Persist geometry changes from a moved or resized annotation item."""
         if not self._interactive:
@@ -1840,7 +2033,423 @@ class AnnotationOverlayController:
                         updated_annotations.append(current)
                 self._store_annotation_set(updated_annotations)
                 return
+        annotation = self._snap_annotation_edit(existing, annotation)
         self.store_annotation(annotation)
+
+    def _snap_to_annotations_enabled(self) -> bool:
+        """Return True when annotation snapping is enabled in global settings."""
+        return self._snap_to_annotations
+
+    def _plot_to_scene(self, plot_pos: tuple[float, float]) -> QPointF | None:
+        """Map one plot-space point into the scene for screen-space comparisons."""
+        view_box = getattr(self._host._plot_item, "vb", None)
+        if view_box is None:
+            return None
+        return view_box.mapViewToScene(pg.Point(*plot_pos))
+
+    def _snap_candidates_plot(
+        self, *, exclude_annotation_id: str | None = None
+    ) -> list[tuple[float, float]]:
+        """Return snap target anchors from the current annotation set in plot space."""
+        if self.annotation_set is None or self._host._axes is None:
+            return []
+        axes = self._host._axes
+        candidates: list[tuple[float, float]] = []
+        for annotation in self.annotation_set.annotations:
+            if annotation.id == exclude_annotation_id:
+                continue
+            geometry = annotation.geometry
+            if isinstance(geometry, PointGeometry):
+                candidates.append(
+                    (
+                        float(
+                            map_coord_to_plot_value(
+                                geometry.values[0], axes.x_coord, axes.x_plot
+                            )
+                        ),
+                        float(
+                            map_coord_to_plot_value(
+                                geometry.values[1], axes.y_coord, axes.y_plot
+                            )
+                        ),
+                    )
+                )
+            elif isinstance(geometry, BoxGeometry):
+                xmin = float(
+                    map_coord_to_plot_value(
+                        geometry.min_corner[0], axes.x_coord, axes.x_plot
+                    )
+                )
+                ymin = float(
+                    map_coord_to_plot_value(
+                        geometry.min_corner[1], axes.y_coord, axes.y_plot
+                    )
+                )
+                xmax = float(
+                    map_coord_to_plot_value(
+                        geometry.max_corner[0], axes.x_coord, axes.x_plot
+                    )
+                )
+                ymax = float(
+                    map_coord_to_plot_value(
+                        geometry.max_corner[1], axes.y_coord, axes.y_plot
+                    )
+                )
+                candidates.extend(
+                    ((xmin, ymin), (xmin, ymax), (xmax, ymin), (xmax, ymax))
+                )
+            elif isinstance(geometry, PathGeometry) and len(geometry.points) == 2:
+                candidates.extend(
+                    (
+                        float(
+                            map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot)
+                        ),
+                        float(
+                            map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot)
+                        ),
+                    )
+                    for point in geometry.points
+                )
+        return candidates
+
+    def _snap_plot_pos(
+        self,
+        plot_pos: tuple[float, float],
+        *,
+        exclude_annotation_id: str | None = None,
+    ) -> tuple[float, float]:
+        """Snap one plot-space position to the nearest eligible annotation anchor."""
+        if not self._snap_to_annotations_enabled():
+            return plot_pos
+        source_scene = self._plot_to_scene(plot_pos)
+        if source_scene is None:
+            return plot_pos
+        best = plot_pos
+        best_distance_sq = _ANNOTATION_SNAP_RADIUS_PX * _ANNOTATION_SNAP_RADIUS_PX
+        found = False
+        for candidate in self._snap_candidates_plot(
+            exclude_annotation_id=exclude_annotation_id
+        ):
+            candidate_scene = self._plot_to_scene(candidate)
+            if candidate_scene is None:
+                continue
+            dx = float(candidate_scene.x() - source_scene.x())
+            dy = float(candidate_scene.y() - source_scene.y())
+            distance_sq = (dx * dx) + (dy * dy)
+            if distance_sq <= best_distance_sq:
+                if not found or distance_sq < best_distance_sq:
+                    best = candidate
+                    best_distance_sq = distance_sq
+                    found = True
+        return best
+
+    def _snap_point_annotation(self, annotation: Annotation) -> Annotation:
+        """Return a point annotation snapped to the nearest eligible anchor."""
+        axes = self._host._axes
+        geometry = annotation.geometry
+        if axes is None or not isinstance(geometry, PointGeometry):
+            return annotation
+        plot_pos = (
+            float(
+                map_coord_to_plot_value(geometry.values[0], axes.x_coord, axes.x_plot)
+            ),
+            float(
+                map_coord_to_plot_value(geometry.values[1], axes.y_coord, axes.y_plot)
+            ),
+        )
+        snapped = self._snap_plot_pos(plot_pos, exclude_annotation_id=annotation.id)
+        if snapped == plot_pos:
+            return annotation
+        return annotation.model_copy(
+            update={
+                "geometry": PointGeometry(
+                    dims=geometry.dims,
+                    values=(
+                        map_plot_value_to_coord(
+                            float(snapped[0]), axes.x_plot, axes.x_coord
+                        ),
+                        map_plot_value_to_coord(
+                            float(snapped[1]), axes.y_plot, axes.y_coord
+                        ),
+                    ),
+                )
+            }
+        )
+
+    @staticmethod
+    def _line_plot_points(
+        annotation: Annotation, axes
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """Return one two-point path annotation in plot coordinates."""
+        geometry = annotation.geometry
+        if not isinstance(geometry, PathGeometry) or len(geometry.points) != 2:
+            return None
+        return tuple(
+            (
+                float(map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot)),
+                float(map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot)),
+            )
+            for point in geometry.points
+        )
+
+    @staticmethod
+    def _box_plot_corners(
+        annotation: Annotation, axes
+    ) -> (
+        tuple[
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+        ]
+        | None
+    ):
+        """Return canonical box corners in plot coordinates."""
+        geometry = annotation.geometry
+        if not isinstance(geometry, BoxGeometry):
+            return None
+        xmin = float(
+            map_coord_to_plot_value(geometry.min_corner[0], axes.x_coord, axes.x_plot)
+        )
+        ymin = float(
+            map_coord_to_plot_value(geometry.min_corner[1], axes.y_coord, axes.y_plot)
+        )
+        xmax = float(
+            map_coord_to_plot_value(geometry.max_corner[0], axes.x_coord, axes.x_plot)
+        )
+        ymax = float(
+            map_coord_to_plot_value(geometry.max_corner[1], axes.y_coord, axes.y_plot)
+        )
+        return ((xmin, ymin), (xmax, ymin), (xmin, ymax), (xmax, ymax))
+
+    @staticmethod
+    def _is_line_translation(
+        before: tuple[tuple[float, float], tuple[float, float]],
+        after: tuple[tuple[float, float], tuple[float, float]],
+    ) -> bool:
+        """Return True when both line endpoints moved by the same delta."""
+        delta0 = (
+            float(after[0][0] - before[0][0]),
+            float(after[0][1] - before[0][1]),
+        )
+        delta1 = (
+            float(after[1][0] - before[1][0]),
+            float(after[1][1] - before[1][1]),
+        )
+        return math.isclose(delta0[0], delta1[0], abs_tol=1e-9) and math.isclose(
+            delta0[1], delta1[1], abs_tol=1e-9
+        )
+
+    @staticmethod
+    def _is_box_translation(
+        before: tuple[
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+        ],
+        after: tuple[
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+        ],
+    ) -> bool:
+        """Return True when all canonical box corners moved by the same delta."""
+        deltas = [
+            (
+                float(after_corner[0] - before_corner[0]),
+                float(after_corner[1] - before_corner[1]),
+            )
+            for before_corner, after_corner in zip(before, after, strict=True)
+        ]
+        first_dx, first_dy = deltas[0]
+        return all(
+            math.isclose(delta_x, first_dx, abs_tol=1e-9)
+            and math.isclose(delta_y, first_dy, abs_tol=1e-9)
+            for delta_x, delta_y in deltas[1:]
+        )
+
+    def _snap_line_annotation(
+        self, existing: Annotation, updated: Annotation
+    ) -> Annotation:
+        """Snap the edited line endpoint while leaving whole-line moves free."""
+        axes = self._host._axes
+        if axes is None:
+            return updated
+        before_points = self._line_plot_points(existing, axes)
+        after_points = self._line_plot_points(updated, axes)
+        if before_points is None or after_points is None:
+            return updated
+        if self._is_line_translation(before_points, after_points):
+            return updated
+        moved_distances = [
+            _plot_distance_sq(before_point, after_point)
+            for before_point, after_point in zip(
+                before_points, after_points, strict=True
+            )
+        ]
+        moved_index = 0 if moved_distances[0] >= moved_distances[1] else 1
+        snapped_point = self._snap_plot_pos(
+            after_points[moved_index], exclude_annotation_id=existing.id
+        )
+        if snapped_point == after_points[moved_index]:
+            return updated
+        snapped_points = list(after_points)
+        snapped_points[moved_index] = snapped_point
+        geometry = updated.geometry
+        assert isinstance(geometry, PathGeometry)
+        return updated.model_copy(
+            update={
+                "geometry": PathGeometry(
+                    dims=geometry.dims,
+                    points=tuple(
+                        (
+                            map_plot_value_to_coord(
+                                float(point[0]), axes.x_plot, axes.x_coord
+                            ),
+                            map_plot_value_to_coord(
+                                float(point[1]), axes.y_plot, axes.y_coord
+                            ),
+                        )
+                        for point in snapped_points
+                    ),
+                )
+            }
+        )
+
+    def _snap_box_annotation(
+        self, existing: Annotation, updated: Annotation
+    ) -> Annotation:
+        """Snap the resized box corner while leaving translations and rotations free."""
+        axes = self._host._axes
+        if axes is None:
+            return updated
+        before_rotation = float(existing.properties.get("rotation_angle", 0.0))
+        after_rotation = float(updated.properties.get("rotation_angle", 0.0))
+        if not math.isclose(before_rotation, after_rotation, abs_tol=1e-9):
+            return updated
+        before_corners = self._box_plot_corners(existing, axes)
+        after_corners = self._box_plot_corners(updated, axes)
+        if before_corners is None or after_corners is None:
+            return updated
+        if self._is_box_translation(before_corners, after_corners):
+            return updated
+        corner_displacements = [
+            _plot_distance_sq(before_corner, after_corner)
+            for before_corner, after_corner in zip(
+                before_corners, after_corners, strict=True
+            )
+        ]
+        anchor_index = min(
+            range(len(corner_displacements)), key=corner_displacements.__getitem__
+        )
+        opposite_by_index = {0: 3, 1: 2, 2: 1, 3: 0}
+        dragged_index = opposite_by_index[anchor_index]
+        anchor_corner = after_corners[anchor_index]
+        dragged_corner = self._snap_plot_pos(
+            after_corners[dragged_index], exclude_annotation_id=existing.id
+        )
+        if dragged_corner == after_corners[dragged_index]:
+            return updated
+        xmin, xmax = sorted((float(anchor_corner[0]), float(dragged_corner[0])))
+        ymin, ymax = sorted((float(anchor_corner[1]), float(dragged_corner[1])))
+        geometry = updated.geometry
+        assert isinstance(geometry, BoxGeometry)
+        return updated.model_copy(
+            update={
+                "geometry": BoxGeometry(
+                    dims=geometry.dims,
+                    min_corner=(
+                        map_plot_value_to_coord(xmin, axes.x_plot, axes.x_coord),
+                        map_plot_value_to_coord(ymin, axes.y_plot, axes.y_coord),
+                    ),
+                    max_corner=(
+                        map_plot_value_to_coord(xmax, axes.x_plot, axes.x_coord),
+                        map_plot_value_to_coord(ymax, axes.y_plot, axes.y_coord),
+                    ),
+                )
+            }
+        )
+
+    def _snap_annotation_edit(
+        self, existing: Annotation, updated: Annotation
+    ) -> Annotation:
+        """Apply commit-time annotation snapping for eligible edited geometries."""
+        if not self._snap_to_annotations_enabled():
+            return updated
+        if isinstance(updated.geometry, PointGeometry):
+            return self._snap_point_annotation(updated)
+        if (
+            isinstance(updated.geometry, PathGeometry)
+            and len(updated.geometry.points) == 2
+        ):
+            return self._snap_line_annotation(existing, updated)
+        if isinstance(updated.geometry, BoxGeometry):
+            return self._snap_box_annotation(existing, updated)
+        return updated
+
+    def _apply_annotation_to_item(self, item, annotation: Annotation) -> None:
+        """Update a live ROI to match one snapped annotation geometry."""
+        axes = self._host._axes
+        if axes is None:
+            return
+        geometry = annotation.geometry
+        if isinstance(item, _AnnotationPointROI) and isinstance(
+            geometry, PointGeometry
+        ):
+            width = float(item.size().x())
+            height = float(item.size().y())
+            plot_x = float(
+                map_coord_to_plot_value(geometry.values[0], axes.x_coord, axes.x_plot)
+            )
+            plot_y = float(
+                map_coord_to_plot_value(geometry.values[1], axes.y_coord, axes.y_plot)
+            )
+            item.setPos((plot_x - (width / 2.0), plot_y - (height / 2.0)), finish=False)
+            return
+        if isinstance(item, _AnnotationLineROI) and isinstance(geometry, PathGeometry):
+            if len(geometry.points) != 2:
+                return
+            plot_points = [
+                QPointF(
+                    float(map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot)),
+                    float(map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot)),
+                )
+                for point in geometry.points
+            ]
+            item.movePoint(
+                item.endpoints[0], plot_points[0], finish=False, coords="parent"
+            )
+            item.movePoint(
+                item.endpoints[1], plot_points[1], finish=False, coords="parent"
+            )
+            return
+        if isinstance(item, _AnnotationRectROI) and isinstance(geometry, BoxGeometry):
+            xmin = float(
+                map_coord_to_plot_value(
+                    geometry.min_corner[0], axes.x_coord, axes.x_plot
+                )
+            )
+            ymin = float(
+                map_coord_to_plot_value(
+                    geometry.min_corner[1], axes.y_coord, axes.y_plot
+                )
+            )
+            xmax = float(
+                map_coord_to_plot_value(
+                    geometry.max_corner[0], axes.x_coord, axes.x_plot
+                )
+            )
+            ymax = float(
+                map_coord_to_plot_value(
+                    geometry.max_corner[1], axes.y_coord, axes.y_plot
+                )
+            )
+            item.setPos((xmin, ymin), finish=False)
+            item.setSize(
+                (max(xmax - xmin, 1e-12), max(ymax - ymin, 1e-12)), finish=False
+            )
 
     @staticmethod
     def _annotation_anchor_plot(annotation: Annotation, axes) -> tuple[float, float]:
@@ -2181,9 +2790,9 @@ class AnnotationOverlayController:
                     map_plot_value_to_coord(ymax, axes.y_plot, axes.y_coord),
                 ),
             )
-            properties["rotation_angle"] = math.radians(float(item.angle()))
+            properties["rotation_angle"] = 0.0
         elif isinstance(item, _AnnotationLineROI):
-            start, end = item.endpoints
+            start, end = item.plot_endpoints()
             geometry = PathGeometry(
                 dims=dims,
                 points=(
@@ -2206,11 +2815,19 @@ class AnnotationOverlayController:
                 ),
             )
         elif isinstance(item, _AnnotationPathROI):
-            plot_points = item.plot_points()
-            if existing.semantic_type == "ellipse":
-                params = self._fit_rotated_ellipse_plot_parameters(
-                    np.array(plot_points, dtype=float)
-                )
+            if item.roi_kind == "ellipse":
+                size = item.size()
+                width = max(float(size.x()), _HYPERBOLA_EPSILON)
+                height = max(float(size.y()), _HYPERBOLA_EPSILON)
+                center = item.centroid_plot_pos()
+                params = {
+                    "center_x": float(center.x()),
+                    "center_y": float(center.y()),
+                    "radius_x": width / 2.0,
+                    "radius_y": height / 2.0,
+                    "axis_angle": 0.0,
+                    "samples": _HYPERBOLA_SAMPLE_COUNT,
+                }
                 xs, ys = self._sample_ellipse_plot_points(params)
                 geometry = PathGeometry(
                     dims=dims,
@@ -2228,6 +2845,7 @@ class AnnotationOverlayController:
                 )
                 properties["fit_parameters"] = params
             else:
+                plot_points = item.plot_points()
                 geometry = PathGeometry(
                     dims=dims,
                     points=tuple(
@@ -2262,10 +2880,12 @@ class AnnotationOverlayController:
         """Return the topmost annotation item under the given scene position."""
         annotation_items = set(self.annotation_items.values())
         for item in self._host._plot_widget.scene().items(scene_pos):
-            if item in annotation_items:
+            if item in annotation_items and item.contains(item.mapFromScene(scene_pos)):
                 return item
             parent = item.parentItem()
-            if parent in annotation_items:
+            if parent in annotation_items and parent.contains(
+                parent.mapFromScene(scene_pos)
+            ):
                 return parent
         plot_pos = self.scene_to_plot(scene_pos)
         if plot_pos is not None:
@@ -2357,7 +2977,7 @@ class AnnotationOverlayController:
                 size=(max(xmax - xmin, 1e-12), max(ymax - ymin, 1e-12)),
                 movable=True,
                 resizable=True,
-                rotatable=True,
+                rotatable=False,
                 pen=pen,
                 hoverPen=hover_pen,
                 handlePen=pg.mkPen((255, 255, 255), width=2),
@@ -2367,26 +2987,19 @@ class AnnotationOverlayController:
             item.addScaleHandle((1, 0), (0, 1))
             item.addScaleHandle((0, 1), (1, 0))
             item.addScaleHandle((1, 1), (0, 0))
-            item.addRotateHandle((0.5, -0.2), (0.5, 0.5))
-            item.setAngle(
-                math.degrees(float(annotation.properties.get("rotation_angle", 0.0)))
-            )
         elif isinstance(geometry, PathGeometry) and len(geometry.points) >= 2:
+            params = None
             if annotation.semantic_type == "ellipse":
-                params = annotation.properties.get("fit_parameters") or {}
-                xs, ys = self._sample_ellipse_plot_points(params)
-                plot_points = tuple(
-                    (float(plot_x), float(plot_y))
-                    for plot_x, plot_y in zip(xs, ys, strict=True)
+                raw_params = annotation.properties.get("fit_parameters") or {}
+                if raw_params:
+                    params = dict(raw_params)
+            plot_points = tuple(
+                (
+                    map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot),
+                    map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot),
                 )
-            else:
-                plot_points = tuple(
-                    (
-                        map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot),
-                        map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot),
-                    )
-                    for point in geometry.points
-                )
+                for point in geometry.points
+            )
             if len(plot_points) == 2:
                 start = plot_points[0]
                 end = plot_points[1]
@@ -2400,12 +3013,24 @@ class AnnotationOverlayController:
                 item.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
             else:
                 if self._interactive and annotation.id in self.selected_annotation_ids:
+                    roi_kind = "path"
+                    roi_points = plot_points
+                    if params is not None:
+                        roi_kind = "ellipse"
+                        canonical_params = dict(params)
+                        canonical_params["axis_angle"] = 0.0
+                        xs, ys = self._sample_ellipse_plot_points(canonical_params)
+                        roi_points = tuple(
+                            (float(plot_x), float(plot_y))
+                            for plot_x, plot_y in zip(xs, ys, strict=True)
+                        )
                     item = _AnnotationPathROI(
                         annotation.id,
-                        points=plot_points,
+                        points=roi_points,
+                        roi_kind=roi_kind,
                         movable=True,
                         resizable=True,
-                        rotatable=True,
+                        rotatable=(roi_kind != "ellipse"),
                         pen=pen,
                         hoverPen=hover_pen,
                         handlePen=pg.mkPen((255, 255, 255), width=2),
@@ -2415,19 +3040,23 @@ class AnnotationOverlayController:
                     item.addScaleHandle((1, 0), (0, 1))
                     item.addScaleHandle((0, 1), (1, 0))
                     item.addScaleHandle((1, 1), (0, 0))
-                    item.addRotateHandle((0.5, -0.2), (0.5, 0.5))
+                    if roi_kind != "ellipse":
+                        item.addRotateHandle((0.5, -0.2), (0.5, 0.5))
                 else:
                     item = _AnnotationPathDisplayItem(
                         annotation.id,
                         points=plot_points,
+                        roi_kind="ellipse" if params is not None else "path",
                         pen=pen,
-                        hoverPen=hover_pen,
+                        hover_pen=hover_pen,
                     )
         else:
             return None
 
         item.sigClicked.connect(self.on_item_clicked)
         item.sigDoubleClicked.connect(self.on_item_double_clicked)
+        if hasattr(item, "sigRegionChanged"):
+            item.sigRegionChanged.connect(self.on_item_changing)
         if hasattr(item, "sigRegionChangeFinished"):
             item.sigRegionChangeFinished.connect(self.on_item_changed)
         item.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)

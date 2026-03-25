@@ -9,7 +9,7 @@ from derzug.widgets.annotation_toolbox import AnnotationToolbox
 
 def test_toolbox_emits_tool_changes_and_tracks_checked_button(qtbot):
     """Clicking a tool button should emit the tool name and latch the button."""
-    toolbox = AnnotationToolbox(tools=("annotation_select", "point", "delete"))
+    toolbox = AnnotationToolbox(tools=("point", "delete"))
     qtbot.addWidget(toolbox)
     emitted: list[str] = []
     toolbox.toolChanged.connect(emitted.append)
@@ -21,18 +21,26 @@ def test_toolbox_emits_tool_changes_and_tracks_checked_button(qtbot):
     assert toolbox.tool_buttons["delete"].isChecked() is True
 
 
-def test_toolbox_fit_menu_emits_requested_shape(qtbot):
-    """Choosing a fit action should emit the requested fitted-shape name."""
-    toolbox = AnnotationToolbox(tools=("point",))
+def test_toolbox_buttons_toggle_on_and_off_when_clicked_twice(qtbot):
+    """Clicking an active tool again should return the toolbox to no selection."""
+    tools = ("point", "line", "ellipse", "hyperbola", "box", "delete")
+    toolbox = AnnotationToolbox(tools=tools)
     qtbot.addWidget(toolbox)
     emitted: list[str] = []
-    toolbox.fitRequested.connect(emitted.append)
+    toolbox.toolChanged.connect(emitted.append)
 
-    toolbox.fit_actions["line"].trigger()
-    toolbox.fit_actions["square"].trigger()
+    for tool in tools:
+        toolbox.tool_buttons[tool].click()
+        assert toolbox.tool_buttons[tool].isChecked() is True
+        assert sum(button.isChecked() for button in toolbox.tool_buttons.values()) == 1
 
-    assert emitted == ["line", "square"]
-    assert tuple(toolbox.fit_actions) == ("line", "ellipse", "square", "hyperbola")
+        toolbox.tool_buttons[tool].click()
+        assert not any(button.isChecked() for button in toolbox.tool_buttons.values())
+
+    expected: list[str] = []
+    for tool in tools:
+        expected.extend((tool, ""))
+    assert emitted == expected
 
 
 def test_toolbox_renders_annotations_title(qtbot):
@@ -41,6 +49,17 @@ def test_toolbox_renders_annotations_title(qtbot):
     qtbot.addWidget(toolbox)
 
     assert toolbox.title_label.text() == "Annotations"
+
+
+def test_toolbox_can_stay_in_a_neutral_no_tool_selected_state(qtbot):
+    """No checked draw tool should be a supported steady state."""
+    toolbox = AnnotationToolbox(tools=("point", "line"))
+    qtbot.addWidget(toolbox)
+
+    toolbox.set_tool("point")
+    toolbox.clear_tool()
+
+    assert not any(button.isChecked() for button in toolbox.tool_buttons.values())
 
 
 def test_toolbox_title_reflects_dirty_state(qtbot):
@@ -72,7 +91,6 @@ def test_annotation_tooltips_explain_double_click_edit(qtbot):
     """Annotation tools should advertise the double-click edit behavior."""
     toolbox = AnnotationToolbox(
         tools=(
-            "annotation_select",
             "point",
             "line",
             "ellipse",
@@ -83,19 +101,25 @@ def test_annotation_tooltips_explain_double_click_edit(qtbot):
     )
     qtbot.addWidget(toolbox)
 
-    assert "Double-click" in toolbox.tool_buttons["annotation_select"].toolTip()
     assert "Double-click" in toolbox.tool_buttons["point"].toolTip()
     assert "Double-click" in toolbox.tool_buttons["line"].toolTip()
     assert "Drag to draw" in toolbox.tool_buttons["ellipse"].toolTip()
     assert "Double-click" in toolbox.tool_buttons["box"].toolTip()
     assert "visible branch" in toolbox.tool_buttons["hyperbola"].toolTip()
-    assert "selected point annotations" in toolbox.fit_button.toolTip()
+
+
+def test_toolbox_has_no_fit_button(qtbot):
+    """The toolbox should expose draw tools only; fitting stays elsewhere."""
+    toolbox = AnnotationToolbox(tools=("point", "line", "ellipse"))
+    qtbot.addWidget(toolbox)
+
+    assert not hasattr(toolbox, "fit_button")
+    assert not hasattr(toolbox, "fit_actions")
 
 
 def test_toolbox_preserves_requested_tool_order(qtbot):
     """The toolbox should render host-provided tools in the requested order."""
     tools = (
-        "annotation_select",
         "point",
         "line",
         "ellipse",

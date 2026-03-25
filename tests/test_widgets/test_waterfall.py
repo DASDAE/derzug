@@ -1030,7 +1030,7 @@ class TestWaterfall:
         )
 
         assert handled is True
-        assert waterfall_widget._annotation_tool == "annotation_select"
+        assert waterfall_widget._annotation_tool is None
         assert waterfall_widget._annotation_set is not None
         assert len(waterfall_widget._annotation_set.annotations) == 1
         assert waterfall_widget._annotation_set.annotations[0].geometry.type == "point"
@@ -1167,7 +1167,7 @@ class TestWaterfall:
             float(axes.y_plot[170]),
         )
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
-        assert waterfall_widget._annotation_tool == "annotation_select"
+        assert waterfall_widget._annotation_tool is None
 
         first_item = waterfall_widget._annotation_items[first_id]
         waterfall_widget._annotation_controller.on_item_clicked(first_item, None)
@@ -1225,7 +1225,7 @@ class TestWaterfall:
         )
         second_id = waterfall_widget._active_annotation_id
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
-        assert waterfall_widget._annotation_tool == "annotation_select"
+        assert waterfall_widget._annotation_tool is None
 
         waterfall_widget._annotation_controller.set_selected_annotations(
             {first_id, second_id}
@@ -1343,6 +1343,158 @@ class TestWaterfall:
         assert annotation.properties["hyperbola_source"] == "manual"
         assert "u = " in annotation.properties["hyperbola_equation"]
 
+    def test_line_tool_double_click_anchors_then_single_click_commits_annotation(
+        self, waterfall_widget
+    ):
+        """The line tool should anchor on double-click and commit on a later click."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        waterfall_widget._annotation_tool = "line"
+        anchor_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(float(axes.x_plot[145]), float(axes.y_plot[130]))
+        )
+        end_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(float(axes.x_plot[170]), float(axes.y_plot[165]))
+        )
+
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseDoubleClick,
+                anchor_scene.x(),
+                anchor_scene.y(),
+            )
+        )
+        assert waterfall_widget._annotation_set is not None
+        assert waterfall_widget._annotation_set.annotations == ()
+        assert waterfall_widget._annotation_controller.draw_start is not None
+
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseMove,
+                end_scene.x(),
+                end_scene.y(),
+            )
+        )
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMousePress,
+                end_scene.x(),
+                end_scene.y(),
+            )
+        )
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseRelease,
+                end_scene.x(),
+                end_scene.y(),
+            )
+        )
+
+        annotation = waterfall_widget._annotation_set.annotations[0]
+        assert annotation.semantic_type == "line"
+        assert annotation.geometry.type == "path"
+        assert len(annotation.geometry.points) == 2
+
+    def test_line_tool_anchor_preview_and_commit_snap_to_existing_point(
+        self, waterfall_widget
+    ):
+        """
+        The pending line endpoint should preview-snap and commit to a nearby
+        point.
+        """
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        waterfall_widget._toggle_annotation_toolbox(True)
+        waterfall_widget._annotation_toolbox.snap_button.setChecked(True)
+        waterfall_widget._create_point_annotation(
+            float(axes.x_plot[170]),
+            float(axes.y_plot[165]),
+        )
+        waterfall_widget._annotation_tool = "line"
+        anchor_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(float(axes.x_plot[145]), float(axes.y_plot[130]))
+        )
+        point_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(float(axes.x_plot[170]), float(axes.y_plot[165]))
+        )
+        near_scene = point_scene + QPointF(5.0, 5.0)
+
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseDoubleClick,
+                anchor_scene.x(),
+                anchor_scene.y(),
+            )
+        )
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseMove,
+                near_scene.x(),
+                near_scene.y(),
+            )
+        )
+
+        preview = waterfall_widget._annotation_controller.preview_item
+        assert isinstance(preview, pg.PlotDataItem)
+        xs, ys = preview.getData()
+        assert (float(xs[-1]), float(ys[-1])) == pytest.approx(
+            (float(axes.x_plot[170]), float(axes.y_plot[165]))
+        )
+
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMousePress,
+                near_scene.x(),
+                near_scene.y(),
+            )
+        )
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseRelease,
+                near_scene.x(),
+                near_scene.y(),
+            )
+        )
+
+        annotation = waterfall_widget._annotation_set.annotations[-1]
+        assert annotation.semantic_type == "line"
+        assert annotation.geometry.points[1] == pytest.approx(
+            (float(axes.x_plot[170]), float(axes.y_plot[165]))
+        )
+
+    def test_escape_cancels_pending_line_anchor_in_waterfall(
+        self, waterfall_widget, qtbot
+    ):
+        """Escape should cancel an anchored line preview before the final click."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        waterfall_widget._annotation_tool = "line"
+        anchor_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(float(axes.x_plot[145]), float(axes.y_plot[130]))
+        )
+
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseDoubleClick,
+                anchor_scene.x(),
+                anchor_scene.y(),
+            )
+        )
+        assert waterfall_widget._annotation_controller.draw_start is not None
+        assert waterfall_widget._annotation_set is not None
+        assert waterfall_widget._annotation_set.annotations == ()
+
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_Escape)
+
+        assert waterfall_widget._annotation_controller.draw_start is None
+        assert waterfall_widget._annotation_controller.preview_item is None
+        assert waterfall_widget._annotation_set.annotations == ()
+
     def test_ellipse_tool_double_click_creates_sampled_path_annotation(
         self, waterfall_widget
     ):
@@ -1369,6 +1521,61 @@ class TestWaterfall:
         assert len(annotation.geometry.points) > 10
         assert annotation.properties["fit_model"] == "ellipse"
         assert annotation.properties["ellipse_source"] == "manual"
+
+    def test_escape_deselected_hyperbola_does_not_hit_across_apex_row(
+        self, waterfall_widget, qtbot
+    ):
+        """After Escape, hyperbola hover/click selection should stay near the branch."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        waterfall_widget._annotation_tool = "hyperbola"
+        target_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(float(axes.x_plot[145]), float(axes.y_plot[130]))
+        )
+
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseDoubleClick,
+                target_scene.x(),
+                target_scene.y(),
+            )
+        )
+
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_Escape)
+
+        annotation = waterfall_widget._annotation_set.annotations[0]
+        params = annotation.properties["fit_parameters"]
+        vertex_x = float(params["vertex_x"])
+        vertex_y = float(params["vertex_y"])
+        a = float(params["a"])
+        xs, ys = waterfall_widget._annotation_controller._sample_hyperbola_plot_points(
+            params
+        )
+        branch_idx = len(xs) // 4
+        item = waterfall_widget._annotation_controller.annotation_items[annotation.id]
+        branch_local = item.mapFromParent(
+            QPointF(float(xs[branch_idx]), float(ys[branch_idx]))
+        )
+        false_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(vertex_x + max(a * 0.5, 0.25), vertex_y)
+        )
+        branch_scene = item.mapToScene(branch_local)
+
+        assert (
+            waterfall_widget._annotation_controller._annotation_item_at_scene_pos(
+                false_scene
+            )
+            is None
+        )
+        assert (
+            waterfall_widget._annotation_controller._annotation_item_at_scene_pos(
+                branch_scene
+            )
+            is not None
+        )
 
     def test_delete_active_annotation_removes_it(self, waterfall_widget, monkeypatch):
         """Delete should stay local until the user presses s."""
@@ -1576,7 +1783,7 @@ class TestWaterfall:
     def test_fit_menu_line_creates_annotation_and_emits(
         self, waterfall_widget, monkeypatch, qtbot
     ):
-        """The toolbox fit menu should create locally, then emit after s."""
+        """Fit requests should create locally, then emit after s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
@@ -1596,7 +1803,7 @@ class TestWaterfall:
         )
         received.clear()
 
-        waterfall_widget._annotation_toolbox.fit_actions["line"].trigger()
+        waterfall_widget._on_annotation_fit_requested("line")
         assert received == []
         waterfall_widget.setFocus()
         qtbot.wait(10)
@@ -1614,7 +1821,7 @@ class TestWaterfall:
     def test_fit_menu_square_creates_annotation_and_emits(
         self, waterfall_widget, monkeypatch, qtbot
     ):
-        """The toolbox fit menu should create locally, then emit after s."""
+        """Fit requests should create locally, then emit after s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
@@ -1634,7 +1841,7 @@ class TestWaterfall:
         )
         received.clear()
 
-        waterfall_widget._annotation_toolbox.fit_actions["square"].trigger()
+        waterfall_widget._on_annotation_fit_requested("square")
         assert received == []
         waterfall_widget.setFocus()
         qtbot.wait(10)
@@ -3370,18 +3577,12 @@ class TestWaterfall:
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
 
         assert waterfall_widget.isVisible()
-        assert waterfall_widget._annotation_tool == "annotation_select"
-        assert waterfall_widget._overlay_mode == "neutral"
+        assert waterfall_widget._annotation_tool is None
+        assert waterfall_widget._overlay_mode == "select"
         assert waterfall_widget._roi is roi
         assert roi.acceptedMouseButtons() == Qt.MouseButton.NoButton
         assert not roi.isSelected()
-        assert waterfall_widget._add_selection_button.isChecked() is False
-        assert (
-            waterfall_widget._annotation_toolbox.tool_buttons[
-                "annotation_select"
-            ].isChecked()
-            is False
-        )
+        assert waterfall_widget._add_selection_button.isChecked() is True
 
     def test_escape_from_plot_viewport_clears_selected_interaction_mode(
         self, waterfall_widget, qtbot
@@ -3405,8 +3606,8 @@ class TestWaterfall:
         qtbot.wait(10)
 
         assert waterfall_widget.isVisible()
-        assert waterfall_widget._annotation_tool == "annotation_select"
-        assert waterfall_widget._overlay_mode == "neutral"
+        assert waterfall_widget._annotation_tool is None
+        assert waterfall_widget._overlay_mode == "select"
         assert waterfall_widget._roi is roi
         assert not roi.isSelected()
         assert waterfall_widget.hasFocus()
@@ -3424,8 +3625,51 @@ class TestWaterfall:
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
 
         assert waterfall_widget.isVisible()
-        assert waterfall_widget._annotation_tool == "annotation_select"
+        assert waterfall_widget._annotation_tool is None
         assert waterfall_widget._overlay_mode == "annotate"
+
+    def test_escape_clears_selected_square_annotation(self, waterfall_widget, qtbot):
+        """Escape should deselect a highlighted square annotation."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        controller = waterfall_widget._annotation_controller
+        waterfall_widget._toggle_annotation_toolbox(True)
+
+        controller.create_point_annotation(120.0, 120.0)
+        first_id = controller.active_annotation_id
+        controller.create_point_annotation(160.0, 150.0)
+        second_id = controller.active_annotation_id
+        controller.set_selected_annotations({first_id, second_id})
+
+        assert controller.fit_square_from_selection() is True
+
+        square_id = controller.active_annotation_id
+        controller.set_selected_annotations({square_id})
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+
+        QTest.keyClick(waterfall_widget, Qt.Key_Escape)
+
+        assert controller.selected_annotation_ids == set()
+        assert controller.active_annotation_id is None
+
+    def test_escape_clears_selected_ellipse_annotation(self, waterfall_widget, qtbot):
+        """Escape should deselect a highlighted ellipse annotation."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        controller = waterfall_widget._annotation_controller
+        waterfall_widget._toggle_annotation_toolbox(True)
+
+        controller.create_ellipse_annotation((120.0, 120.0), (170.0, 155.0))
+        ellipse_id = controller.active_annotation_id
+        controller.set_selected_annotations({ellipse_id})
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+
+        QTest.keyClick(waterfall_widget, Qt.Key_Escape)
+
+        assert controller.selected_annotation_ids == set()
+        assert controller.active_annotation_id is None
 
     def test_escape_does_not_show_hidden_annotation_toolbox(
         self, waterfall_widget, qtbot
@@ -3440,8 +3684,8 @@ class TestWaterfall:
 
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
 
-        assert waterfall_widget._annotation_tool == "annotation_select"
-        assert waterfall_widget._overlay_mode == "annotate"
+        assert waterfall_widget._annotation_tool is None
+        assert waterfall_widget._overlay_mode == "select"
         assert waterfall_widget._annotation_toolbox.isVisible() is False
         assert waterfall_widget._annotation_toolbox_hidden is True
 
@@ -3452,7 +3696,7 @@ class TestWaterfall:
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
         axes = waterfall_widget._axes
-        waterfall_widget._annotation_controller.show_toolbox()
+        waterfall_widget._toggle_annotation_toolbox(True)
 
         waterfall_widget._add_selection_button.click()
         waterfall_widget._annotation_tool = "point"
@@ -3466,11 +3710,9 @@ class TestWaterfall:
         roi = waterfall_widget._roi
 
         assert roi is not None
-        assert (
-            waterfall_widget._annotation_toolbox.tool_buttons[
-                "annotation_select"
-            ].isChecked()
-            is True
+        assert not any(
+            button.isChecked()
+            for button in waterfall_widget._annotation_toolbox.tool_buttons.values()
         )
 
         waterfall_widget.setFocus()
@@ -3478,11 +3720,9 @@ class TestWaterfall:
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
         qtbot.wait(10)
 
-        assert (
-            waterfall_widget._annotation_toolbox.tool_buttons[
-                "annotation_select"
-            ].isChecked()
-            is False
+        assert not any(
+            button.isChecked()
+            for button in waterfall_widget._annotation_toolbox.tool_buttons.values()
         )
         assert waterfall_widget._add_selection_button.isChecked() is False
 
@@ -3495,16 +3735,15 @@ class TestWaterfall:
         )
         qtbot.wait(10)
 
-        assert waterfall_widget._annotation_tool == "annotation_select"
-        assert (
-            waterfall_widget._annotation_toolbox.tool_buttons[
-                "annotation_select"
-            ].isChecked()
-            is True
+        assert waterfall_widget._annotation_tool is None
+        assert not any(
+            button.isChecked()
+            for button in waterfall_widget._annotation_toolbox.tool_buttons.values()
         )
 
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
         qtbot.wait(10)
+        waterfall_widget._toggle_annotation_toolbox(False)
         waterfall_widget._on_plot_mouse_clicked(
             _FakeMouseEvent(
                 roi.sceneBoundingRect().center().x(),
