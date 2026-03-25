@@ -8,12 +8,13 @@ from dataclasses import dataclass, field
 import numpy as np
 import pyqtgraph as pg
 import pytest
-from AnyQt.QtCore import QEvent, QPointF, Qt
+from AnyQt.QtCore import QEvent, QPointF, Qt, qInstallMessageHandler
 from AnyQt.QtWidgets import QDialog, QWidget
 from derzug.annotations_config import AnnotationConfig, save_annotation_config
 from derzug.models.annotations import Annotation, BoxGeometry, PathGeometry
 from derzug.widgets.annotation_overlay import (
     AnnotationOverlayController,
+    _active_pen,
     _AnnotationLineROI,
     _AnnotationPathDisplayItem,
     _AnnotationPathROI,
@@ -52,10 +53,18 @@ class _OutsideRect:
 class _FakeSceneEvent:
     """Simple scene event double used by the controller tests."""
 
-    def __init__(self, event_type, *, button=Qt.MouseButton.LeftButton, scene_pos=None):
+    def __init__(
+        self,
+        event_type,
+        *,
+        button=Qt.MouseButton.LeftButton,
+        scene_pos=None,
+        modifiers=Qt.KeyboardModifier.NoModifier,
+    ):
         self._type = event_type
         self._button = button
         self._scene_pos = scene_pos or QPointF(1.0, 11.0)
+        self._modifiers = modifiers
         self.accepted = False
 
     def type(self):
@@ -66,6 +75,9 @@ class _FakeSceneEvent:
 
     def scenePos(self):
         return self._scene_pos
+
+    def modifiers(self):
+        return self._modifiers
 
     def accept(self):
         self.accepted = True
@@ -530,6 +542,20 @@ def test_point_tool_requires_double_click_to_create_annotation(overlay_host):
     assert double_click.accepted is True
 
 
+def test_shift_click_point_tool_creates_annotation_without_double_click(overlay_host):
+    """Shift+click should place a point immediately with the point tool active."""
+    _host, controller = overlay_host
+    controller.set_tool("point")
+    press = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress)
+    press._modifiers = Qt.KeyboardModifier.ShiftModifier
+
+    assert controller.handle_scene_event(press) is True
+    assert controller.annotation_set is not None
+    assert len(controller.annotation_set.annotations) == 1
+    assert controller.annotation_set.annotations[0].geometry.type == "point"
+    assert press.accepted is True
+
+
 def test_set_interactive_false_locks_existing_items(overlay_host):
     """Disabling interaction keeps items visible but non-editable."""
     _host, controller = overlay_host
@@ -864,6 +890,41 @@ def test_line_tool_single_click_without_anchor_does_not_create_annotation(overla
     assert controller.annotation_set is None
 
 
+def test_shift_click_line_tool_anchors_without_double_click(overlay_host):
+    """Shift+click should start the line anchor preview without a double-click."""
+    host, controller = overlay_host
+    controller.set_tool("line")
+    anchor_scene = host._plot_item.vb.mapViewToScene(QPointF(1.0, 11.0))
+    end_scene = host._plot_item.vb.mapViewToScene(QPointF(2.0, 12.0))
+    anchor = _FakeSceneEvent(
+        QEvent.Type.GraphicsSceneMousePress, scene_pos=anchor_scene
+    )
+    anchor._modifiers = Qt.KeyboardModifier.ShiftModifier
+    move = _FakeSceneEvent(QEvent.Type.GraphicsSceneMouseMove, scene_pos=end_scene)
+    press = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress, scene_pos=end_scene)
+
+    assert controller.handle_scene_event(anchor) is True
+    assert controller.annotation_set is None
+    assert controller.draw_start == pytest.approx((1.0, 11.0))
+    assert isinstance(controller.preview_item, pg.PlotDataItem)
+    assert controller.preview_item.opts["symbol"] == "o"
+    assert float(controller.preview_item.opts["pen"].widthF()) == pytest.approx(
+        float(_active_pen().widthF())
+    )
+    assert anchor.accepted is True
+
+    assert controller.handle_scene_event(move) is True
+    assert controller.handle_scene_event(press) is True
+    assert len(controller.annotation_set.annotations) == 1
+    assert controller.annotation_set.annotations[0].geometry.type == "path"
+
+    item = controller.annotation_items[controller.active_annotation_id]
+    assert isinstance(item, _AnnotationLineROI)
+    assert float(item.currentPen.widthF()) == pytest.approx(
+        float(_active_pen().widthF())
+    )
+
+
 def test_escape_cancels_pending_line_anchor(overlay_host):
     """Escape should discard a pending anchored line before final commit."""
     _host, controller = overlay_host
@@ -929,6 +990,22 @@ def test_hyperbola_tool_requires_double_click_to_create_annotation(overlay_host)
     assert min(ys) < vertex_y < max(ys)
 
 
+def test_shift_click_hyperbola_tool_creates_annotation_without_double_click(
+    overlay_host,
+):
+    """Shift+click should place a hyperbola immediately with that tool active."""
+    _host, controller = overlay_host
+    controller.set_tool("hyperbola")
+    press = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress)
+    press._modifiers = Qt.KeyboardModifier.ShiftModifier
+
+    assert controller.handle_scene_event(press) is True
+    annotation = controller.annotation_set.annotations[0]
+    assert annotation.semantic_type == "hyperbola"
+    assert annotation.geometry.type == "path"
+    assert press.accepted is True
+
+
 def test_ellipse_tool_requires_double_click_to_create_annotation(overlay_host):
     """Ellipse placement should happen only on background double-click."""
     _host, controller = overlay_host
@@ -949,6 +1026,20 @@ def test_ellipse_tool_requires_double_click_to_create_annotation(overlay_host):
     assert annotation.properties["fit_model"] == "ellipse"
     assert annotation.properties["ellipse_source"] == "manual"
     assert double_click.accepted is True
+
+
+def test_shift_click_ellipse_tool_creates_annotation_without_double_click(overlay_host):
+    """Shift+click should place an ellipse immediately with that tool active."""
+    _host, controller = overlay_host
+    controller.set_tool("ellipse")
+    press = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress)
+    press._modifiers = Qt.KeyboardModifier.ShiftModifier
+
+    assert controller.handle_scene_event(press) is True
+    annotation = controller.annotation_set.annotations[0]
+    assert annotation.semantic_type == "ellipse"
+    assert annotation.geometry.type == "path"
+    assert press.accepted is True
 
 
 def test_multi_point_paths_render_as_display_items(overlay_host):
@@ -1144,6 +1235,32 @@ def test_box_tool_requires_double_click_to_create_annotation(overlay_host):
     assert len(controller.annotation_set.annotations) == 1
     assert controller.annotation_set.annotations[0].geometry.type == "box"
     assert double_click.accepted is True
+
+
+def test_shift_click_box_tool_creates_annotation_without_double_click(overlay_host):
+    """Shift+click should place a box immediately with that tool active."""
+    _host, controller = overlay_host
+    controller.set_tool("box")
+    press = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress)
+    press._modifiers = Qt.KeyboardModifier.ShiftModifier
+
+    assert controller.handle_scene_event(press) is True
+    assert len(controller.annotation_set.annotations) == 1
+    assert controller.annotation_set.annotations[0].geometry.type == "box"
+    assert press.accepted is True
+
+
+def test_shift_click_with_non_point_tool_does_not_create_point_annotation(overlay_host):
+    """Shift+click should use the active tool instead of always creating a point."""
+    _host, controller = overlay_host
+    controller.set_tool("ellipse")
+    press = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress)
+    press._modifiers = Qt.KeyboardModifier.ShiftModifier
+
+    assert controller.handle_scene_event(press) is True
+    assert controller.annotation_set is not None
+    assert len(controller.annotation_set.annotations) == 1
+    assert controller.annotation_set.annotations[0].geometry.type != "point"
 
 
 def test_release_over_selected_hyperbola_does_not_clear_active_handles(overlay_host):
@@ -1391,13 +1508,75 @@ def test_active_ellipse_hit_area_is_localized_to_the_ring(overlay_host):
     far_local = item.mapFromParent(QPointF(center_x + (radius_x * 4.0), center_y))
 
     assert item.shape().contains(edge_local)
+    assert item.contains(edge_local)
     assert not item.shape().contains(center_local)
+    assert not item.contains(center_local)
     assert not item.shape().contains(far_local)
+    assert not item.contains(far_local)
+
+
+def test_active_ellipse_scene_hit_testing_ignores_distant_orbit_points(overlay_host):
+    """Scene hit testing should not re-select an ellipse when the pointer is far."""
+    host, controller = overlay_host
+    controller.set_tool("ellipse")
+    controller.handle_scene_event(
+        _FakeSceneEvent(QEvent.Type.GraphicsSceneMouseDoubleClick)
+    )
+    annotation_id = controller.active_annotation_id
+    item = controller.annotation_items[annotation_id]
+
+    assert isinstance(item, _AnnotationPathROI)
+    params = controller.annotation_by_id(annotation_id).properties["fit_parameters"]
+    center_x = float(params["center_x"])
+    center_y = float(params["center_y"])
+    radius_x = float(params["radius_x"])
+    radius_y = float(params["radius_y"])
+
+    for angle_deg in range(0, 360, 15):
+        angle_rad = math.radians(angle_deg)
+        orbit_plot = QPointF(
+            center_x + (math.cos(angle_rad) * radius_x * 2.0),
+            center_y + (math.sin(angle_rad) * radius_y * 2.0),
+        )
+        orbit_scene = host._plot_item.vb.mapViewToScene(orbit_plot)
+        assert controller._annotation_item_at_scene_pos(orbit_scene) is None
+
+
+def test_active_line_scene_hit_testing_stays_near_the_segment(overlay_host):
+    """Active line hit testing should reject scene points far from the segment."""
+    host, controller = overlay_host
+    controller.create_line_annotation((0.5, 10.5), (1.5, 11.5))
+
+    far_scene = host._plot_item.vb.mapViewToScene(QPointF(3.0, 11.0))
+
+    assert controller._annotation_item_at_scene_pos(far_scene) is None
+
+
+def test_active_box_scene_hit_testing_rejects_distant_points(overlay_host):
+    """Active box hit testing should ignore scene points well outside the box."""
+    host, controller = overlay_host
+    controller.create_box_annotation((0.5, 10.5), (1.5, 11.5))
+
+    far_scene = host._plot_item.vb.mapViewToScene(QPointF(3.0, 13.0))
+
+    assert controller._annotation_item_at_scene_pos(far_scene) is None
+
+
+def test_point_scene_hit_testing_keeps_padding_local_to_the_point(overlay_host):
+    """Point hit testing should stay easy to hit without reaching distant positions."""
+    host, controller = overlay_host
+    controller.create_point_annotation(1.0, 11.0)
+
+    near_scene = host._plot_item.vb.mapViewToScene(QPointF(1.0, 11.0))
+    far_scene = host._plot_item.vb.mapViewToScene(QPointF(3.0, 13.0))
+
+    assert controller._annotation_item_at_scene_pos(near_scene) is not None
+    assert controller._annotation_item_at_scene_pos(far_scene) is None
 
 
 def test_passive_ellipse_hover_hit_area_stays_localized_to_the_ring(overlay_host):
     """Deselected ellipse hover should stay near the visible ring."""
-    _host, controller = overlay_host
+    host, controller = overlay_host
     controller.create_ellipse_annotation((0.5, 10.5), (1.5, 11.5))
     annotation_id = controller.active_annotation_id
 
@@ -1410,19 +1589,30 @@ def test_passive_ellipse_hover_hit_area_stays_localized_to_the_ring(overlay_host
     center_x = float(params["center_x"])
     center_y = float(params["center_y"])
     radius_x = float(params["radius_x"])
+    radius_y = float(params["radius_y"])
 
     edge_local = item.mapFromParent(QPointF(center_x + radius_x, center_y))
-    center_local = item.mapFromParent(QPointF(center_x, center_y))
     far_local = item.mapFromParent(QPointF(center_x + (radius_x * 4.0), center_y))
 
     item.hoverEnterEvent(_FakeHoverEvent(edge_local))
     assert item._hovered is True
 
-    item.hoverMoveEvent(_FakeHoverEvent(center_local))
-    assert item._hovered is False
-
     item.hoverMoveEvent(_FakeHoverEvent(far_local))
     assert item._hovered is False
+
+    far_left_scene = host._plot_item.vb.mapViewToScene(
+        QPointF(center_x - (radius_x * 4.0), center_y)
+    )
+    far_right_scene = host._plot_item.vb.mapViewToScene(
+        QPointF(center_x + (radius_x * 4.0), center_y)
+    )
+    far_vertical_scene = host._plot_item.vb.mapViewToScene(
+        QPointF(center_x, center_y + (radius_y * 4.0))
+    )
+
+    assert controller._annotation_item_at_scene_pos(far_left_scene) is None
+    assert controller._annotation_item_at_scene_pos(far_right_scene) is None
+    assert controller._annotation_item_at_scene_pos(far_vertical_scene) is None
 
 
 def test_passive_hyperbola_hit_testing_stays_near_visible_branch(overlay_host):
@@ -1458,6 +1648,47 @@ def test_passive_hyperbola_hit_testing_stays_near_visible_branch(overlay_host):
     )
 
     assert controller._annotation_item_at_scene_pos(false_scene) is None
+
+
+def test_passive_path_display_item_avoids_painter_overflow_for_large_coords(qtbot):
+    """Passive path items should paint without overflow warnings at large coords."""
+    plot_widget = pg.PlotWidget()
+    qtbot.addWidget(plot_widget)
+    plot_widget.show()
+    plot_item = plot_widget.getPlotItem()
+    warnings: list[str] = []
+    previous = qInstallMessageHandler(None)
+
+    def _handler(msg_type, context, message) -> None:
+        if "Painter path exceeds" in message:
+            warnings.append(message)
+        if previous is not None:
+            previous(msg_type, context, message)
+
+    qInstallMessageHandler(_handler)
+    try:
+        points = tuple(
+            (1.7e9 + (index * 10.0), 1.7e9 + (((index - 50) ** 2) * 0.1))
+            for index in range(100)
+        )
+        item = _AnnotationPathDisplayItem(
+            "annotation-large-path",
+            points=points,
+            roi_kind="path",
+        )
+        plot_item.addItem(item)
+        plot_item.vb.setRange(
+            xRange=(1.7e9, 1.7e9 + 1000.0),
+            yRange=(1.7e9, 1.7e9 + 500.0),
+            padding=0,
+        )
+        qtbot.wait(20)
+
+        assert warnings == []
+        assert item.boundingRect().width() > 0.0
+        assert item.boundingRect().height() > 0.0
+    finally:
+        qInstallMessageHandler(previous)
 
 
 def test_active_box_has_no_rotate_handle(overlay_host):

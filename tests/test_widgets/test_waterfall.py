@@ -1015,7 +1015,10 @@ class TestWaterfall:
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
         axes = waterfall_widget._axes
-        waterfall_widget._annotation_tool = "annotation_select"
+        waterfall_widget._toggle_annotation_toolbox(True)
+        waterfall_widget._annotation_controller.enter_annotation_selection_mode(
+            notify=False
+        )
         scene_pos = waterfall_widget._plot_item.vb.mapViewToScene(
             QPointF(float(axes.x_plot[150]), float(axes.y_plot[150]))
         )
@@ -1577,6 +1580,73 @@ class TestWaterfall:
             is not None
         )
 
+    def test_escape_deselected_ellipse_does_not_hit_across_center_row(
+        self, waterfall_widget, qtbot
+    ):
+        """After Escape, ellipse hover/click selection should stay near the ring."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        waterfall_widget._annotation_tool = "ellipse"
+        target_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(float(axes.x_plot[145]), float(axes.y_plot[130]))
+        )
+
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseDoubleClick,
+                target_scene.x(),
+                target_scene.y(),
+            )
+        )
+
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+        QTest.keyClick(waterfall_widget, Qt.Key_Escape)
+
+        annotation = waterfall_widget._annotation_set.annotations[0]
+        params = annotation.properties["fit_parameters"]
+        center_x = float(params["center_x"])
+        center_y = float(params["center_y"])
+        radius_x = float(params["radius_x"])
+        item = waterfall_widget._annotation_controller.annotation_items[annotation.id]
+        ring_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(center_x + radius_x, center_y)
+        )
+        far_left_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(center_x - (radius_x * 4.0), center_y)
+        )
+        far_right_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(center_x + (radius_x * 4.0), center_y)
+        )
+        ring_local = item.mapFromParent(QPointF(center_x + radius_x, center_y))
+        ring_branch_scene = item.mapToScene(ring_local)
+
+        assert (
+            waterfall_widget._annotation_controller._annotation_item_at_scene_pos(
+                far_left_scene
+            )
+            is None
+        )
+        assert (
+            waterfall_widget._annotation_controller._annotation_item_at_scene_pos(
+                far_right_scene
+            )
+            is None
+        )
+        assert (
+            waterfall_widget._annotation_controller._annotation_item_at_scene_pos(
+                ring_scene
+            )
+            is not None
+        )
+        assert (
+            waterfall_widget._annotation_controller._annotation_item_at_scene_pos(
+                ring_branch_scene
+            )
+            is not None
+        )
+
     def test_delete_active_annotation_removes_it(self, waterfall_widget, monkeypatch):
         """Delete should stay local until the user presses s."""
         received = _capture_annotation_output(waterfall_widget, monkeypatch)
@@ -1641,6 +1711,18 @@ class TestWaterfall:
 
         assert waterfall_widget._annotation_set is not None
         assert waterfall_widget._annotation_set.annotations == ()
+
+    def test_annotation_toolbox_orders_tools_point_line_box_ellipse_hyperbola(
+        self, waterfall_widget
+    ):
+        """Waterfall should present annotation tools in the requested working order."""
+        assert tuple(waterfall_widget._annotation_toolbox.tool_buttons) == (
+            "point",
+            "line",
+            "box",
+            "ellipse",
+            "hyperbola",
+        )
 
     def test_number_key_labels_selected_annotations_and_sends_after_s(
         self, waterfall_widget, monkeypatch, qtbot

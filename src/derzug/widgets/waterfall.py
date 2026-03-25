@@ -396,9 +396,9 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             tools=(
                 "point",
                 "line",
+                "box",
                 "ellipse",
                 "hyperbola",
-                "box",
             ),
             default_tool=None,
             on_tool_changed=self._on_overlay_tool_changed,

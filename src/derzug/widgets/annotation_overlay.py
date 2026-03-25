@@ -95,13 +95,35 @@ def _mix_rgb(
     )
 
 
+def _scene_stroked_local_shape(
+    item: QGraphicsItem,
+    local_path: QPainterPath,
+    *,
+    pen_width: float,
+    extra_scene_px: float = 8.0,
+) -> QPainterPath:
+    """Return one local hit path with a fixed scene-pixel tolerance."""
+    scene_width = max(float(pen_width), 1.0) + float(extra_scene_px)
+    scene_path = item.sceneTransform().map(local_path)
+    stroker = QPainterPathStroker()
+    stroker.setWidth(scene_width)
+    stroked_scene = stroker.createStroke(scene_path)
+    inverse, invertible = item.sceneTransform().inverted()
+    if invertible:
+        return inverse.map(stroked_scene)
+
+    fallback = QPainterPathStroker()
+    fallback.setWidth(scene_width)
+    return fallback.createStroke(local_path)
+
+
 def _local_hit_stroke_width(
     item: QGraphicsItem,
     *,
     pen_width: float,
     extra_scene_px: float = 8.0,
 ) -> float:
-    """Return one local-coordinate stroke width for a target scene-pixel hit area."""
+    """Return one conservative local hit width for scene event dispatch."""
     transform = item.sceneTransform()
     origin = transform.map(QPointF(0.0, 0.0))
     unit_x = transform.map(QPointF(1.0, 0.0))
@@ -109,10 +131,25 @@ def _local_hit_stroke_width(
     scale_x = math.hypot(float(unit_x.x() - origin.x()), float(unit_x.y() - origin.y()))
     scale_y = math.hypot(float(unit_y.x() - origin.x()), float(unit_y.y() - origin.y()))
     valid_scales = [value for value in (scale_x, scale_y) if value > 1e-12]
-    scene_units_per_local = min(valid_scales) if valid_scales else 1.0
+    scene_units_per_local = max(valid_scales) if valid_scales else 1.0
     return max(
         (max(float(pen_width), 1.0) + extra_scene_px) / scene_units_per_local, 1e-6
     )
+
+
+def _scene_path_contains(
+    item: QGraphicsItem,
+    local_path: QPainterPath,
+    *,
+    local_pos: QPointF,
+    pen_width: float,
+    extra_scene_px: float = 8.0,
+) -> bool:
+    """Return True when a local point lands within the scene-space hit stroke."""
+    scene_path = item.sceneTransform().map(local_path)
+    stroker = QPainterPathStroker()
+    stroker.setWidth(max(float(pen_width), 1.0) + float(extra_scene_px))
+    return stroker.createStroke(scene_path).contains(item.mapToScene(local_pos))
 
 
 def _inactive_pen(*, interactive: bool, label: str | None = None) -> pg.QtGui.QPen:
@@ -555,6 +592,15 @@ class _AnnotationPathROI(pg.ROI):
         )
         return stroker.createStroke(self._hit_path())
 
+    def contains(self, point: QPointF) -> bool:
+        """Limit hit testing to the visible stroked path, not the ROI bounds/handles."""
+        return _scene_path_contains(
+            self,
+            self._hit_path(),
+            local_pos=point,
+            pen_width=float(self.currentPen.widthF()),
+        )
+
     def paint(self, painter, *_args) -> None:
         """Draw the sampled path with the current transform-aware ROI state."""
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
@@ -618,11 +664,20 @@ class _AnnotationPathDisplayItem(pg.GraphicsObject):
         self.currentPen = pen or _inactive_pen(interactive=True)
         self._hover_pen = hover_pen or self.currentPen
         self._hovered = False
-        self._path = QPainterPath()
-        first_x, first_y = points[0]
-        self._path.moveTo(first_x, first_y)
-        for point_x, point_y in points[1:]:
-            self._path.lineTo(point_x, point_y)
+        xs = [float(point[0]) for point in points]
+        ys = [float(point[1]) for point in points]
+        xmin, xmax = min(xs), max(xs)
+        ymin, ymax = min(ys), max(ys)
+        self._width = max(xmax - xmin, 1e-12)
+        self._height = max(ymax - ymin, 1e-12)
+        self._normalized_points = tuple(
+            (
+                (float(point_x) - xmin) / self._width,
+                (float(point_y) - ymin) / self._height,
+            )
+            for point_x, point_y in points
+        )
+        self.setPos(xmin, ymin)
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
 
@@ -630,18 +685,31 @@ class _AnnotationPathDisplayItem(pg.GraphicsObject):
         """Return the painted path bounds with a small interaction margin."""
         return self.shape().boundingRect()
 
+    def _path(self) -> QPainterPath:
+        """Return the current path in local item coordinates."""
+        path = QPainterPath()
+        first_x, first_y = self._normalized_points[0]
+        path.moveTo(first_x * self._width, first_y * self._height)
+        for point_x, point_y in self._normalized_points[1:]:
+            path.lineTo(point_x * self._width, point_y * self._height)
+        return path
+
     def _hit_path(self) -> QPainterPath:
         """Return the local path used for hover and click hit testing."""
         if self.roi_kind != "ellipse":
-            return self._path
-        bounds = self._path.boundingRect()
+            return self._path()
         path = QPainterPath()
-        path.addEllipse(bounds)
+        path.addEllipse(QRectF(0.0, 0.0, self._width, self._height))
         return path
 
     def _hit_contains(self, local_pos: QPointF) -> bool:
         """Return True when one local point should count as a hover/click hit."""
-        return self.shape().contains(local_pos)
+        return _scene_path_contains(
+            self,
+            self._hit_path(),
+            local_pos=local_pos,
+            pen_width=float(self.currentPen.widthF()),
+        )
 
     def shape(self) -> QPainterPath:
         """Return a widened stroke path for hover and click handling."""
@@ -651,12 +719,16 @@ class _AnnotationPathDisplayItem(pg.GraphicsObject):
         )
         return stroker.createStroke(self._hit_path())
 
+    def contains(self, point: QPointF) -> bool:
+        """Limit scene hit testing to the visible stroked path."""
+        return self._hit_contains(point)
+
     def paint(self, painter, *_args) -> None:
         """Draw the sampled polyline with the current hover-aware pen."""
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         painter.setPen(self._hover_pen if self._hovered else self.currentPen)
         painter.setBrush(pg.mkBrush(0, 0, 0, 0))
-        painter.drawPath(self._path)
+        painter.drawPath(self._path())
 
     def setPen(self, pen) -> None:
         """Update the line pen and repaint."""
@@ -731,9 +803,9 @@ class AnnotationOverlayController:
         tools: tuple[str, ...] = (
             "point",
             "line",
+            "box",
             "ellipse",
             "hyperbola",
-            "box",
             "delete",
         ),
         default_tool: str | None = None,
@@ -1059,6 +1131,29 @@ class AnnotationOverlayController:
         view_pos = self._host._plot_item.vb.mapSceneToView(scene_pos)
         return float(view_pos.x()), float(view_pos.y())
 
+    def _activate_current_tool_from_plot_pos(
+        self, plot_pos: tuple[float, float]
+    ) -> bool:
+        """Run the current annotation tool from one plot-space click position."""
+        self.activate_layer()
+        if self.tool == "point":
+            self.create_point_annotation(*plot_pos)
+            return True
+        if self.tool == "line":
+            self.draw_start = plot_pos
+            self.start_preview(plot_pos)
+            return True
+        if self.tool == "ellipse":
+            self.create_default_ellipse_annotation(*plot_pos)
+            return True
+        if self.tool == "hyperbola":
+            self.create_default_hyperbola_annotation(*plot_pos)
+            return True
+        if self.tool == "box":
+            self.create_default_box_annotation(*plot_pos)
+            return True
+        return False
+
     def handle_scene_event(self, event) -> bool:
         """Drive annotation draw gestures from scene events."""
         if not self._interactive:
@@ -1075,26 +1170,7 @@ class AnnotationOverlayController:
             plot_pos = self.scene_to_plot(event.scenePos())
             if plot_pos is None:
                 return False
-            self.activate_layer()
-            if self.tool == "point":
-                self.create_point_annotation(*plot_pos)
-                event.accept()
-                return True
-            if self.tool == "line":
-                self.draw_start = plot_pos
-                self.start_preview(plot_pos)
-                event.accept()
-                return True
-            if self.tool == "ellipse":
-                self.create_default_ellipse_annotation(*plot_pos)
-                event.accept()
-                return True
-            if self.tool == "hyperbola":
-                self.create_default_hyperbola_annotation(*plot_pos)
-                event.accept()
-                return True
-            if self.tool == "box":
-                self.create_default_box_annotation(*plot_pos)
+            if self._activate_current_tool_from_plot_pos(plot_pos):
                 event.accept()
                 return True
             return False
@@ -1155,12 +1231,16 @@ class AnnotationOverlayController:
                 return True
             if item_at_pos is not None:
                 return False
-            self.activate_layer()
             if modifiers & Qt.KeyboardModifier.ShiftModifier:
-                self.create_point_annotation(*plot_pos)
-                event.accept()
-                return True
+                if self.in_annotation_selection_mode():
+                    self.create_point_annotation(*plot_pos)
+                    event.accept()
+                    return True
+                if self._activate_current_tool_from_plot_pos(plot_pos):
+                    event.accept()
+                    return True
             if self.in_annotation_selection_mode():
+                self.activate_layer()
                 self.draw_start = plot_pos
                 self.start_preview(plot_pos)
                 event.accept()
@@ -1294,7 +1374,16 @@ class AnnotationOverlayController:
             self.preview_item = preview
             return
         if self.tool == "line":
-            preview = pg.PlotDataItem([x0, x0], [y0, y0], pen=preview_pen)
+            line_preview_pen = _active_pen()
+            preview = pg.PlotDataItem(
+                [x0, x0],
+                [y0, y0],
+                pen=line_preview_pen,
+                symbol="o",
+                symbolSize=10,
+                symbolPen=line_preview_pen,
+                symbolBrush=pg.mkBrush(0, 0, 0, 0),
+            )
             self._host._plot_item.addItem(preview)
             self.preview_item = preview
             return

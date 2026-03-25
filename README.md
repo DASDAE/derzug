@@ -4,6 +4,7 @@
 > ## Experimental Software
 > DerZug is an early-stage proof of concept.
 > Expect bugs, incomplete behavior, data-loss risks, and frequent breaking changes.
+> The creators make no promises of further development or maintenance.
 
 <img src="https://raw.githubusercontent.com/dasdae/derzug/main/docs/static/logo_v2.png" width="500">
 

@@ -17,14 +17,31 @@ from AnyQt.QtWidgets import (
 
 _ANNOTATION_ICON_DIR = Path(__file__).resolve().parent / "icons" / "annotations"
 _TOOL_METADATA = {
-    "point": ("Point annotation. Double-click an annotation to edit.", "point"),
-    "line": ("Line annotation. Double-click an annotation to edit.", "line"),
-    "ellipse": ("Ellipse annotation. Drag to draw a fitted ellipse.", "ellipse"),
+    "point": (
+        "Point annotation. Double-click or Shift+click to place. "
+        "Double-click an annotation to edit.",
+        "point",
+    ),
+    "line": (
+        "Line annotation. Double-click or Shift+click to anchor, then click to finish. "
+        "Double-click an annotation to edit.",
+        "line",
+    ),
+    "ellipse": (
+        "Ellipse annotation. Double-click or Shift+click to place. "
+        "Drag selected ellipses to edit.",
+        "ellipse",
+    ),
     "hyperbola": (
-        "Hyperbola annotation. Drag to draw one visible branch.",
+        "Hyperbola annotation. Double-click or Shift+click to place. "
+        "Drag selected hyperbolas to edit.",
         "hyperbola",
     ),
-    "box": ("Box annotation. Double-click an annotation to edit.", "box"),
+    "box": (
+        "Box annotation. Double-click or Shift+click to place. "
+        "Double-click an annotation to edit.",
+        "box",
+    ),
     "delete": ("Delete annotation", "delete"),
 }
 
@@ -178,6 +195,7 @@ class AnnotationToolbox(QFrame):
 
         title = QLabel(self._BASE_TITLE, self)
         title.setObjectName("annotation-toolbox-title")
+        title.setToolTip("Press S to send annotations")
         header.addWidget(title)
         self.title_label = title
 

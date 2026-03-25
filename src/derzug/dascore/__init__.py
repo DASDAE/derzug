@@ -109,6 +109,7 @@ def _launch_patch_widget(
     patch,
     *,
     show: bool,
+    block: bool,
 ) -> QWidget:
     """Instantiate a DerZug widget, load a patch, and optionally show it."""
     if _NAMESPACE_IMPORT_ERROR is not None:  # pragma: no cover - compatibility guard
@@ -122,7 +123,8 @@ def _launch_patch_widget(
     widget.set_patch(patch)
     if show:
         widget.show()
-        _block_until_closed(widget)
+        if block:
+            _block_until_closed(widget)
     return widget
 
 
@@ -203,6 +205,7 @@ def _launch_canvas_window(
     value,
     *,
     show: bool,
+    block: bool,
 ) -> DerZugMainWindow:
     """Launch one DerZug canvas session seeded from a patch or spool."""
     if _NAMESPACE_IMPORT_ERROR is not None:  # pragma: no cover - compatibility guard
@@ -213,7 +216,8 @@ def _launch_canvas_window(
     window = _seed_canvas_window(value)
     if show:
         window.show()
-        _block_until_closed(window)
+        if block:
+            _block_until_closed(window)
     return window
 
 
@@ -222,21 +226,21 @@ class ZugPatchNameSpace(PatchNameSpace):
 
     name = "zug"
 
-    def waterfall(self, *, show: bool = True) -> Waterfall:
+    def waterfall(self, *, show: bool = True, block: bool = True) -> Waterfall:
         """Launch the DerZug waterfall viewer for this patch."""
         from derzug.widgets.waterfall import Waterfall
 
-        return _launch_patch_widget(Waterfall, self, show=show)
+        return _launch_patch_widget(Waterfall, self, show=show, block=block)
 
-    def wiggle(self, *, show: bool = True) -> Wiggle:
+    def wiggle(self, *, show: bool = True, block: bool = True) -> Wiggle:
         """Launch the DerZug wiggle viewer for this patch."""
         from derzug.widgets.wiggle import Wiggle
 
-        return _launch_patch_widget(Wiggle, self, show=show)
+        return _launch_patch_widget(Wiggle, self, show=show, block=block)
 
-    def canvas(self, *, show: bool = True) -> DerZugMainWindow:
+    def canvas(self, *, show: bool = True, block: bool = True) -> DerZugMainWindow:
         """Launch the full DerZug canvas seeded with this patch."""
-        return _launch_canvas_window(self, show=show)
+        return _launch_canvas_window(self, show=show, block=block)
 
 
 class ZugSpoolNameSpace(SpoolNameSpace):
@@ -244,9 +248,9 @@ class ZugSpoolNameSpace(SpoolNameSpace):
 
     name = "zug"
 
-    def canvas(self, *, show: bool = True) -> DerZugMainWindow:
+    def canvas(self, *, show: bool = True, block: bool = True) -> DerZugMainWindow:
         """Launch the full DerZug canvas seeded with this spool."""
-        return _launch_canvas_window(self, show=show)
+        return _launch_canvas_window(self, show=show, block=block)
 
 
 __all__ = [

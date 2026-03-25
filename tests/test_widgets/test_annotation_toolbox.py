@@ -49,6 +49,7 @@ def test_toolbox_renders_annotations_title(qtbot):
     qtbot.addWidget(toolbox)
 
     assert toolbox.title_label.text() == "Annotations"
+    assert toolbox.title_label.toolTip() == "Press S to send annotations"
 
 
 def test_toolbox_can_stay_in_a_neutral_no_tool_selected_state(qtbot):
@@ -69,9 +70,11 @@ def test_toolbox_title_reflects_dirty_state(qtbot):
 
     toolbox.set_dirty(True)
     assert toolbox.title_label.text() == "Annotations *"
+    assert toolbox.title_label.toolTip() == "Press S to send annotations"
 
     toolbox.set_dirty(False)
     assert toolbox.title_label.text() == "Annotations"
+    assert toolbox.title_label.toolTip() == "Press S to send annotations"
 
 
 def test_toolbox_hide_button_emits_signal(qtbot):
@@ -87,8 +90,8 @@ def test_toolbox_hide_button_emits_signal(qtbot):
     assert toolbox.hide_button.text() == "X"
 
 
-def test_annotation_tooltips_explain_double_click_edit(qtbot):
-    """Annotation tools should advertise the double-click edit behavior."""
+def test_annotation_tooltips_explain_current_annotation_shortcuts(qtbot):
+    """Annotation tools should advertise the current placement shortcuts."""
     toolbox = AnnotationToolbox(
         tools=(
             "point",
@@ -101,11 +104,12 @@ def test_annotation_tooltips_explain_double_click_edit(qtbot):
     )
     qtbot.addWidget(toolbox)
 
-    assert "Double-click" in toolbox.tool_buttons["point"].toolTip()
-    assert "Double-click" in toolbox.tool_buttons["line"].toolTip()
-    assert "Drag to draw" in toolbox.tool_buttons["ellipse"].toolTip()
-    assert "Double-click" in toolbox.tool_buttons["box"].toolTip()
-    assert "visible branch" in toolbox.tool_buttons["hyperbola"].toolTip()
+    assert "Shift+click" in toolbox.tool_buttons["point"].toolTip()
+    assert "Shift+click" in toolbox.tool_buttons["line"].toolTip()
+    assert "anchor" in toolbox.tool_buttons["line"].toolTip()
+    assert "Shift+click" in toolbox.tool_buttons["ellipse"].toolTip()
+    assert "Shift+click" in toolbox.tool_buttons["box"].toolTip()
+    assert "Shift+click" in toolbox.tool_buttons["hyperbola"].toolTip()
 
 
 def test_toolbox_has_no_fit_button(qtbot):
