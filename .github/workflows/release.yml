@@ -21,48 +21,27 @@ jobs:
 
       - uses: ./.github/actions/load-shared-vars
 
-      - name: setup conda
-        uses: conda-incubator/setup-miniconda@v3
+      - name: setup python
+        uses: actions/setup-python@v5
         with:
-          mamba-version: "*"
-          channels: conda-forge,defaults
-          channel-priority: true
-          environment-file: environment.yml
-          # Defined in .github/actions/load-shared-vars/action.yml
           python-version: ${{ env.PYTHON_DEFAULT }}
 
       - name: create dists
-        shell: bash -l {0}
-        run: |
-          python -m pip install build
-          git describe --tags --dirty --always
-          git status --short
-          python -m build --no-isolation
-
-      - name: verify built version matches tag
-        shell: bash -l {0}
+        shell: bash
         env:
           EXPECTED_VERSION: ${{ github.event.release.tag_name }}
         run: |
-          python - <<'PY'
-          import glob
-          import os
-          import sys
-
-          expected = os.environ["EXPECTED_VERSION"].removeprefix("v")
-          artifacts = sorted(glob.glob("dist/*"))
-          print("artifacts:", [os.path.basename(x) for x in artifacts])
-          if not artifacts:
-              raise SystemExit("No build artifacts were created.")
-          for path in artifacts:
-              name = os.path.basename(path)
-              if "dirty" in name or "+" in name:
-                  raise SystemExit(f"Invalid release artifact name: {name}")
-              if f"-{expected}" not in name:
-                  raise SystemExit(
-                      f"Artifact version does not match tag {expected}: {name}"
-                  )
-          PY
+          expected="${EXPECTED_VERSION#v}"
+          python -m pip install --upgrade pip build
+          git describe --tags --dirty --always
+          # Release versioning must come from a clean tagged checkout.
+          test -z "$(git status --porcelain)" || { git status --short; exit 1; }
+          python -m build
+          # Reject local-version/dirty artifacts and require the release tag version.
+          ls dist
+          compgen -G "dist/*+*" > /dev/null && exit 1
+          compgen -G "dist/*dirty*" > /dev/null && exit 1
+          compgen -G "dist/*-${expected}*" > /dev/null
 
       - name: publish package
         uses: pypa/gh-action-pypi-publish@release/v1
