@@ -95,7 +95,8 @@ zug = "derzug.dascore:ZugPatchNameSpace"
 zug = "derzug.dascore:ZugSpoolNameSpace"
 
 [tool.setuptools.package-data]
-"derzug" = ["static/*.png"]
+"derzug" = ["static/*.png", "styles/*.qss", "styles/orange/*.svg"]
+"derzug.widgets" = ["icons/*.svg", "icons/annotations/*.svg"]
 "derzug.workflows" = ["*.ows"]
 
 [tool.setuptools.data-files]
