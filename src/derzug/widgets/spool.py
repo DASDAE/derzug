@@ -304,36 +304,86 @@ def _emit_task(
     return output_spool, output_patch
 
 
-def _ordered_spool_patches(spool: dc.BaseSpool) -> list[dc.Patch]:
-    """Return spool patches in the widget's deterministic default order."""
-    patches = list(spool)
-    if not isinstance(spool, DirectorySpool) or len(patches) < 2:
-        return patches
-    by_name = {}
-    for patch in patches:
-        try:
-            by_name[str(get_patch_names(patch).iloc[0])] = patch
-        except Exception:
-            continue
-    ordered_df = Spool._ordered_contents_df(spool)
-    ordered_names = []
-    if "path" in ordered_df.columns:
-        ordered_names = [Path(value).stem for value in ordered_df["path"].tolist()]
-    ordered = [by_name[name] for name in ordered_names if name in by_name]
-    if len(ordered) != len(patches):
-        return patches
-    return ordered
+def _ordered_contents_df_with_source_rows(spool: dc.BaseSpool) -> pd.DataFrame:
+    """Return spool contents in display order with source-row mapping preserved."""
+    df = spool.get_contents()
+    if df.empty:
+        ordered = df.copy()
+        ordered["_source_row"] = pd.Series(dtype=np.int64)
+        return ordered
+    ordered = df.copy()
+    ordered["_source_row"] = np.arange(len(ordered), dtype=np.int64)
+    if not isinstance(spool, DirectorySpool):
+        return ordered
+    sort_cols = [
+        column
+        for column in ("path", "tag", "station", "network", "time_min", "time_max")
+        if column in ordered.columns
+    ]
+    sort_cols.append("_source_row")
+    return ordered.sort_values(
+        by=sort_cols,
+        kind="mergesort",
+        na_position="last",
+    ).reset_index(drop=True)
+
+
+def _spool_indices_for_rows(
+    spool: dc.BaseSpool,
+    selected_rows: set[int] | frozenset[int],
+) -> list[int]:
+    """Map visible row indices onto spool indices without loading patch payloads."""
+    if not selected_rows:
+        return []
+    if not hasattr(spool, "get_contents"):
+        return sorted(int(row) for row in selected_rows)
+    ordered_df = _ordered_contents_df_with_source_rows(spool)
+    indices = []
+    for row in sorted(selected_rows):
+        if row < 0 or row >= len(ordered_df):
+            raise IndexError(row)
+        indices.append(int(ordered_df.iloc[row]["_source_row"]))
+    return indices
 
 
 def _spool_rows_to_patches(
     spool: dc.BaseSpool,
     selected_rows: set[int] | frozenset[int],
 ) -> list[dc.Patch]:
-    """Return selected patches, preserving direct slicing for non-directory spools."""
-    if isinstance(spool, DirectorySpool):
-        ordered_patches = _ordered_spool_patches(spool)
-        return [ordered_patches[row] for row in sorted(selected_rows)]
-    return [next(iter(spool[row : row + 1])) for row in sorted(selected_rows)]
+    """Return selected patches without materializing the entire spool."""
+    return [spool[index] for index in _spool_indices_for_rows(spool, selected_rows)]
+
+
+def _serialize_identity_value(value: Any) -> str:
+    """Return one spool-contents value as a stable identity string."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (str | int | float | bool | Path)):
+        return str(value)
+    if isinstance(value, datetime.timedelta):
+        return str(int(value.total_seconds() * 1e9))
+    arr = np.asarray(value)
+    if arr.ndim == 0:
+        item = arr.item()
+        return _serialize_identity_value(item)
+    return repr(value)
+
+
+def _contents_identity_token(df: pd.DataFrame, row: int) -> str:
+    """Return a stable row token from spool contents without loading patches."""
+    if row < 0 or row >= len(df):
+        raise IndexError(row)
+    if "path" in df.columns:
+        value = df.iloc[row]["path"]
+        text = _serialize_identity_value(value).strip()
+        if text:
+            return f"path:{Path(text).stem}"
+    parts = []
+    for column in df.columns:
+        parts.append(f"{column}={_serialize_identity_value(df.iloc[row][column])}")
+    return "row:" + "|".join(parts)
 
 
 class Spool(ConcurrentWidgetMixin, ZugWidget):
@@ -1187,8 +1237,10 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
             self._request_ui_refresh()
             return
         try:
-            display = self._apply_chunk_transform(source)
-            display = self._apply_select_transform(display)
+            # Narrow the spool before any downstream patch materialization so
+            # chunking and row extraction work on the smallest candidate set.
+            display = self._apply_select_transform(source)
+            display = self._apply_chunk_transform(display)
         except Exception as exc:
             self._display_spool = source
             self._show_exception("general", exc)
@@ -1219,7 +1271,7 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
         return spool.chunk(**kwargs)
 
     def _apply_select_transform(self, spool: dc.BaseSpool) -> dc.BaseSpool:
-        """Return the chunked spool or a selected derivative."""
+        """Return the input spool or a selection-filtered derivative."""
         kwargs = {}
         for filter_data in self._iter_active_select_filters():
             value = self._parse_chunk_scalar(filter_data["raw"])
@@ -1435,7 +1487,15 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
         selected_rows: set[int],
     ) -> dc.BaseSpool:
         """Return a spool containing only the requested source rows."""
-        return dc.spool(_spool_rows_to_patches(spool, selected_rows))
+        indices = _spool_indices_for_rows(spool, selected_rows)
+        if not indices:
+            return spool
+        if not hasattr(spool, "get_contents"):
+            if len(indices) == 1:
+                index = int(indices[0])
+                return spool[index : index + 1]
+            return dc.spool([spool[int(index)] for index in indices])
+        return spool[np.asarray(indices, dtype=np.int64)]
 
     def _emit_current_output(self) -> None:
         """Emit the current output spool and optional unpacked patch."""
@@ -1642,51 +1702,41 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
             return None
 
     def _patch_name_for_source_row(self, source_row: int) -> str:
-        """Return the persisted patch name for one source-spool row."""
+        """Return a persisted row token for one source-spool row."""
         if self._source_spool is None:
             return ""
         try:
-            patch = _ordered_spool_patches(self._source_spool)[source_row]
+            df = self._ordered_contents_df(self._source_spool)
         except Exception:
             return ""
         try:
-            return str(get_patch_names(patch).iloc[0])
+            return _contents_identity_token(df, source_row)
         except Exception:
             return ""
 
     def _source_row_for_patch_name(self, patch_name: str) -> int | None:
-        """Return the current source-spool row for a persisted patch name."""
-        if self._source_spool is None:
+        """Return the current source-spool row for a persisted row token."""
+        token = str(patch_name or "").strip()
+        if self._source_spool is None or not token:
             return None
-        for index, patch in enumerate(_ordered_spool_patches(self._source_spool)):
+        try:
+            df = self._ordered_contents_df(self._source_spool)
+        except Exception:
+            return None
+        for index in range(len(df)):
             try:
-                candidate = str(get_patch_names(patch).iloc[0])
+                candidate = _contents_identity_token(df, index)
             except Exception:
                 continue
-            if candidate == patch_name:
+            if candidate == token:
                 return index
         return None
 
     @staticmethod
     def _ordered_contents_df(spool: dc.BaseSpool):
         """Return spool contents in the widget's deterministic default order."""
-        df = spool.get_contents()
-        if not isinstance(spool, DirectorySpool) or df.empty:
-            return df
-        ordered = df.copy()
-        ordered["_original_row"] = np.arange(len(ordered), dtype=np.int64)
-        sort_cols = [
-            column
-            for column in ("path", "tag", "station", "network", "time_min", "time_max")
-            if column in ordered.columns
-        ]
-        sort_cols.append("_original_row")
-        ordered = ordered.sort_values(
-            by=sort_cols,
-            kind="mergesort",
-            na_position="last",
-        )
-        return ordered.drop(columns="_original_row").reset_index(drop=True)
+        ordered = _ordered_contents_df_with_source_rows(spool)
+        return ordered.drop(columns="_source_row")
 
     def _initialize_active_source_selection(self) -> None:
         """Best-effort active-source registration for the first source widget."""

@@ -39,7 +39,7 @@ from derzug.widgets.annotation_editor import AnnotationEditorDialog
 from derzug.widgets.annotation_toolbox import AnnotationToolbox
 
 _ANNOTATION_TOOLS = frozenset(
-    {"point", "line", "ellipse", "hyperbola", "box", "delete"}
+    {"annotation_select", "point", "line", "ellipse", "hyperbola", "box", "delete"}
 )
 _HYPERBOLA_SAMPLE_COUNT = 96
 _HYPERBOLA_EPSILON = 1e-6
@@ -145,11 +145,16 @@ def _scene_path_contains(
     pen_width: float,
     extra_scene_px: float = 8.0,
 ) -> bool:
-    """Return True when a local point lands within the scene-space hit stroke."""
-    scene_path = item.sceneTransform().map(local_path)
+    """Return True when a local point lands within the scaled local hit stroke."""
     stroker = QPainterPathStroker()
-    stroker.setWidth(max(float(pen_width), 1.0) + float(extra_scene_px))
-    return stroker.createStroke(scene_path).contains(item.mapToScene(local_pos))
+    stroker.setWidth(
+        _local_hit_stroke_width(
+            item,
+            pen_width=pen_width,
+            extra_scene_px=extra_scene_px,
+        )
+    )
+    return stroker.createStroke(local_path).contains(local_pos)
 
 
 def _inactive_pen(*, interactive: bool, label: str | None = None) -> pg.QtGui.QPen:
@@ -801,6 +806,7 @@ class AnnotationOverlayController:
         *,
         editor_class: type[QDialog] = AnnotationEditorDialog,
         tools: tuple[str, ...] = (
+            "annotation_select",
             "point",
             "line",
             "box",
@@ -841,7 +847,7 @@ class AnnotationOverlayController:
         self._install_viewbox_hooks()
         self.position_toolbox()
         if default_tool is None:
-            self.enter_annotation_selection_mode(notify=False)
+            self.clear_active_tool(notify=False)
         else:
             self.set_tool(default_tool, notify=False)
 
@@ -1086,8 +1092,11 @@ class AnnotationOverlayController:
 
     def set_tool(self, tool: str | None, *, notify: bool = True) -> None:
         """Switch the active annotation tool."""
-        if tool in {None, "annotation_select"}:
+        if tool == "annotation_select":
             self.enter_annotation_selection_mode(notify=notify)
+            return
+        if tool is None:
+            self.clear_active_tool(notify=notify)
             return
         if tool != self.tool:
             self.cancel_draw()
@@ -1099,7 +1108,15 @@ class AnnotationOverlayController:
             self._on_tool_changed(tool)
 
     def enter_annotation_selection_mode(self, *, notify: bool = True) -> None:
-        """Clear the active draw tool and return to annotation selection mode."""
+        """Activate the arrow tool for annotation selection gestures."""
+        self.cancel_draw()
+        self.tool = "annotation_select"
+        self.toolbox.set_tool("annotation_select")
+        if notify and self._on_tool_changed is not None:
+            self._on_tool_changed("annotation_select")
+
+    def clear_active_tool(self, *, notify: bool = True) -> None:
+        """Return to the neutral no-annotation-tool state."""
         self.cancel_draw()
         self.tool = None
         self.toolbox.clear_tool()
@@ -1122,7 +1139,7 @@ class AnnotationOverlayController:
 
     def in_annotation_selection_mode(self) -> bool:
         """Return True when annotation interactions should select, not draw."""
-        return self.tool is None
+        return self.tool == "annotation_select"
 
     def scene_to_plot(self, scene_pos) -> tuple[float, float] | None:
         """Map a scene position into plot coordinates when inside the plot."""
@@ -1137,7 +1154,8 @@ class AnnotationOverlayController:
         """Run the current annotation tool from one plot-space click position."""
         self.activate_layer()
         if self.tool == "point":
-            self.create_point_annotation(*plot_pos)
+            self.draw_start = plot_pos
+            self.start_preview(plot_pos)
             return True
         if self.tool == "line":
             self.draw_start = plot_pos
@@ -1171,6 +1189,7 @@ class AnnotationOverlayController:
             if plot_pos is None:
                 return False
             if self._activate_current_tool_from_plot_pos(plot_pos):
+                self._consume_next_release = True
                 event.accept()
                 return True
             return False
@@ -1182,7 +1201,7 @@ class AnnotationOverlayController:
             plot_pos = self.scene_to_plot(event.scenePos())
             if plot_pos is None:
                 return False
-            if self.tool == "line" and self.draw_start is not None:
+            if self.tool in {"point", "line"} and self.draw_start is not None:
                 self.activate_layer()
                 self.finish_draw(plot_pos)
                 self._consume_next_release = True
@@ -1233,6 +1252,10 @@ class AnnotationOverlayController:
                 return False
             if modifiers & Qt.KeyboardModifier.ShiftModifier:
                 if self.in_annotation_selection_mode():
+                    self.create_point_annotation(*plot_pos)
+                    event.accept()
+                    return True
+                if self.tool == "point":
                     self.create_point_annotation(*plot_pos)
                     event.accept()
                     return True
@@ -1387,6 +1410,17 @@ class AnnotationOverlayController:
             self._host._plot_item.addItem(preview)
             self.preview_item = preview
             return
+        if self.tool == "point":
+            preview = _AnnotationPointDisplayItem(
+                "preview-point",
+                pos=(x0, y0),
+                size=self._point_display_size(),
+                pen=_active_pen(),
+                hoverPen=_active_hover_pen(),
+            )
+            self._host._plot_item.addItem(preview)
+            self.preview_item = preview
+            return
         if self.tool == "ellipse":
             xs, ys = self._sample_ellipse_plot_points(
                 self._ellipse_parameters_from_drag(start, start)
@@ -1423,6 +1457,12 @@ class AnnotationOverlayController:
         x1, y1 = end
         if self.tool in {"line", "box"}:
             x1, y1 = self._snap_plot_pos((x1, y1))
+        if self.tool == "point" and isinstance(
+            self.preview_item, _AnnotationPointDisplayItem
+        ):
+            x1, y1 = self._snap_plot_pos((x1, y1))
+            self.preview_item.setPos(x1, y1)
+            return
         if self.tool == "line" and isinstance(self.preview_item, pg.PlotDataItem):
             self.preview_item.setData([x0, x1], [y0, y1])
             return
@@ -1454,7 +1494,9 @@ class AnnotationOverlayController:
         self.cancel_draw(clear_only=True)
         if start is None:
             return
-        if self.tool == "line":
+        if self.tool == "point":
+            self.create_point_annotation(*end)
+        elif self.tool == "line":
             self.create_line_annotation(start, end)
         elif self.tool == "ellipse":
             self.create_ellipse_annotation(start, end)

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <rect x="6" y="7" width="36" height="34" rx="3" fill="#ffffff" stroke="#333333" stroke-width="2.5"/>
+  <!-- 6-tooth gear (outer radius=12, inner radius=9, centered at 24,24) -->
+  <path d="M 35.59,20.89 L 35.59,27.11 L 31.79,28.5
+           L 32.49,32.49 L 27.11,35.59 L 24,33
+           L 20.89,35.59 L 15.51,32.49 L 16.21,28.5
+           L 12.41,27.11 L 12.41,20.89 L 16.21,19.5
+           L 15.51,15.51 L 20.89,12.41 L 24,15
+           L 27.11,12.41 L 32.49,15.51 L 31.79,19.5 Z"
+        fill="#333333"/>
+  <!-- Hub hole -->
+  <circle cx="24" cy="24" r="4.5" fill="#ffffff"/>
+</svg>
