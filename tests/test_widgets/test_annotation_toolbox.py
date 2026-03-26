@@ -23,7 +23,7 @@ def test_toolbox_emits_tool_changes_and_tracks_checked_button(qtbot):
 
 def test_toolbox_buttons_toggle_on_and_off_when_clicked_twice(qtbot):
     """Clicking an active tool again should return the toolbox to no selection."""
-    tools = ("point", "line", "ellipse", "hyperbola", "box", "delete")
+    tools = ("annotation_select", "point", "line", "ellipse", "hyperbola", "box")
     toolbox = AnnotationToolbox(tools=tools)
     qtbot.addWidget(toolbox)
     emitted: list[str] = []
@@ -94,16 +94,17 @@ def test_annotation_tooltips_explain_current_annotation_shortcuts(qtbot):
     """Annotation tools should advertise the current placement shortcuts."""
     toolbox = AnnotationToolbox(
         tools=(
+            "annotation_select",
             "point",
             "line",
             "ellipse",
             "hyperbola",
             "box",
-            "delete",
         )
     )
     qtbot.addWidget(toolbox)
 
+    assert "select" in toolbox.tool_buttons["annotation_select"].toolTip().lower()
     assert "Shift+click" in toolbox.tool_buttons["point"].toolTip()
     assert "Shift+click" in toolbox.tool_buttons["line"].toolTip()
     assert "anchor" in toolbox.tool_buttons["line"].toolTip()
@@ -124,17 +125,30 @@ def test_toolbox_has_no_fit_button(qtbot):
 def test_toolbox_preserves_requested_tool_order(qtbot):
     """The toolbox should render host-provided tools in the requested order."""
     tools = (
+        "annotation_select",
         "point",
         "line",
         "ellipse",
         "hyperbola",
         "box",
-        "delete",
     )
     toolbox = AnnotationToolbox(tools=tools)
     qtbot.addWidget(toolbox)
 
     assert tuple(toolbox.tool_buttons) == tools
+
+
+def test_toolbox_arrow_button_emits_annotation_select(qtbot):
+    """The arrow button should expose the explicit annotation-select mode."""
+    toolbox = AnnotationToolbox(tools=("annotation_select", "point"))
+    qtbot.addWidget(toolbox)
+    emitted: list[str] = []
+    toolbox.toolChanged.connect(emitted.append)
+
+    toolbox.tool_buttons["annotation_select"].click()
+
+    assert emitted == ["annotation_select"]
+    assert toolbox.tool_buttons["annotation_select"].isChecked() is True
 
 
 def test_toolbox_can_be_dragged(qtbot):

@@ -26,7 +26,7 @@ from derzug.utils.testing import (
     wait_for_widget_idle,
     widget_context,
 )
-from derzug.widgets.spool import Spool
+from derzug.widgets.spool import Spool, _spool_rows_to_patches
 
 
 def _default_example_name(spool_widget: Spool) -> str | None:
@@ -67,6 +67,26 @@ def _run_and_wait(widget, qtbot, timeout=5000) -> None:
     """Trigger widget.run() and block until the background load completes."""
     widget.run()
     wait_for_widget_idle(widget, timeout=timeout / 1000)
+
+
+def _load_example_table_model(
+    spool_widget: Spool, qtbot, example: str = "example_event_2"
+):
+    """Load one example and return the populated table model."""
+    spool_widget.spool_input = example
+    _run_and_wait(spool_widget, qtbot)
+    model = spool_widget._table.model()
+    assert model is not None
+    return model
+
+
+def _column_index(model, header: str) -> int:
+    """Return the model column index for one visible header label."""
+    return next(
+        i
+        for i in range(model.columnCount())
+        if model.headerData(i, Qt.Horizontal) == header
+    )
 
 
 def _select_row(widget: Spool, index: int = 0) -> tuple:
@@ -195,9 +215,7 @@ class TestSpool:
 
     def test_duration_column_appears_in_table(self, spool_widget, qtbot):
         """Duration column is present and shows a human-readable string."""
-        spool_widget.spool_input = "example_event_2"
-        _run_and_wait(spool_widget, qtbot)
-        model = spool_widget._table.model()
+        model = _load_example_table_model(spool_widget, qtbot)
         headers = [
             model.headerData(i, Qt.Horizontal) for i in range(model.columnCount())
         ]
@@ -205,14 +223,8 @@ class TestSpool:
 
     def test_duration_display_is_human_readable(self, spool_widget, qtbot):
         """Duration cell contains a human-readable unit string, not raw nanoseconds."""
-        spool_widget.spool_input = "example_event_2"
-        _run_and_wait(spool_widget, qtbot)
-        model = spool_widget._table.model()
-        col = next(
-            i
-            for i in range(model.columnCount())
-            if model.headerData(i, Qt.Horizontal) == "Duration"
-        )
+        model = _load_example_table_model(spool_widget, qtbot)
+        col = _column_index(model, "Duration")
         display = model.data(model.index(0, col), Qt.ItemDataRole.DisplayRole)
         # Should contain a unit abbreviation, not a raw integer
         assert any(unit in display for unit in ("ns", "µs", "ms", " s", " m", " h"))
@@ -220,23 +232,15 @@ class TestSpool:
 
     def test_duration_sort_value_is_numeric(self, spool_widget, qtbot):
         """Duration UserRole is an integer nanosecond value for table sorting."""
-        spool_widget.spool_input = "example_event_2"
-        _run_and_wait(spool_widget, qtbot)
-        model = spool_widget._table.model()
-        col = next(
-            i
-            for i in range(model.columnCount())
-            if model.headerData(i, Qt.Horizontal) == "Duration"
-        )
+        model = _load_example_table_model(spool_widget, qtbot)
+        col = _column_index(model, "Duration")
         sort_val = model.data(model.index(0, col), Qt.ItemDataRole.UserRole)
         assert isinstance(sort_val, int)
         assert sort_val > 0
 
     def test_duration_column_position_is_after_time_max(self, spool_widget, qtbot):
         """Duration column immediately follows Time Max in the table."""
-        spool_widget.spool_input = "example_event_2"
-        _run_and_wait(spool_widget, qtbot)
-        model = spool_widget._table.model()
+        model = _load_example_table_model(spool_widget, qtbot)
         headers = [
             model.headerData(i, Qt.Horizontal) for i in range(model.columnCount())
         ]
@@ -462,14 +466,15 @@ class TestSpool:
         assert spool_widget.file_path_edit.text() == ""
         assert spool_widget.raw_edit.text() == ""
 
-    def test_select_path_input_uses_dialog_selected_file(
-        self, spool_widget, monkeypatch
+    @pytest.mark.parametrize("selected_path", ["/tmp/selected.h5", "/tmp/data-dir"])
+    def test_select_path_input_uses_dialog_selected_path(
+        self, spool_widget, monkeypatch, selected_path
     ):
-        """Open selector stores chosen file path and clears other inputs."""
+        """Open selector stores the chosen path and clears other inputs."""
         monkeypatch.setattr(
             spool_widget,
             "_open_path_dialog",
-            lambda: "/tmp/selected.h5",
+            lambda: selected_path,
         )
         called = []
         monkeypatch.setattr(spool_widget, "run", lambda: called.append(True))
@@ -479,31 +484,8 @@ class TestSpool:
         spool_widget.spool_input = spool_widget._examples[0]
         spool_widget._select_path_input()
 
-        assert spool_widget.file_input == "/tmp/selected.h5"
-        assert spool_widget.file_path_edit.text() == "/tmp/selected.h5"
-        assert spool_widget.raw_input == ""
-        assert spool_widget.spool_input is None
-        assert called == [True]
-
-    def test_select_path_input_uses_dialog_selected_directory(
-        self, spool_widget, monkeypatch
-    ):
-        """Open selector stores chosen folder path and clears other inputs."""
-        monkeypatch.setattr(
-            spool_widget,
-            "_open_path_dialog",
-            lambda: "/tmp/data-dir",
-        )
-        called = []
-        monkeypatch.setattr(spool_widget, "run", lambda: called.append(True))
-
-        spool_widget.raw_input = "raw://source"
-        spool_widget.raw_edit.setText("raw://source")
-        spool_widget.spool_input = spool_widget._examples[0]
-        spool_widget._select_path_input()
-
-        assert spool_widget.file_input == "/tmp/data-dir"
-        assert spool_widget.file_path_edit.text() == "/tmp/data-dir"
+        assert spool_widget.file_input == selected_path
+        assert spool_widget.file_path_edit.text() == selected_path
         assert spool_widget.raw_input == ""
         assert spool_widget.spool_input is None
         assert called == [True]
@@ -997,6 +979,100 @@ class TestSpool:
         assert len(list(out)) == 1
         assert next(iter(out)).attrs.tag == "second"
 
+    def test_selected_row_token_uses_contents_only(self, spool_widget):
+        """Persisting selection metadata should not iterate patches on the UI thread."""
+
+        class _FakeSpool:
+            def __iter__(self):
+                raise AssertionError("patch iteration should not happen here")
+
+            def get_contents(self):
+                return pd.DataFrame(
+                    [
+                        {"path": "/tmp/b_patch.h5", "tag": "b"},
+                        {"path": "/tmp/a_patch.h5", "tag": "a"},
+                    ]
+                )
+
+        spool_widget._source_spool = _FakeSpool()
+
+        token = spool_widget._patch_name_for_source_row(1)
+
+        assert token == "path:a_patch"
+
+    def test_restore_source_row_uses_contents_only(self, spool_widget):
+        """Restoring a persisted selection token should not iterate patches."""
+
+        class _FakeSpool:
+            def __iter__(self):
+                raise AssertionError("patch iteration should not happen here")
+
+            def get_contents(self):
+                return pd.DataFrame(
+                    [
+                        {"path": "/tmp/b_patch.h5", "tag": "b"},
+                        {"path": "/tmp/a_patch.h5", "tag": "a"},
+                    ]
+                )
+
+        spool_widget._source_spool = _FakeSpool()
+
+        restored = spool_widget._source_row_for_patch_name("path:a_patch")
+
+        assert restored == 1
+
+    def test_selected_output_spool_uses_indexing_not_iteration(self):
+        """Selected rows should become a subspool without iterating the whole spool."""
+
+        class _FakeDirectorySpool(DirectorySpool):
+            def __init__(self):
+                pass
+
+            def __iter__(self):
+                raise AssertionError("patch iteration should not happen here")
+
+            def get_contents(self):
+                return pd.DataFrame(
+                    [
+                        {"path": "/tmp/b_patch.h5", "tag": "b"},
+                        {"path": "/tmp/a_patch.h5", "tag": "a"},
+                    ]
+                )
+
+            def __getitem__(self, item):
+                assert isinstance(item, np.ndarray)
+                return ("subset", tuple(int(x) for x in item.tolist()))
+
+        result = Spool._spool_rows_to_output(_FakeDirectorySpool(), {0})
+
+        assert result == ("subset", (1,))
+
+    def test_selected_patch_rows_use_indexing_not_iteration(self):
+        """Single-patch extraction should only read the selected patch row."""
+
+        class _FakeDirectorySpool(DirectorySpool):
+            def __init__(self):
+                pass
+
+            def __iter__(self):
+                raise AssertionError("patch iteration should not happen here")
+
+            def get_contents(self):
+                return pd.DataFrame(
+                    [
+                        {"path": "/tmp/b_patch.h5", "tag": "b"},
+                        {"path": "/tmp/a_patch.h5", "tag": "a"},
+                    ]
+                )
+
+            def __getitem__(self, item):
+                assert isinstance(item, int)
+                return f"patch-{item}"
+
+        patches = _spool_rows_to_patches(_FakeDirectorySpool(), {0})
+
+        assert patches == ["patch-1"]
+
     def test_row_selection_emits_once_after_multiple_runs(
         self, spool_widget, monkeypatch, qtbot
     ):
@@ -1431,6 +1507,35 @@ class TestSpool:
 
         assert _spool_tags(spool_widget._current_spool) == ["first", "second"]
         assert _spool_tags(spool_widget._display_spool) == ["derived-only"]
+
+    def test_recompute_display_applies_select_before_chunk(
+        self, spool_widget, monkeypatch
+    ):
+        """Display transforms should narrow the spool before chunking it."""
+        base = dc.spool([_patch_with_tag("first")])
+        selected = dc.spool([_patch_with_tag("selected")])
+        chunked = dc.spool([_patch_with_tag("chunked")])
+        calls: list[tuple[str, object]] = []
+
+        def _select(spool):
+            calls.append(("select", spool))
+            assert spool is base
+            return selected
+
+        def _chunk(spool):
+            calls.append(("chunk", spool))
+            assert spool is selected
+            return chunked
+
+        spool_widget._source_spool = base
+        monkeypatch.setattr(spool_widget, "_apply_select_transform", _select)
+        monkeypatch.setattr(spool_widget, "_apply_chunk_transform", _chunk)
+        monkeypatch.setattr(spool_widget, "_render_spool", lambda spool: None)
+
+        spool_widget._recompute_display_spool()
+
+        assert calls == [("select", base), ("chunk", selected)]
+        assert spool_widget._display_spool is chunked
 
 
 class TestSpoolDefaults(TestWidgetDefaults):

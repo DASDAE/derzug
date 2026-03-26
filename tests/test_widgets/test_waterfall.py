@@ -296,7 +296,7 @@ def _build_point_annotation_set(patch: dc.Patch) -> AnnotationSet:
 def _double_click_viewport_point(
     waterfall_widget: Waterfall, *, x_index: int, y_index: int
 ) -> None:
-    """Create one point annotation via a real viewport double-click."""
+    """Create one point annotation via the real viewport point-preview gesture."""
     axes = waterfall_widget._axes
     assert axes is not None
     waterfall_widget._annotation_tool = "point"
@@ -305,6 +305,12 @@ def _double_click_viewport_point(
     )
     viewport_pos = waterfall_widget._plot_widget.mapFromScene(scene_pos)
     QTest.mouseDClick(
+        waterfall_widget._plot_widget.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        viewport_pos,
+    )
+    QTest.mouseClick(
         waterfall_widget._plot_widget.viewport(),
         Qt.MouseButton.LeftButton,
         Qt.KeyboardModifier.NoModifier,
@@ -412,6 +418,19 @@ class TestWaterfall:
 
         assert waterfall_widget._annotation_toolbox.isVisible() is False
         assert waterfall_widget._toggle_annotations_action.isChecked() is False
+
+    def test_opening_annotation_toolbox_defaults_to_annotation_selection(
+        self, waterfall_widget
+    ):
+        """Showing the toolbox should switch into explicit annotation selection."""
+        waterfall_widget._toggle_annotation_toolbox(True)
+
+        assert waterfall_widget._annotation_toolbox.isVisible() is True
+        assert waterfall_widget._annotation_tool == "annotation_select"
+        assert waterfall_widget._overlay_mode == "annotate"
+        assert waterfall_widget._annotation_toolbox.tool_buttons[
+            "annotation_select"
+        ].isChecked()
 
     def test_patch_is_forwarded(self, waterfall_widget, monkeypatch):
         """Input patch is emitted unchanged on the output signal."""
@@ -985,8 +1004,8 @@ class TestWaterfall:
         assert waterfall_widget._annotation_set is not None
         assert waterfall_widget._annotation_set.annotations == ()
 
-    def test_point_tool_double_click_creates_annotation(self, waterfall_widget):
-        """Double-click in point mode should place one point annotation."""
+    def test_point_tool_double_click_starts_floating_preview(self, waterfall_widget):
+        """Double-click in point mode should start a floating point preview."""
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
         axes = waterfall_widget._axes
@@ -1005,6 +1024,50 @@ class TestWaterfall:
 
         assert handled is True
         assert waterfall_widget._annotation_set is not None
+        assert waterfall_widget._annotation_set.annotations == ()
+        assert waterfall_widget._annotation_controller.draw_start is not None
+        assert waterfall_widget._annotation_controller.preview_item is not None
+
+    def test_point_tool_places_annotation_on_click_after_preview(
+        self, waterfall_widget
+    ):
+        """A floating point preview should place on the next left click."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        waterfall_widget._annotation_tool = "point"
+        start_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(float(axes.x_plot[150]), float(axes.y_plot[150]))
+        )
+        end_scene = waterfall_widget._plot_item.vb.mapViewToScene(
+            QPointF(float(axes.x_plot[170]), float(axes.y_plot[165]))
+        )
+
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseDoubleClick,
+                start_scene.x(),
+                start_scene.y(),
+            )
+        )
+        assert waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMouseMove,
+                end_scene.x(),
+                end_scene.y(),
+            )
+        )
+
+        handled = waterfall_widget._annotation_controller.handle_scene_event(
+            _FakeSceneEvent(
+                QEvent.Type.GraphicsSceneMousePress,
+                end_scene.x(),
+                end_scene.y(),
+            )
+        )
+
+        assert handled is True
+        assert waterfall_widget._annotation_set is not None
         assert len(waterfall_widget._annotation_set.annotations) == 1
         assert waterfall_widget._annotation_set.annotations[0].geometry.type == "point"
 
@@ -1015,10 +1078,7 @@ class TestWaterfall:
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
         axes = waterfall_widget._axes
-        waterfall_widget._toggle_annotation_toolbox(True)
-        waterfall_widget._annotation_controller.enter_annotation_selection_mode(
-            notify=False
-        )
+        waterfall_widget._annotation_tool = "annotation_select"
         scene_pos = waterfall_widget._plot_item.vb.mapViewToScene(
             QPointF(float(axes.x_plot[150]), float(axes.y_plot[150]))
         )
@@ -1033,7 +1093,7 @@ class TestWaterfall:
         )
 
         assert handled is True
-        assert waterfall_widget._annotation_tool is None
+        assert waterfall_widget._annotation_tool == "annotation_select"
         assert waterfall_widget._annotation_set is not None
         assert len(waterfall_widget._annotation_set.annotations) == 1
         assert waterfall_widget._annotation_set.annotations[0].geometry.type == "point"
@@ -1059,14 +1119,22 @@ class TestWaterfall:
                 scene_pos = first._plot_item.vb.mapViewToScene(
                     QPointF(float(axes.x_plot[x_index]), float(axes.y_plot[y_index]))
                 )
-                handled = first._annotation_controller.handle_scene_event(
+                started = first._annotation_controller.handle_scene_event(
                     _FakeSceneEvent(
                         QEvent.Type.GraphicsSceneMouseDoubleClick,
                         scene_pos.x(),
                         scene_pos.y(),
                     )
                 )
-                assert handled is True
+                placed = first._annotation_controller.handle_scene_event(
+                    _FakeSceneEvent(
+                        QEvent.Type.GraphicsSceneMousePress,
+                        scene_pos.x(),
+                        scene_pos.y(),
+                    )
+                )
+                assert started is True
+                assert placed is True
 
             assert first._annotation_set is not None
             assert len(first._annotation_set.annotations) == 3
@@ -1177,6 +1245,7 @@ class TestWaterfall:
         qtbot.wait(10)
 
         assert waterfall_widget._active_annotation_id == first_id
+        waterfall_widget._annotation_tool = "annotation_select"
 
         active_item = waterfall_widget._annotation_items[first_id]
         before = waterfall_widget._annotation_set.annotations[0].geometry.values
@@ -1717,6 +1786,7 @@ class TestWaterfall:
     ):
         """Waterfall should present annotation tools in the requested working order."""
         assert tuple(waterfall_widget._annotation_toolbox.tool_buttons) == (
+            "annotation_select",
             "point",
             "line",
             "box",
@@ -3615,6 +3685,72 @@ class TestWaterfall:
 
         assert waterfall_widget._roi is None
 
+    def test_delete_key_from_widget_clears_handle_focused_roi(
+        self, waterfall_widget, qtbot
+    ):
+        """Delete should remove the ROI even when one resize handle has focus."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        waterfall_widget._annotation_tool = "select"
+        waterfall_widget._create_selection_roi(
+            center_x=float((axes.x_plot[0] + axes.x_plot[-1]) / 2),
+            center_y=float((axes.y_plot[0] + axes.y_plot[-1]) / 2),
+        )
+        roi = waterfall_widget._roi
+        assert roi is not None
+
+        handle = roi.getHandles()[0]
+        roi.setSelected(True)
+        scene = waterfall_widget._plot_widget.scene()
+        scene.setFocusItem(handle)
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+
+        QTest.keyClick(waterfall_widget, Qt.Key_Delete)
+
+        assert waterfall_widget._roi is None
+
+    def test_delete_key_from_widget_clears_unfocused_visible_roi(
+        self, waterfall_widget, qtbot
+    ):
+        """Delete should remove the active selection ROI without extra focus steps."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        waterfall_widget._annotation_tool = "select"
+        waterfall_widget._create_selection_roi(
+            center_x=float((axes.x_plot[0] + axes.x_plot[-1]) / 2),
+            center_y=float((axes.y_plot[0] + axes.y_plot[-1]) / 2),
+        )
+        assert waterfall_widget._roi is not None
+
+        waterfall_widget.setFocus()
+        qtbot.wait(10)
+
+        QTest.keyClick(waterfall_widget, Qt.Key_Delete)
+
+        assert waterfall_widget._roi is None
+
+    def test_viewport_delete_shortcut_clears_visible_roi(self, waterfall_widget, qtbot):
+        """Delete from the focused plot viewport should remove the active ROI."""
+        patch = dc.get_example_patch("example_event_2")
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        waterfall_widget._annotation_tool = "select"
+        waterfall_widget._create_selection_roi(
+            center_x=float((axes.x_plot[0] + axes.x_plot[-1]) / 2),
+            center_y=float((axes.y_plot[0] + axes.y_plot[-1]) / 2),
+        )
+        assert waterfall_widget._roi is not None
+
+        waterfall_widget._plot_widget.viewport().setFocus()
+        qtbot.wait(10)
+
+        QTest.keyClick(waterfall_widget._plot_widget.viewport(), Qt.Key_Delete)
+
+        assert waterfall_widget._roi is None
+
     def test_backspace_clears_focused_roi(self, waterfall_widget, monkeypatch):
         """Backspace removes the ROI when it has focus and restores full output."""
         received = _capture_patch_output(waterfall_widget, monkeypatch)
@@ -3694,10 +3830,10 @@ class TestWaterfall:
         assert not roi.isSelected()
         assert waterfall_widget.hasFocus()
 
-    def test_escape_from_point_tool_switches_to_annotation_select(
+    def test_escape_from_point_tool_clears_active_annotation_mode(
         self, waterfall_widget, qtbot
     ):
-        """Escape should leave point placement and return to annotation selection."""
+        """Escape should leave point placement and clear the active annotation mode."""
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
         waterfall_widget._annotation_tool = "point"
@@ -3792,10 +3928,9 @@ class TestWaterfall:
         roi = waterfall_widget._roi
 
         assert roi is not None
-        assert not any(
-            button.isChecked()
-            for button in waterfall_widget._annotation_toolbox.tool_buttons.values()
-        )
+        assert waterfall_widget._annotation_toolbox.tool_buttons[
+            "annotation_select"
+        ].isChecked()
 
         waterfall_widget.setFocus()
         qtbot.wait(10)

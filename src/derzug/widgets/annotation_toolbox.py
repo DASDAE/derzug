@@ -17,6 +17,10 @@ from AnyQt.QtWidgets import (
 
 _ANNOTATION_ICON_DIR = Path(__file__).resolve().parent / "icons" / "annotations"
 _TOOL_METADATA = {
+    "annotation_select": (
+        "Arrow tool. Click annotations to select them or drag a box to select many.",
+        "pointer",
+    ),
     "point": (
         "Point annotation. Double-click or Shift+click to place. "
         "Double-click an annotation to edit.",

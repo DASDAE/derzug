@@ -13,7 +13,7 @@ import dascore as dc
 import numpy as np
 import pyqtgraph as pg
 from AnyQt.QtCore import QRectF, Qt, QTimer
-from AnyQt.QtGui import QIcon
+from AnyQt.QtGui import QIcon, QKeySequence
 from AnyQt.QtWidgets import (
     QAction,
     QComboBox,
@@ -23,6 +23,7 @@ from AnyQt.QtWidgets import (
     QMenu,
     QMenuBar,
     QPushButton,
+    QShortcut,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -66,6 +67,15 @@ class _AxisState:
     y_plot: np.ndarray
     x_coord: np.ndarray  # original coordinate values used by patch.select
     y_coord: np.ndarray
+
+
+@dataclass
+class _PreparedPatchRender:
+    """Cached render-time arrays for the current patch."""
+
+    data: np.ndarray
+    display_data: np.ndarray
+    axes: _AxisState
 
 
 class _SelectionROI(pg.ROI):
@@ -295,6 +305,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._pending_saved_annotation_set = self._load_saved_annotation_state()
         self._pending_saved_view_range = self._load_saved_view_range()
         self._patch: dc.Patch | None = None
+        self._prepared_render: _PreparedPatchRender | None = None
         self._pending_view_range: (
             tuple[tuple[float, float], tuple[float, float]] | None
         ) = None
@@ -394,6 +405,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._annotation_controller = AnnotationOverlayController(
             self,
             tools=(
+                "annotation_select",
                 "point",
                 "line",
                 "box",
@@ -421,6 +433,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._apply_colormap(self.colormap)
         self._set_overlay_mode("select")
         self._install_view_menu_actions()
+        self._install_delete_shortcuts()
         self._open_annotations_button.setChecked(not self._annotation_toolbox_hidden)
         self._toggle_annotations_action.setChecked(not self._annotation_toolbox_hidden)
 
@@ -472,23 +485,48 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             and self._roi is not None
             and event.key() in (Qt.Key_Delete, Qt.Key_Backspace)
         ):
-            scene = self._plot_widget.scene()
-            focus_item = scene.focusItem() if scene is not None else None
-            if focus_item is self._roi or self._roi.isSelected():
-                self._delete_active_roi()
-                event.accept()
-                return True
+            self._delete_active_roi()
+            event.accept()
+            return True
         return False
 
+    def _install_delete_shortcuts(self) -> None:
+        """Catch Delete/Backspace even when the focused child is the plot viewport."""
+        self._delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self)
+        self._delete_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._delete_shortcut.activated.connect(self._on_delete_shortcut)
+        self._backspace_shortcut = QShortcut(QKeySequence(Qt.Key_Backspace), self)
+        self._backspace_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._backspace_shortcut.activated.connect(self._on_delete_shortcut)
+
+    def _on_delete_shortcut(self) -> None:
+        """Remove the active selection ROI from a child-focus shortcut."""
+        if self._annotation_controller.interactive:
+            active_annotation_id = self._annotation_controller.active_annotation_id
+            selected_annotation_ids = set(
+                self._annotation_controller.selected_annotation_ids
+            )
+            if active_annotation_id is not None:
+                self._annotation_controller.delete_annotation(active_annotation_id)
+                self._mark_output_dirty("annotation_set")
+                return
+            if selected_annotation_ids:
+                for annotation_id in tuple(selected_annotation_ids):
+                    self._annotation_controller.delete_annotation(annotation_id)
+                self._mark_output_dirty("annotation_set")
+                return
+        if self._overlay_mode == "select" and self._roi is not None:
+            self._delete_active_roi()
+
     def _deactivate_selection_roi(self) -> None:
-        """Clear ROI focus and return to implicit annotation-selection mode."""
+        """Clear ROI focus and restore the default mode for toolbox visibility."""
         if self._roi is not None:
             self._roi.clearFocus()
             self._roi.setSelected(False)
             scene = self._plot_widget.scene()
             if scene is not None and scene.focusItem() is self._roi:
                 scene.setFocusItem(None)
-        self._annotation_controller.enter_annotation_selection_mode(notify=False)
+        self._restore_default_interaction_mode()
 
     def _cancel_active_interactions(self) -> None:
         """Cancel active annotation draws and selection-focused overlay state."""
@@ -527,8 +565,10 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         }
         self._patch = patch
         self._update_axis_state_from_patch(patch)
-        if patch is not None and np.asarray(patch.data).ndim == 2:
-            y_dim, x_dim = patch.dims
+        prepared = self._prepared_render
+        if prepared is not None:
+            x_dim = prepared.axes.x_dim
+            y_dim = prepared.axes.y_dim
             self._selection_set_preferred_patch_dims((x_dim, y_dim))
         else:
             self._selection_set_preferred_patch_dims(())
@@ -572,6 +612,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
     def _update_axis_state_from_patch(self, patch: dc.Patch | None) -> None:
         """Precompute axis metadata without forcing an immediate render."""
         if patch is None:
+            self._prepared_render = None
             self._axes = None
             self._axis_kinds = {"bottom": "numeric", "left": "numeric"}
             return
@@ -580,12 +621,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             data = np.asarray(patch.data)
             if data.ndim != 2:
                 raise ValueError(f"expected 2D data, got shape {data.shape}")
+            display_data = np.abs(data) if np.iscomplexobj(data) else data
             y_dim, x_dim = patch.dims
             x_coord_values = np.asarray(patch.get_array(x_dim))
             y_coord_values = np.asarray(patch.get_array(y_dim))
             x_axis = build_plot_axis_spec(x_coord_values)
             y_axis = build_plot_axis_spec(y_coord_values)
-            self._axes = _AxisState(
+            axes = _AxisState(
                 x_dim=x_dim,
                 y_dim=y_dim,
                 x_plot=x_axis.plot_values,
@@ -593,8 +635,15 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
                 x_coord=x_coord_values,
                 y_coord=y_coord_values,
             )
+            self._prepared_render = _PreparedPatchRender(
+                data=data,
+                display_data=display_data,
+                axes=axes,
+            )
+            self._axes = axes
             self._axis_kinds = {"bottom": x_axis.kind, "left": y_axis.kind}
         except Exception:
+            self._prepared_render = None
             self._axes = None
             self._axis_kinds = {"bottom": "numeric", "left": "numeric"}
 
@@ -611,9 +660,11 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         if value == "annotation_select":
             self._toggle_annotation_toolbox(True)
             self._annotation_controller.enter_annotation_selection_mode(notify=False)
+            self._sync_overlay_mode_from_annotation_tool()
             return
         self._toggle_annotation_toolbox(True)
         self._annotation_controller.set_tool(value)
+        self._sync_overlay_mode_from_annotation_tool()
 
     @property
     def _annotation_layer_active(self) -> bool:
@@ -742,7 +793,15 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         return self._annotation_controller.edit_annotation(annotation_id)
 
     def _activate_annotation_layer(self) -> None:
-        self._toggle_annotation_toolbox(True)
+        if self._annotation_toolbox_hidden:
+            self._annotation_controller.show_toolbox()
+            action = getattr(self, "_toggle_annotations_action", None)
+            if action is not None and not action.isChecked():
+                action.setChecked(True)
+            btn = getattr(self, "_open_annotations_button", None)
+            if btn is not None and not btn.isChecked():
+                btn.setChecked(True)
+        self._set_overlay_mode("annotate")
 
     def _hide_annotation_toolbox(self) -> None:
         self._toggle_annotation_toolbox(False)
@@ -814,14 +873,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
     def _reset_histogram_levels_to_default(self) -> None:
         """Reset the histogram levels using DASCore's default waterfall scaling."""
-        if self._patch is None:
+        prepared = self._prepared_render
+        if prepared is None:
             return
-        data = np.asarray(self._patch.data)
-        if data.ndim != 2 or data.size == 0:
+        if prepared.data.size == 0:
             return
-        display_data = np.abs(data) if np.iscomplexobj(data) else data
         self.color_limits = None
-        self._apply_default_levels(display_data)
+        self._apply_default_levels(prepared.display_data)
 
     @contextmanager
     def _suspend_level_persistence(self):
@@ -854,6 +912,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         """Render the current patch in the pyqtgraph image view."""
         self.Error.clear()
         if self._patch is None:
+            self._prepared_render = None
             self._image_item.clear()
             self._plot_item.setTitle("No patch")
             self._axes = None
@@ -864,20 +923,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             return
 
         try:
-            data = np.asarray(self._patch.data)
-            if data.ndim != 2:
-                raise ValueError(f"expected 2D data, got shape {data.shape}")
-            # Pyqtgraph's image histogram does not accept complex-valued arrays;
-            # display magnitude while preserving the original patch for output.
-            display_data = np.abs(data) if np.iscomplexobj(data) else data
-
-            y_dim, x_dim = self._patch.dims
-            x_coord_values = np.asarray(self._patch.get_array(x_dim))
-            y_coord_values = np.asarray(self._patch.get_array(y_dim))
-            x_axis = build_plot_axis_spec(x_coord_values)
-            y_axis = build_plot_axis_spec(y_coord_values)
-            x_values = x_axis.plot_values
-            y_values = y_axis.plot_values
+            prepared = self._prepared_render
+            if prepared is None:
+                raise ValueError("expected 2D data, got no prepared render state")
+            display_data = prepared.display_data
+            axes = prepared.axes
+            x_values = axes.x_plot
+            y_values = axes.y_plot
             preserve_view = self._view_range_contains_data(
                 view_range, x_values, y_values
             )
@@ -897,19 +949,11 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
                 y_step * display_data.shape[0],
             )
             self._image_item.setRect(rect)
-            self._axes = _AxisState(
-                x_dim=x_dim,
-                y_dim=y_dim,
-                x_plot=x_values,
-                y_plot=y_values,
-                x_coord=x_coord_values,
-                y_coord=y_coord_values,
-            )
-            self._axis_kinds = {"bottom": x_axis.kind, "left": y_axis.kind}
-            ensure_axis_item(self._plot_item, "bottom", x_axis.kind)
-            ensure_axis_item(self._plot_item, "left", y_axis.kind)
+            self._axes = axes
+            ensure_axis_item(self._plot_item, "bottom", self._axis_kinds["bottom"])
+            ensure_axis_item(self._plot_item, "left", self._axis_kinds["left"])
             self._refresh_axis_labels()
-            self._plot_item.setTitle(f"{y_dim} x {x_dim}")
+            self._plot_item.setTitle(f"{axes.y_dim} x {axes.x_dim}")
             if self._force_preserve_pending_view_range and preserve_view:
                 self._plot_item.vb.disableAutoRange()
                 self._plot_item.vb.setRange(
@@ -1092,11 +1136,12 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
     def _update_cursor_readout(self, *, plot_x: float, plot_y: float) -> None:
         """Show the nearest plotted sample and value under the cursor."""
-        if self._patch is None or self._axes is None:
+        prepared = self._prepared_render
+        if prepared is None or self._axes is None:
             self._set_cursor_readout(None)
             return
-        data = np.asarray(self._patch.data)
-        if data.ndim != 2 or data.size == 0:
+        data = prepared.data
+        if data.size == 0:
             self._set_cursor_readout(None)
             return
         x_index = self._nearest_axis_index(plot_x, self._axes.x_plot)
@@ -1159,7 +1204,8 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             self._annotation_controller.enter_annotation_selection_mode(notify=False)
         else:
             self._annotation_controller.hide_toolbox()
-        self._set_overlay_mode("annotate" if visible else "select")
+            self._annotation_controller.clear_active_tool(notify=False)
+        self._sync_overlay_mode_from_annotation_tool()
         action = getattr(self, "_toggle_annotations_action", None)
         if action is not None and action.isChecked() != visible:
             action.setChecked(visible)
@@ -1175,9 +1221,20 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
     def _on_overlay_tool_changed(self, tool: str) -> None:
         """Keep the interaction mode aligned with toolbox visibility."""
         _ = tool
-        self._set_overlay_mode(
-            "annotate" if not self._annotation_toolbox_hidden else "select"
-        )
+        self._sync_overlay_mode_from_annotation_tool()
+
+    def _restore_default_interaction_mode(self) -> None:
+        """Restore the default mode implied by the annotation toolbox state."""
+        if self._annotation_toolbox_hidden:
+            self._annotation_controller.clear_active_tool(notify=False)
+        else:
+            self._annotation_controller.clear_active_tool(notify=False)
+        self._sync_overlay_mode_from_annotation_tool()
+
+    def _sync_overlay_mode_from_annotation_tool(self) -> None:
+        """Keep plot interaction in sync with the active annotation tool."""
+        annotate = not self._annotation_toolbox_hidden
+        self._set_overlay_mode("annotate" if annotate else "select")
 
     def _set_overlay_mode(self, mode: str) -> None:
         """Switch between selection-ROI and annotation interaction."""

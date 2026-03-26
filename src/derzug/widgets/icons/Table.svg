@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <!-- Outer border -->
+  <rect x="5" y="7" width="38" height="34" rx="3" fill="#ffffff" stroke="#333333" stroke-width="2.5"/>
+  <!-- Header fill -->
+  <rect x="6.3" y="8.3" width="35.4" height="8" fill="#333333" rx="1.5"/>
+  <!-- Horizontal row dividers -->
+  <line x1="5" y1="25" x2="43" y2="25" stroke="#333333" stroke-width="1.5"/>
+  <line x1="5" y1="33" x2="43" y2="33" stroke="#333333" stroke-width="1.5"/>
+  <!-- Vertical column dividers (4 columns) -->
+  <line x1="15" y1="8" x2="15" y2="41" stroke="#333333" stroke-width="1.5"/>
+  <line x1="24" y1="8" x2="24" y2="41" stroke="#333333" stroke-width="1.5"/>
+  <line x1="33" y1="8" x2="33" y2="41" stroke="#333333" stroke-width="1.5"/>
+</svg>

@@ -69,6 +69,12 @@ class TestAnnotationsWidget:
             Qt.KeyboardModifier.NoModifier,
             viewport_pos,
         )
+        QTest.mouseClick(
+            waterfall._plot_widget.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            viewport_pos,
+        )
 
     def test_widget_instantiates(self, widget):
         """Widget initializes with an in-memory store and empty table."""

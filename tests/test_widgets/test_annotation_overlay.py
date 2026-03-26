@@ -456,8 +456,20 @@ def test_annotation_select_tool_starts_background_selection_drag(overlay_host):
     press = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress)
 
     assert controller.handle_scene_event(press) is True
+    assert controller.tool_buttons["annotation_select"].isChecked() is True
     assert controller.draw_start is not None
     assert controller.preview_item is not None
+
+
+def test_neutral_tool_state_does_not_start_annotation_selection_drag(overlay_host):
+    """No active annotation tool should leave selection gestures disabled."""
+    _host, controller = overlay_host
+    controller.clear_active_tool()
+    press = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress)
+
+    assert controller.handle_scene_event(press) is False
+    assert controller.draw_start is None
+    assert not any(button.isChecked() for button in controller.tool_buttons.values())
 
 
 def test_annotation_select_drag_box_selects_and_highlights_matching_items(overlay_host):
@@ -524,8 +536,8 @@ def test_labeled_annotations_use_slot_colors(overlay_host):
     assert second_color != third_color
 
 
-def test_point_tool_requires_double_click_to_create_annotation(overlay_host):
-    """Point placement should happen only on background double-click."""
+def test_point_tool_double_click_starts_floating_preview(overlay_host):
+    """Point placement should start a floating preview on background double-click."""
     _host, controller = overlay_host
     controller.set_tool("point")
     press = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress)
@@ -537,9 +549,34 @@ def test_point_tool_requires_double_click_to_create_annotation(overlay_host):
     assert controller.annotation_set is None
 
     assert controller.handle_scene_event(double_click) is True
+    assert controller.annotation_set is None
+    assert controller.draw_start is not None
+    assert controller.preview_item is not None
+    assert double_click.accepted is True
+
+
+def test_point_tool_places_annotation_on_click_after_preview(overlay_host):
+    """A point preview should follow the cursor until the next left click places it."""
+    _host, controller = overlay_host
+    controller.set_tool("point")
+    start_scene = controller._host._plot_item.vb.mapViewToScene(pg.Point(1.0, 11.0))
+    end_scene = controller._host._plot_item.vb.mapViewToScene(pg.Point(2.0, 12.0))
+
+    assert controller.handle_scene_event(
+        _FakeSceneEvent(
+            QEvent.Type.GraphicsSceneMouseDoubleClick, scene_pos=start_scene
+        )
+    )
+    assert controller.handle_scene_event(
+        _FakeSceneEvent(QEvent.Type.GraphicsSceneMouseMove, scene_pos=end_scene)
+    )
+
+    assert controller.handle_scene_event(
+        _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress, scene_pos=end_scene)
+    )
     assert controller.annotation_set is not None
     assert len(controller.annotation_set.annotations) == 1
-    assert double_click.accepted is True
+    assert controller.annotation_set.annotations[0].geometry.type == "point"
 
 
 def test_shift_click_point_tool_creates_annotation_without_double_click(overlay_host):
@@ -1288,12 +1325,14 @@ def test_release_over_selected_hyperbola_does_not_clear_active_handles(overlay_h
 
 
 def test_point_annotation_created_on_double_click(overlay_host):
-    """Point tool should create the annotation on mouse double-click."""
+    """Point tool should create the annotation after preview start and placement."""
     _host, controller = overlay_host
     controller.set_tool("point")
-    release = _FakeSceneEvent(QEvent.Type.GraphicsSceneMouseDoubleClick)
+    start = _FakeSceneEvent(QEvent.Type.GraphicsSceneMouseDoubleClick)
+    place = _FakeSceneEvent(QEvent.Type.GraphicsSceneMousePress)
 
-    assert controller.handle_scene_event(release) is True
+    assert controller.handle_scene_event(start) is True
+    assert controller.handle_scene_event(place) is True
     assert len(controller.annotation_set.annotations) == 1
     assert controller.annotation_set.annotations[0].geometry.type == "point"
 
