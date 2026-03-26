@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
@@ -38,6 +39,34 @@ DEFAULT_SCRIPT = """def transform(patch):
     \"\"\"Return the value to emit from this widget.\"\"\"
     return patch
 """
+
+logger = logging.getLogger(__name__)
+
+
+class _FallbackPythonEditor(QPlainTextEdit):
+    """Minimal editor used when Orange's rich Python editor is unavailable."""
+
+    auto_invoke_completions = False
+    dot_invoke_completions = False
+
+    def setup_completer_appearance(self, *_args, **_kwargs) -> None:
+        """Match PythonEditor API without enabling completion UI."""
+        return None
+
+
+def _create_editor(parent: QWidget) -> QPlainTextEdit:
+    """Create the preferred code editor, falling back on Qt binding mismatch."""
+    try:
+        return PythonEditor(parent)
+    except TypeError as exc:
+        if "QSyntaxHighlighter" not in str(exc):
+            raise
+        logger.warning(
+            "Falling back to plain text code editor because PythonEditor "
+            "failed to initialize: %s",
+            exc,
+        )
+        return _FallbackPythonEditor(parent)
 
 
 class Code(ZugWidget):
@@ -95,7 +124,7 @@ class Code(ZugWidget):
         self._splitter = QSplitter(Qt.Vertical, container)
         layout.addWidget(self._splitter, 1)
 
-        self._editor = PythonEditor(self._splitter)
+        self._editor = _create_editor(self._splitter)
         self._editor.setPlaceholderText("Write Python here")
         self._editor.setPlainText(self.script_text)
         self._editor.setFocusPolicy(Qt.ClickFocus)

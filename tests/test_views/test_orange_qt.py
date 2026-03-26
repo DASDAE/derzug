@@ -157,6 +157,33 @@ def _dispatch_mouse_event(
     QApplication.sendEvent(widget, event)
 
 
+class _SipModuleWrongWrapper:
+    """Stub SIP module that rejects one wrapper family."""
+
+    @staticmethod
+    def isdeleted(obj):
+        raise TypeError(
+            "isdeleted() argument 1 must be PyQt6.sip.simplewrapper, "
+            f"not {type(obj).__name__}"
+        )
+
+
+class _SipModuleAlive:
+    """Stub SIP module that accepts the wrapper and reports it alive."""
+
+    @staticmethod
+    def isdeleted(obj):
+        return False
+
+
+class _SipModuleDeleted:
+    """Stub SIP module that accepts the wrapper and reports it deleted."""
+
+    @staticmethod
+    def isdeleted(obj):
+        return True
+
+
 @contextmanager
 def _fresh_derzug_window(qapp, tmp_path):
     """Yield a freshly constructed DerZug main window for cold-reopen tests."""
@@ -2687,3 +2714,29 @@ class TestDerZugMainTeardown:
 
         main.tear_down_sys_redirections()
         main.tear_down_sys_redirections()
+
+
+class TestQtWrapperCompatibility:
+    """Regression tests for mixed SIP wrapper environments."""
+
+    def test_qt_object_is_deleted_falls_back_after_wrapper_typeerror(self, monkeypatch):
+        """A mismatched SIP wrapper type should not crash the deletion check."""
+        monkeypatch.setattr(
+            orange_view,
+            "_SIP_MODULES",
+            (_SipModuleWrongWrapper(), _SipModuleAlive()),
+        )
+
+        assert orange_view._qt_object_is_deleted(object()) is False
+
+    def test_qt_object_is_deleted_detects_deleted_wrapper_after_fallback(
+        self, monkeypatch
+    ):
+        """Fallback SIP modules should still report deleted wrappers as deleted."""
+        monkeypatch.setattr(
+            orange_view,
+            "_SIP_MODULES",
+            (_SipModuleWrongWrapper(), _SipModuleDeleted()),
+        )
+
+        assert orange_view._qt_object_is_deleted(object()) is True

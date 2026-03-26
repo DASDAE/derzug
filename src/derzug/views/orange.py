@@ -24,6 +24,7 @@ from xml.sax.saxutils import escape
 # isort: off
 # Must run before AnyQt imports on macOS.
 import derzug._anyqt_patch  # noqa: F401
+from AnyQt import _api as anyqt_api
 from AnyQt.QtCore import QDir, QEvent, QObject, QPointF, Qt, QTimer, QUrl
 from AnyQt.QtGui import (
     QBrush,
@@ -120,10 +121,43 @@ _APP_ACTIVE_SOURCE_MAIN_WINDOW = None
 _EXPERIMENTAL_WARNING_GROUP = "startup"
 _EXPERIMENTAL_WARNING_HIDE_KEY = "hide-experimental-warning"
 
-try:
-    sip = import_module("PyQt6.sip")
-except ModuleNotFoundError:
-    sip = import_module("sip")
+
+def _load_sip_modules() -> tuple[object, ...]:
+    """Return available SIP modules in binding preference order."""
+    active_module_names = {
+        "pyqt6": ("PyQt6.sip", "sip"),
+        "pyqt5": ("PyQt5.sip", "sip"),
+    }.get(getattr(anyqt_api, "USED_API", "").lower(), ("sip",))
+    fallback_module_names = []
+    for module_name in ("PyQt6.sip", "PyQt5.sip"):
+        package_name = module_name.partition(".")[0]
+        if package_name in sys.modules and module_name not in active_module_names:
+            fallback_module_names.append(module_name)
+    modules = []
+    for module_name in (*active_module_names, *fallback_module_names):
+        with suppress(ModuleNotFoundError):
+            modules.append(import_module(module_name))
+    return tuple(modules)
+
+
+_SIP_MODULES = _load_sip_modules()
+
+
+def _qt_object_is_deleted(obj: object) -> bool:
+    """Return True when a Qt wrapper is gone across supported SIP variants."""
+    if obj is None:
+        return True
+    for sip_module in _SIP_MODULES:
+        isdeleted = getattr(sip_module, "isdeleted", None)
+        if isdeleted is None:
+            continue
+        try:
+            return bool(isdeleted(obj))
+        except TypeError:
+            continue
+        except RuntimeError:
+            return True
+    return False
 
 
 def _derzug_settings() -> QSettings:
@@ -773,7 +807,7 @@ class _CanvasMiddleButtonPanFilter(QObject):
             view = getattr(scheme_widget, "view", lambda: None)()
         except RuntimeError:
             return None
-        if view is None or sip.isdeleted(view):
+        if _qt_object_is_deleted(view):
             return None
         return view
 
@@ -784,7 +818,7 @@ class _CanvasMiddleButtonPanFilter(QObject):
             viewport = getattr(view, "viewport", lambda: None)()
         except RuntimeError:
             return None
-        if viewport is None or sip.isdeleted(viewport):
+        if _qt_object_is_deleted(viewport):
             return None
         return viewport
 
