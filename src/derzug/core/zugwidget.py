@@ -746,34 +746,49 @@ class ZugWidget(OWWidget, openclass=True):
         self._cancel_message_bar_popup()
         if not self._reported_error_during_run:
             self._last_error_exc = None
-        self._on_result(result)
+        self._apply_async_completion_payload(result)
 
     def _apply_async_error(self, exc: Exception) -> None:
         """Apply a worker exception on the main thread."""
         self._handle_execution_exception(exc)
-        self._on_result(None)
+        self._apply_async_completion_payload(None)
 
     def _apply_async_empty_result(self) -> None:
         """Apply an empty async result without surfacing an error."""
         self._cancel_message_bar_popup()
         if not self._reported_error_during_run:
             self._last_error_exc = None
-        self._on_result(None)
+        self._apply_async_completion_payload(None)
 
     def _handle_async_preflight_error(self, exc: Exception) -> None:
         """Handle request-building failures before work reaches the worker."""
         if not self._reported_error_during_run:
             self._show_exception("general", exc)
-        self._on_result(None)
+        self._apply_async_completion_payload(None)
 
     def _handle_async_worker_unavailable(self) -> None:
         """Handle attempts to dispatch work after the runtime is unavailable."""
         self._show_error_message("general", "worker is unavailable")
-        self._on_result(None)
+        self._apply_async_completion_payload(None)
 
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Show one execution exception on the main thread."""
         self._show_exception("general", exc)
+
+    def _apply_async_completion_payload(self, result) -> None:
+        """Apply one async completion unless Qt teardown already won the race."""
+        try:
+            self._on_result(result)
+        except RuntimeError as exc:
+            if self._should_ignore_async_runtime_error(exc):
+                return
+            raise
+
+    @staticmethod
+    def _should_ignore_async_runtime_error(exc: RuntimeError) -> bool:
+        """Return True for Qt wrapper teardown races during async result delivery."""
+        text = str(exc)
+        return "wrapped C/C++ object of type" in text and "has been deleted" in text
 
     def _execute_workflow_object(
         self,

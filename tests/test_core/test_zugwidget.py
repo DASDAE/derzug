@@ -250,6 +250,20 @@ class _AsyncWidget(ZugWidget):
         self.results.append(result)
 
 
+class _AsyncDeletedQtObjectWidget(_AsyncWidget, openclass=True):
+    """Async test widget whose result delivery hits a deleted Qt wrapper."""
+
+    def _on_result(self, result) -> None:
+        raise RuntimeError("wrapped C/C++ object of type QTimer has been deleted")
+
+
+class _AsyncUnexpectedRuntimeErrorWidget(_AsyncWidget, openclass=True):
+    """Async test widget whose result delivery raises a real runtime error."""
+
+    def _on_result(self, result) -> None:
+        raise RuntimeError("unexpected async runtime error")
+
+
 @pytest.fixture
 def shortcut_widget(qtbot):
     """Return a live widget instance for shortcut tests."""
@@ -631,6 +645,22 @@ class TestZugWidgetAsyncExecution:
 
             assert widget.results == []
             assert widget._active_execution_token is None
+
+    def test_async_deleted_qt_object_runtime_error_is_ignored(self, qtbot):
+        """Late async emits should ignore deleted-Qt-wrapper runtime errors."""
+        with widget_context(_AsyncDeletedQtObjectWidget) as widget:
+            widget.value = "late"
+            widget.run()
+            wait_for_widget_idle(widget)
+            qtbot.wait(20)
+
+            assert widget._active_execution_token is None
+
+    def test_async_unexpected_runtime_error_still_raises(self, qtbot):
+        """Non-teardown runtime errors during async apply should still surface."""
+        with widget_context(_AsyncUnexpectedRuntimeErrorWidget) as widget:
+            with pytest.raises(RuntimeError, match="unexpected async runtime error"):
+                widget._apply_async_completion_payload("boom")
 
 
 class TestZugWidgetDeferredRefresh:

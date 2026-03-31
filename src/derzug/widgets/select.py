@@ -183,24 +183,26 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._emit_selected_output()
 
     def _emit_selected_output(self) -> None:
-        """Emit the selected object on the output channel matching the input kind."""
-        self.Error.clear()
+        """Trigger the standard run lifecycle so _on_result is always the send site."""
+        self.run()
+
+    def _run(self):
+        # Compute the current selection result, or None when no input is connected.
         task, input_values = self._current_task_and_inputs()
         if task is None:
-            self._preview_selected = None
-            self.Outputs.spool.send(None)
-            self.Outputs.patch.send(None)
-            self._request_ui_refresh()
-            return
+            return None
         try:
-            result = self._execute_task_or_pipe(
+            return self._execute_task_or_pipe(
                 task,
                 input_values=input_values,
                 output_names=("patch", "spool"),
             )
         except Exception as exc:
             self._show_exception("general", exc)
-            result = self._selection_fallback_result()
+            return self._selection_fallback_result()
+
+    def _on_result(self, result) -> None:
+        """Send the selection result on both output channels."""
         patch = result.get("patch") if isinstance(result, dict) else None
         spool = result.get("spool") if isinstance(result, dict) else None
         self._preview_selected = spool if self._input_kind == "spool" else patch

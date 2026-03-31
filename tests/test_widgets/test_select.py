@@ -764,5 +764,62 @@ class TestSelect:
         assert min_w < preferred_w
 
 
+class TestOnResult:
+    """Tests for Select._on_result output routing."""
+
+    def test_none_result_clears_both_outputs(self, select_widget, monkeypatch):
+        """None result sends None on both channels and clears preview."""
+        spool_received = capture_output(select_widget.Outputs.spool, monkeypatch)
+        patch_received = capture_output(select_widget.Outputs.patch, monkeypatch)
+
+        select_widget._on_result(None)
+
+        assert spool_received[-1] is None
+        assert patch_received[-1] is None
+        assert select_widget._preview_selected is None
+
+    def test_dict_result_sends_patch_and_spool(self, select_widget, monkeypatch):
+        """Dict result routes patch and spool to their respective channels."""
+        spool_received = capture_output(select_widget.Outputs.spool, monkeypatch)
+        patch_received = capture_output(select_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch()
+        spool = dc.spool([patch])
+
+        select_widget._on_result({"patch": patch, "spool": spool})
+
+        assert patch_received[-1] is patch
+        assert list(spool_received[-1]) == list(spool)
+
+    def test_spool_input_kind_sets_preview_to_spool(self, select_widget):
+        """In spool mode _preview_selected should be the spool, not the patch."""
+        patch = dc.get_example_patch()
+        spool = dc.spool([patch])
+        select_widget._input_kind = "spool"
+
+        select_widget._on_result({"patch": patch, "spool": spool})
+
+        assert select_widget._preview_selected is spool
+
+    def test_patch_input_kind_sets_preview_to_patch(self, select_widget):
+        """In patch mode _preview_selected should be the patch."""
+        patch = dc.get_example_patch()
+        select_widget._input_kind = "patch"
+
+        select_widget._on_result({"patch": patch, "spool": None})
+
+        assert select_widget._preview_selected is patch
+
+    def test_on_result_triggers_ui_refresh(self, select_widget, monkeypatch):
+        """_on_result should schedule a UI refresh."""
+        refreshed = []
+        monkeypatch.setattr(
+            select_widget, "_request_ui_refresh", lambda: refreshed.append(True)
+        )
+
+        select_widget._on_result(None)
+
+        assert refreshed
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__])
