@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import dascore as dc
 from AnyQt.QtCore import QTimer
 from Orange.widgets import gui
@@ -11,8 +13,71 @@ from Orange.widgets.widget import Msg
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
 from derzug.orange import Setting
-from derzug.utils.spool import extract_single_patch, filter_contents_by_annotations
-from derzug.widgets.selection import SelectionControlsMixin, SelectionMode
+from derzug.utils.spool import (
+    extract_single_patch,
+    filter_contents_by_annotations,
+)
+from derzug.widgets.selection import (
+    SelectionControlsMixin,
+    SelectionMode,
+    SelectionState,
+)
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchSelectionTask
+
+
+class SelectTask(Task):
+    """Workflow task mirroring Select's persisted patch/spool semantics."""
+
+    input_variables: ClassVar[dict[str, object]] = {
+        "patch": object,
+        "spool": object,
+        "annotation_set": object,
+    }
+    output_variables: ClassVar[dict[str, object]] = {
+        "patch": object,
+        "spool": object,
+    }
+
+    patch_selection_payload: dict[str, object] | None = None
+    spool_filters: tuple[tuple[str, str], ...] = ()
+    unpack_single_patch: bool = True
+
+    def run(self, patch=None, spool=None, annotation_set=None):
+        """Apply persisted selection state to a patch or spool input."""
+        if patch is not None:
+            selected = PatchSelectionTask(
+                selection_payload=self.patch_selection_payload
+            ).run(patch)
+            return {"patch": selected, "spool": None}
+
+        if spool is not None:
+            selected = spool
+            if annotation_set is not None:
+                contents = spool.get_contents()
+                filtered = filter_contents_by_annotations(contents, annotation_set)
+                if len(filtered) != len(contents):
+                    if filtered.empty:
+                        selected = dc.spool([])
+                    else:
+                        wanted_rows = set(map(int, filtered.index))
+                        selected = dc.spool(
+                            [
+                                patch_value
+                                for row, patch_value in enumerate(spool)
+                                if row in wanted_rows
+                            ]
+                        )
+            state = SelectionState()
+            state.set_spool_source(selected)
+            state.set_spool_filters(list(self.spool_filters))
+            selected = state.apply_to_spool(selected)
+            selected_patch = None
+            if self.unpack_single_patch:
+                selected_patch = extract_single_patch(selected)
+            return {"patch": selected_patch, "spool": selected}
+
+        return {"patch": None, "spool": None}
 
 
 class Select(SelectionControlsMixin, ZugWidget):
@@ -119,46 +184,27 @@ class Select(SelectionControlsMixin, ZugWidget):
     def _emit_selected_output(self) -> None:
         """Emit the selected object on the output channel matching the input kind."""
         self.Error.clear()
-        if self._input_kind == "patch":
-            if self._patch is None:
-                self._preview_selected = None
-                self.Outputs.spool.send(None)
-                self.Outputs.patch.send(None)
-                self._request_ui_refresh()
-                return
-            try:
-                selected = self._selection_apply_to_patch(self._patch)
-            except Exception as exc:
-                self._show_exception("general", exc)
-                selected = self._patch
-            self._preview_selected = selected
+        task, input_values = self._current_task_and_inputs()
+        if task is None:
+            self._preview_selected = None
             self.Outputs.spool.send(None)
-            self.Outputs.patch.send(selected)
+            self.Outputs.patch.send(None)
             self._request_ui_refresh()
             return
-
-        if self._input_kind == "spool":
-            if self._spool is None:
-                self._preview_selected = None
-                self.Outputs.spool.send(None)
-                self.Outputs.patch.send(None)
-                self._request_ui_refresh()
-                return
-            try:
-                selected = self._apply_annotation_filter_to_spool(self._spool)
-                selected = self._selection_apply_to_spool(selected)
-            except Exception as exc:
-                self._show_exception("general", exc)
-                selected = self._spool
-            self._preview_selected = selected
-            self.Outputs.spool.send(selected)
-            self.Outputs.patch.send(self._extract_output_patch(selected))
-            self._request_ui_refresh()
-            return
-
-        self._preview_selected = None
-        self.Outputs.spool.send(None)
-        self.Outputs.patch.send(None)
+        try:
+            result = self._execute_task_or_pipe(
+                task,
+                input_values=input_values,
+                output_names=("patch", "spool"),
+            )
+        except Exception as exc:
+            self._show_exception("general", exc)
+            result = self._selection_fallback_result()
+        patch = result.get("patch") if isinstance(result, dict) else None
+        spool = result.get("spool") if isinstance(result, dict) else None
+        self._preview_selected = spool if self._input_kind == "spool" else patch
+        self.Outputs.spool.send(spool)
+        self.Outputs.patch.send(patch)
         self._request_ui_refresh()
 
     def _apply_annotation_filter_to_spool(self, spool: dc.BaseSpool) -> dc.BaseSpool:
@@ -285,6 +331,75 @@ class Select(SelectionControlsMixin, ZugWidget):
         if window.width() > target_width:
             window.resize(target_width, window.height())
         self._compact_width_done = True
+
+    def get_task(self) -> Task:
+        """Return the compiled selection semantics for the current widget state."""
+        return self._selection_task()
+
+    def _selection_task(self) -> SelectTask:
+        """Return the current canonical selection task."""
+        patch_payload = self._current_patch_selection_payload()
+        spool_filters = self._current_spool_filter_state()
+        return SelectTask(
+            patch_selection_payload=patch_payload,
+            spool_filters=tuple(spool_filters),
+            unpack_single_patch=bool(self.unpack_single_patch),
+        )
+
+    def _current_patch_selection_payload(self) -> dict[str, object] | None:
+        """Return live patch selection payload, falling back to persisted settings."""
+        if self._input_kind != "patch":
+            return self._load_saved_patch_selection_state()
+        return self._selection_state.patch_settings_payload(include_inactive=True)
+
+    def _current_spool_filter_state(self) -> list[tuple[str, str]]:
+        """Return live spool filter state, falling back to persisted settings."""
+        if self._input_kind != "spool":
+            return self._load_saved_spool_filter_state()
+        return [
+            (row.key, row.raw_value)
+            for row in self._selection_state.spool.filters
+            if row.key or row.raw_value
+        ]
+
+    def _current_task_and_inputs(
+        self,
+    ) -> tuple[SelectTask | None, dict[str, object]]:
+        """Return the current selection task and its input payload."""
+        if self._input_kind == "patch":
+            if self._patch is None:
+                return None, {}
+            return (
+                self._selection_task(),
+                {
+                    "patch": self._patch,
+                    "spool": None,
+                    "annotation_set": None,
+                },
+            )
+        if self._input_kind == "spool":
+            if self._spool is None:
+                return None, {}
+            return (
+                self._selection_task(),
+                {
+                    "patch": None,
+                    "spool": self._spool,
+                    "annotation_set": self._annotation_set,
+                },
+            )
+        return None, {}
+
+    def _selection_fallback_result(self) -> dict[str, object]:
+        """Return the current unfiltered input as a safe fallback result."""
+        if self._input_kind == "patch":
+            return {"patch": self._patch, "spool": None}
+        if self._input_kind == "spool":
+            return {
+                "patch": self._extract_output_patch(self._spool),
+                "spool": self._spool,
+            }
+        return {"patch": None, "spool": None}
 
 
 if __name__ == "__main__":  # pragma: no cover

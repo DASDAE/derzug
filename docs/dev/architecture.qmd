@@ -1,0 +1,11 @@
+---
+title: Architecture
+sidebar: architecture
+---
+
+This section covers the internal design and specifications for DerZug's core systems.
+
+- [Design](design.md) — widget architecture and node types
+- [Workflow Design](workflow-design.md) — the workflow engine design: tasks, graph model, execution, and Orange integration
+- [Workflow Spec](workflow_spec.md) — public contract for the streaming workflow engine
+- [Streaming Engine Spec](streaming-engine-spec.md) — the streaming-first execution model

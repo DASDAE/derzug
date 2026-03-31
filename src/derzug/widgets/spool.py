@@ -7,8 +7,9 @@ from __future__ import annotations
 import ast
 import datetime
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import dascore as dc
 import numpy as np
@@ -31,12 +32,11 @@ from dascore.clients.dirspool import DirectorySpool
 from dascore.clients.filespool import FileSpool
 from dascore.utils.patch import get_patch_names
 from Orange.widgets import gui
-from Orange.widgets.utils.concurrent import ConcurrentWidgetMixin, TaskState
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from rich.progress import Progress as RichProgress
+from pydantic import Field
 
-from derzug.core.zugwidget import ZugWidget
+from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.orange import Setting
 from derzug.utils.display import format_display
 from derzug.utils.dynamic_rows import DynamicRowManager
@@ -51,6 +51,7 @@ from derzug.utils.spool import (
     extract_single_patch,
     normalize_dims_value,
 )
+from derzug.workflow import Task
 
 _PATCH_EMOJI = "⚡"
 
@@ -243,49 +244,11 @@ class _SpoolContentsTableModel(QAbstractTableModel):
         return self._row_order.index(row)
 
 
-_TASK_LOAD = "load"
-_TASK_EMIT = "emit"
-
-
-class _TaskStateProgress(RichProgress):
-    """Bridge DasCore Rich progress reporting to an Orange TaskState."""
-
-    def __init__(self, state: TaskState, start_pct: int, end_pct: int) -> None:
-        super().__init__(disable=True)  # suppress terminal rendering
-        self._state = state
-        self._start_pct = start_pct
-        self._end_pct = end_pct
-
-    def advance(self, task_id, advance: float = 1) -> None:
-        super().advance(task_id, advance)
-        try:
-            task = self._tasks[task_id]
-            if task.total:
-                frac = min(task.completed / task.total, 1.0)
-                pct = int(self._start_pct + frac * (self._end_pct - self._start_pct))
-                self._state.set_progress_value(pct)
-        except Exception:
-            pass
-
-
-def _load_spool_task(loader, state: TaskState) -> dc.BaseSpool:
-    """Run loader() then update() in a worker thread, reporting progress."""
-    state.set_progress_value(5)
-    spool = loader()
-    state.set_progress_value(30)
-    state.set_status("Updating spool index…")
-    progress = _TaskStateProgress(state, start_pct=30, end_pct=95)
-    spool = spool.update(progress=progress)
-    state.set_progress_value(100)
-    return spool
-
-
 def _emit_task(
     display_spool: dc.BaseSpool,
     selected_source_rows: frozenset[int],
     unpack_single: bool,
     visible_row_count: int | None,
-    state: TaskState,
 ) -> tuple[dc.BaseSpool | None, dc.Patch | None]:
     """Read selected patch data off the main thread and return (spool, patch)."""
     if not selected_source_rows:
@@ -302,6 +265,286 @@ def _emit_task(
         else:
             output_patch = None
     return output_spool, output_patch
+
+
+def _spool_row_count(spool: dc.BaseSpool | None) -> int | None:
+    """Return the visible row count for one spool without touching widget state."""
+    if spool is None:
+        return None
+    if hasattr(spool, "get_contents"):
+        return len(spool.get_contents())
+    try:
+        return len(spool)
+    except TypeError:
+        return len(list(spool))
+
+
+@dataclass(frozen=True)
+class _SpoolExecutionSnapshot:
+    """Immutable worker snapshot for one Spool execution."""
+
+    source_mode: str
+    source_name: str | None
+    source_spool: dc.BaseSpool | None
+    task: Task
+    selected_source_rows: frozenset[int]
+    visible_row_count: int | None
+
+
+@dataclass(frozen=True)
+class _SpoolExecutionResult:
+    """Worker result including preview and final output state."""
+
+    source_spool: dc.BaseSpool | None
+    display_spool: dc.BaseSpool | None
+    output_spool: dc.BaseSpool | None
+    output_patch: dc.Patch | None
+
+
+def _load_spool_from_settings(
+    *,
+    spool_input: str | None,
+    example_parameters: dict[str, object] | None,
+    file_input: str,
+    raw_input: str,
+) -> dc.BaseSpool:
+    """Load a spool using the widget's persisted source settings."""
+    if file_input.strip():
+        return dc.spool(file_input.strip())
+    if raw_input.strip():
+        return dc.spool(raw_input.strip())
+    if not spool_input:
+        raise ValueError("No spool source configured")
+    registry = _all_examples(ignore=_IGNORE_EXAMPLES)
+    fn = registry[spool_input]
+    saved = example_parameters or {}
+    overrides = saved.get(spool_input, {}) if isinstance(saved, dict) else {}
+    kwargs = build_example_call_kwargs(
+        fn,
+        overrides if isinstance(overrides, dict) else {},
+    )
+    result = fn(**kwargs)
+    if isinstance(result, dc.Patch):
+        return dc.spool([result])
+    return result
+
+
+def _apply_select_rows(
+    spool: dc.BaseSpool,
+    select_filters: tuple[dict[str, str], ...],
+) -> dc.BaseSpool:
+    """Apply persisted select rows to a spool."""
+    kwargs = {}
+    for filter_data in select_filters:
+        key = str(filter_data.get("key", "")).strip()
+        raw_value = str(filter_data.get("raw", "")).strip()
+        if not key or not raw_value:
+            continue
+        try:
+            value = ast.literal_eval(raw_value)
+        except Exception:
+            value = raw_value
+        if value is None:
+            continue
+        kwargs[key] = value
+    if not kwargs:
+        return spool
+    return spool.select(**kwargs)
+
+
+def _apply_chunk_settings(
+    spool: dc.BaseSpool,
+    *,
+    chunk_dim: str,
+    chunk_value: str,
+    chunk_overlap: str,
+    chunk_keep_partial: bool,
+    chunk_snap_coords: bool,
+    chunk_tolerance: float,
+    chunk_conflict: str,
+) -> dc.BaseSpool:
+    """Apply persisted chunk settings to a spool."""
+    dim = chunk_dim.strip()
+    raw_value = chunk_value.strip()
+    if not dim or not raw_value:
+        return spool
+    try:
+        value = ast.literal_eval(raw_value)
+    except Exception:
+        value = raw_value
+    overlap = None
+    if chunk_overlap.strip():
+        try:
+            overlap = ast.literal_eval(chunk_overlap.strip())
+        except Exception:
+            overlap = chunk_overlap.strip()
+    return spool.chunk(
+        **{
+            dim: value,
+            "overlap": overlap,
+            "keep_partial": bool(chunk_keep_partial),
+            "snap_coords": bool(chunk_snap_coords),
+            "tolerance": float(chunk_tolerance),
+            "conflict": chunk_conflict,
+        }
+    )
+
+
+def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutionResult:
+    """Execute one spool snapshot off-thread and return preview plus outputs."""
+    task = snapshot.task
+    if snapshot.source_mode == "settings":
+        assert isinstance(task, SpoolTask)
+        source_spool = _load_spool_from_settings(
+            spool_input=task.spool_input,
+            example_parameters=task.example_parameters,
+            file_input=task.file_input,
+            raw_input=task.raw_input,
+        )
+        source_spool = source_spool.update()
+        display_spool = _apply_select_rows(source_spool, task.select_filters)
+        display_spool = _apply_chunk_settings(
+            display_spool,
+            chunk_dim=task.chunk_dim,
+            chunk_value=task.chunk_value,
+            chunk_overlap=task.chunk_overlap,
+            chunk_keep_partial=task.chunk_keep_partial,
+            chunk_snap_coords=task.chunk_snap_coords,
+            chunk_tolerance=task.chunk_tolerance,
+            chunk_conflict=task.chunk_conflict,
+        )
+        visible_row_count = snapshot.visible_row_count
+        if visible_row_count is None:
+            visible_row_count = _spool_row_count(display_spool)
+        output_spool, output_patch = _emit_task(
+            display_spool,
+            snapshot.selected_source_rows,
+            task.unpack_single_patch,
+            visible_row_count,
+        )
+        return _SpoolExecutionResult(
+            source_spool=source_spool,
+            display_spool=display_spool,
+            output_spool=output_spool,
+            output_patch=output_patch,
+        )
+    source_spool = snapshot.source_spool
+    if source_spool is None:
+        return _SpoolExecutionResult(None, None, None, None)
+    assert isinstance(task, SpoolTransformTask)
+    display_spool = _apply_select_rows(source_spool, task.select_filters)
+    display_spool = _apply_chunk_settings(
+        display_spool,
+        chunk_dim=task.chunk_dim,
+        chunk_value=task.chunk_value,
+        chunk_overlap=task.chunk_overlap,
+        chunk_keep_partial=task.chunk_keep_partial,
+        chunk_snap_coords=task.chunk_snap_coords,
+        chunk_tolerance=task.chunk_tolerance,
+        chunk_conflict=task.chunk_conflict,
+    )
+    visible_row_count = snapshot.visible_row_count
+    if visible_row_count is None:
+        visible_row_count = _spool_row_count(display_spool)
+    output_spool, output_patch = _emit_task(
+        display_spool,
+        snapshot.selected_source_rows,
+        task.unpack_single_patch,
+        visible_row_count,
+    )
+    return _SpoolExecutionResult(
+        source_spool=source_spool,
+        display_spool=display_spool,
+        output_spool=output_spool,
+        output_patch=output_patch,
+    )
+
+
+class SpoolTask(Task):
+    """Portable loader task mirroring the widget's bound-source semantics."""
+
+    output_variables: ClassVar[dict[str, object]] = {
+        "spool": object,
+        "patch": object,
+    }
+
+    spool_input: str | None = None
+    example_parameters: dict[str, object] = Field(default_factory=dict)
+    file_input: str = ""
+    raw_input: str = ""
+    chunk_dim: str = ""
+    chunk_value: str = ""
+    chunk_overlap: str = ""
+    chunk_keep_partial: bool = False
+    chunk_snap_coords: bool = True
+    chunk_tolerance: float = 1.5
+    chunk_conflict: str = "raise"
+    select_filters: tuple[dict[str, str], ...] = ()
+    selected_source_row: int | None = None
+    unpack_single_patch: bool = True
+
+    def run(self):
+        """Load and post-process the configured spool source."""
+        spool = _load_spool_from_settings(
+            spool_input=self.spool_input,
+            example_parameters=self.example_parameters,
+            file_input=self.file_input,
+            raw_input=self.raw_input,
+        )
+        spool = _apply_select_rows(spool, self.select_filters)
+        spool = _apply_chunk_settings(
+            spool,
+            chunk_dim=self.chunk_dim,
+            chunk_value=self.chunk_value,
+            chunk_overlap=self.chunk_overlap,
+            chunk_keep_partial=self.chunk_keep_partial,
+            chunk_snap_coords=self.chunk_snap_coords,
+            chunk_tolerance=self.chunk_tolerance,
+            chunk_conflict=self.chunk_conflict,
+        )
+        if self.selected_source_row is not None:
+            spool = Spool._spool_rows_to_output(spool, {int(self.selected_source_row)})
+        patch = extract_single_patch(spool) if self.unpack_single_patch else None
+        return {"spool": spool, "patch": patch}
+
+
+class SpoolTransformTask(Task):
+    """Apply persisted Spool select/chunk/output settings to an input spool."""
+
+    input_variables: ClassVar[dict[str, object]] = {"spool": object}
+    output_variables: ClassVar[dict[str, object]] = {
+        "spool": object,
+        "patch": object,
+    }
+
+    chunk_dim: str = ""
+    chunk_value: str = ""
+    chunk_overlap: str = ""
+    chunk_keep_partial: bool = False
+    chunk_snap_coords: bool = True
+    chunk_tolerance: float = 1.5
+    chunk_conflict: str = "raise"
+    select_filters: tuple[dict[str, str], ...] = ()
+    selected_source_row: int | None = None
+    unpack_single_patch: bool = True
+
+    def run(self, spool):
+        """Apply select/chunk settings to an input spool."""
+        spool = _apply_select_rows(spool, self.select_filters)
+        spool = _apply_chunk_settings(
+            spool,
+            chunk_dim=self.chunk_dim,
+            chunk_value=self.chunk_value,
+            chunk_overlap=self.chunk_overlap,
+            chunk_keep_partial=self.chunk_keep_partial,
+            chunk_snap_coords=self.chunk_snap_coords,
+            chunk_tolerance=self.chunk_tolerance,
+            chunk_conflict=self.chunk_conflict,
+        )
+        if self.selected_source_row is not None:
+            spool = Spool._spool_rows_to_output(spool, {int(self.selected_source_row)})
+        patch = extract_single_patch(spool) if self.unpack_single_patch else None
+        return {"spool": spool, "patch": patch}
 
 
 def _ordered_contents_df_with_source_rows(spool: dc.BaseSpool) -> pd.DataFrame:
@@ -379,14 +622,14 @@ def _contents_identity_token(df: pd.DataFrame, row: int) -> str:
         value = df.iloc[row]["path"]
         text = _serialize_identity_value(value).strip()
         if text:
-            return f"path:{Path(text).stem}"
+            return f"path:{Path(text).as_posix()}"
     parts = []
     for column in df.columns:
         parts.append(f"{column}={_serialize_identity_value(df.iloc[row][column])}")
     return "row:" + "|".join(parts)
 
 
-class Spool(ConcurrentWidgetMixin, ZugWidget):
+class Spool(ZugWidget):
     """Orange widget for loading DASCore example spools."""
 
     name = "Spool"
@@ -458,20 +701,18 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
         )
 
     def __init__(self) -> None:
-        ZugWidget.__init__(self)
-        ConcurrentWidgetMixin.__init__(self)
+        super().__init__()
         self._base_caption = self.name
         self._examples: list[str] = sorted(
             _all_examples(ignore=_IGNORE_EXAMPLES), key=str.casefold
         )
         self._source_spool: dc.BaseSpool | None = None
         self._display_spool: dc.BaseSpool | None = None
-        self._pending_source_name: str | None = None
-        self._pending_task_type: str | None = None
         self._pending_restore_emit: bool = False
-        self._shutting_down: bool = False
         self._table_selection_model = None
         self._select_options: tuple[str, ...] = ()
+        self._source_mode = "settings"
+        self._pending_error_source_name: str | None = None
         self._migrate_select_filters()
 
         params_box = gui.widgetBox(self.controlArea, "Parameters")
@@ -531,17 +772,15 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
         """
         Replace the current source with fixed canvas input and lock source controls.
         """
-        self.cancel()
-        self._pending_task_type = None
-        self._pending_source_name = None
         self.Error.clear()
         self.Warning.clear()
         self._clear_other_inputs("canvas")
+        self._source_mode = "snapshot"
         self._set_source_controls_enabled(False)
         self._inputs_group.setChecked(False)
         spool = dc.spool([value]) if isinstance(value, dc.Patch) else value
         self._set_source_spool(spool)
-        self._schedule_emit()
+        self.run()
 
     def _build_chunk_section(self, parent: QWidget) -> None:
         """Build the chunking controls."""
@@ -714,45 +953,38 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
     @_current_spool.setter
     def _current_spool(self, value: dc.BaseSpool | None) -> None:
         """Set the base source spool and reset derived state for compatibility."""
+        self._source_mode = "snapshot"
         self._source_spool = value
         self._display_spool = value
 
     def run(self) -> None:
-        """Load selected example and emit spool output."""
-        self.Error.clear()
-        self.Warning.clear()
-        self.cancel()
-        self._pending_task_type = None
-
-        source_name, loader_fn = self._snapshot_loader()
-        if source_name is None or loader_fn is None:
-            self._set_source_spool(None)
-            self._schedule_emit()
-            return
-
-        self._pending_source_name = source_name
-        self._pending_task_type = _TASK_LOAD
-        self.start(_load_spool_task, loader_fn)
+        """Load or transform the current spool source via the shared runtime."""
+        super().run()
 
     def _on_update_clicked(self) -> None:
         """Refresh the currently configured spool source."""
-        if self.example_combo.isEnabled():
+        if self.example_combo.isEnabled() and self._source_mode == "settings":
             self.run()
             return
         if self._source_spool is None:
-            self._emit_current_output()
+            self._apply_execution_result(
+                _SpoolExecutionResult(
+                    source_spool=None,
+                    display_spool=None,
+                    output_spool=None,
+                    output_patch=None,
+                )
+            )
             return
         self.Error.clear()
         self.Warning.clear()
-        self.cancel()
-        self._pending_task_type = None
         try:
             updated = self._source_spool.update()
         except Exception as exc:
             self._show_exception("general", exc)
             return
         self._set_source_spool(updated)
-        self._schedule_emit()
+        self.run()
 
     def _snapshot_loader(self) -> tuple[str | None, Callable | None]:
         """Capture current source state and return (source_name, pure_callable).
@@ -787,60 +1019,145 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
 
         return example_name, _load
 
-    def on_done(self, result) -> None:
-        """Dispatch the background-task result based on which task just finished."""
-        task_type = self._pending_task_type
-        self._pending_task_type = None
-        if task_type == _TASK_LOAD:
-            self._set_source_spool(result)
-            # Cannot call self.start() from on_done; defer to next event-loop tick.
-            QTimer.singleShot(0, self._schedule_emit)
-        else:
-            output_spool, output_patch = result
-            self._update_caption_for_outputs(output_patch)
-            self.Outputs.spool.send(output_spool)
-            self.Outputs.patch.send(output_patch)
+    def _supports_async_execution(self) -> bool:
+        """Load and transform spool data off-thread by default."""
+        return True
 
-    def on_exception(self, ex: Exception) -> None:
-        """Handle a failure from whichever background task just ran."""
-        task_type = self._pending_task_type
-        self._pending_task_type = None
-        if task_type == _TASK_LOAD:
-            self._set_source_spool(None)
-            self._show_exception("load_failed", ex, self._pending_source_name or "")
-            self._emit_current_output()
-        else:
-            self._show_exception("general", ex)
+    def _build_execution_request(self) -> WidgetExecutionRequest | None:
+        """Build one worker-safe spool execution request."""
+        snapshot = self._snapshot_execution()
+        if snapshot is None:
+            return None
+        self._pending_error_source_name = (
+            snapshot.source_name if snapshot.source_mode == "settings" else None
+        )
+        return WidgetExecutionRequest(
+            execute=lambda snapshot=snapshot: _execute_spool_snapshot(snapshot)
+        )
 
-    def onDeleteWidget(self) -> None:
-        """Shut down the background thread pool when the widget is closed."""
-        self._shutting_down = True
-        self.shutdown()
-        super().onDeleteWidget()
+    def _snapshot_execution(self) -> _SpoolExecutionSnapshot | None:
+        """Capture one immutable execution snapshot from live widget state."""
+        selected_source_rows = self._snapshot_selected_source_rows()
+        visible_row_count = None
+        if self._display_spool is not None:
+            visible_row_count = self._visible_spool_row_count(self._display_spool)
+        if self._source_mode == "snapshot":
+            return _SpoolExecutionSnapshot(
+                source_mode="snapshot",
+                source_name=None,
+                source_spool=self._source_spool,
+                task=self._current_transform_task(),
+                selected_source_rows=selected_source_rows,
+                visible_row_count=visible_row_count,
+            )
+        source_name = self._snapshot_source_name()
+        if not source_name:
+            return None
+        return _SpoolExecutionSnapshot(
+            source_mode="settings",
+            source_name=source_name,
+            source_spool=None,
+            task=self._current_source_task(),
+            selected_source_rows=selected_source_rows,
+            visible_row_count=visible_row_count,
+        )
+
+    def _snapshot_source_name(self) -> str | None:
+        """Return the current source identifier for error reporting."""
+        if self.file_input:
+            return self.file_input
+        if self.raw_input:
+            return self.raw_input
+        return self.spool_input
+
+    def _current_source_task(self) -> SpoolTask:
+        """Return the current bound-source workflow task."""
+        self._sync_select_filters_from_ui()
+        return SpoolTask(
+            spool_input=self.spool_input,
+            example_parameters=dict(self.example_parameters or {}),
+            file_input=str(self.file_input or ""),
+            raw_input=str(self.raw_input or ""),
+            chunk_dim=str(self.chunk_dim or ""),
+            chunk_value=str(self.chunk_value or ""),
+            chunk_overlap=str(self.chunk_overlap or ""),
+            chunk_keep_partial=bool(self.chunk_keep_partial),
+            chunk_snap_coords=bool(self.chunk_snap_coords),
+            chunk_tolerance=float(self.chunk_tolerance),
+            chunk_conflict=str(self.chunk_conflict or "raise"),
+            select_filters=tuple(self.select_filters or ()),
+            selected_source_row=self._resolved_selected_source_row(),
+            unpack_single_patch=bool(self.unpack_single_patch),
+        )
+
+    def _current_transform_task(self) -> SpoolTransformTask:
+        """Return the current transform-only task for input-backed spool state."""
+        self._sync_select_filters_from_ui()
+        return SpoolTransformTask(
+            chunk_dim=str(self.chunk_dim or ""),
+            chunk_value=str(self.chunk_value or ""),
+            chunk_overlap=str(self.chunk_overlap or ""),
+            chunk_keep_partial=bool(self.chunk_keep_partial),
+            chunk_snap_coords=bool(self.chunk_snap_coords),
+            chunk_tolerance=float(self.chunk_tolerance),
+            chunk_conflict=str(self.chunk_conflict or "raise"),
+            select_filters=tuple(self.select_filters or ()),
+            selected_source_row=self._resolved_selected_source_row(),
+            unpack_single_patch=bool(self.unpack_single_patch),
+        )
+
+    def _on_result(self, result) -> None:
+        """Apply one completed spool execution result."""
+        if result is None:
+            self._apply_execution_result(
+                _SpoolExecutionResult(
+                    source_spool=None,
+                    display_spool=None,
+                    output_spool=None,
+                    output_patch=None,
+                )
+            )
+            return
+        if not isinstance(result, _SpoolExecutionResult):
+            raise TypeError(f"unexpected spool execution result {result!r}")
+        self._apply_execution_result(result)
+
+    def _apply_execution_result(self, result: _SpoolExecutionResult) -> None:
+        """Apply preview and final output state from one worker result."""
+        self._source_spool = result.source_spool
+        self._display_spool = result.display_spool
+        self._pending_restore_emit = (
+            result.display_spool is not None
+            and self.selected_source_row is not None
+            and not self._is_ui_visible()
+        )
+        self._request_ui_refresh()
+        self._update_caption_for_outputs(result.output_patch)
+        self.Outputs.spool.send(result.output_spool)
+        self.Outputs.patch.send(result.output_patch)
+
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route source-load and transform failures to the right UI banner."""
+        if self._source_mode == "settings":
+            self._show_exception(
+                "load_failed",
+                exc,
+                self._pending_error_source_name or "",
+            )
+            self._apply_execution_result(
+                _SpoolExecutionResult(
+                    source_spool=None,
+                    display_spool=None,
+                    output_spool=None,
+                    output_patch=None,
+                )
+            )
+            return
+        self._show_exception("general", exc)
 
     def _schedule_emit(self) -> None:
-        """Snapshot UI state and dispatch patch extraction to the worker thread.
-
-        If a spool load is still in progress the call is silently dropped; the
-        deferred _schedule_emit fired from on_done will pick up the latest
-        selection state instead.  If there is no loaded spool, None outputs are
-        sent synchronously (no I/O involved).
-        """
-        if self._shutting_down:
-            return
-        if self._pending_task_type == _TASK_LOAD:
-            return
-        if self._display_spool is None:
-            self._emit_current_output()
-            return
-        display_spool = self._display_spool
-        selected_source_rows = self._snapshot_selected_source_rows()
-        unpack = bool(self.unpack_single_patch)
-        visible_row_count = self._visible_spool_row_count(display_spool)
-        self._pending_task_type = _TASK_EMIT
-        self.start(
-            _emit_task, display_spool, selected_source_rows, unpack, visible_row_count
-        )
+        """Re-run execution after a UI selection or option change."""
+        self.run()
 
     def _snapshot_selected_source_rows(self) -> frozenset[int]:
         """Capture the currently selected source-row indices (main thread only)."""
@@ -865,6 +1182,8 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
     def _on_combo_changed(self, index: int) -> None:
         """Sync selected combo entry to Setting and run the widget."""
         self._clear_other_inputs("example")
+        self._source_mode = "settings"
+        self._set_source_controls_enabled(True)
         if index < 0 or index >= len(self._examples):
             self.spool_input = None
         else:
@@ -879,6 +1198,8 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
         self.file_input = cleaned
         self.file_path_edit.setText(cleaned)
         self._clear_other_inputs("file")
+        self._source_mode = "settings"
+        self._set_source_controls_enabled(True)
         if trigger_run:
             self.run()
 
@@ -911,6 +1232,8 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
         """Use raw input as active source while typing and clear other inputs."""
         self.raw_input = text.strip()
         self._clear_other_inputs("raw")
+        self._source_mode = "settings"
+        self._set_source_controls_enabled(True)
 
     def _on_raw_edit_finished(self) -> None:
         """Run after raw input editing loses focus."""
@@ -1050,8 +1373,11 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
         except Exception as exc:
             self._show_exception("general", exc)
             return
+        self._clear_other_inputs("snapshot")
+        self._source_mode = "snapshot"
+        self._set_source_controls_enabled(False)
         self._set_source_spool(updated)
-        self._schedule_emit()
+        self.run()
 
     def _merge_incoming_spool(self, incoming: dc.BaseSpool) -> dc.BaseSpool:
         """Return an updated spool after appending incoming data."""
@@ -1221,6 +1547,7 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
 
     def _set_source_spool(self, spool: dc.BaseSpool | None) -> None:
         """Store the source spool and refresh derived display state."""
+        self._source_mode = "snapshot"
         self._source_spool = spool
         self._pending_restore_emit = (
             spool is not None
@@ -1529,6 +1856,16 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
             return None
         return extract_single_patch(spool)
 
+    def get_task(self) -> Task:
+        """Return the current bound-source workflow semantics."""
+        if self._source_mode == "snapshot":
+            return self._current_transform_task()
+        return self._current_source_task()
+
+    def get_mapped_source(self):
+        """Return the current display spool for compiled map() defaults."""
+        return self._display_spool
+
     def _selected_table_rows(self) -> set[int]:
         """Return the currently selected visible table rows."""
         selection_model = self._table.selectionModel()
@@ -1611,10 +1948,6 @@ class Spool(ConcurrentWidgetMixin, ZugWidget):
             else previous_node_title
         )
         node.title = desired_title
-        QTimer.singleShot(
-            0,
-            lambda n=node, t=desired_title: setattr(n, "title", t),
-        )
         from derzug.views import orange as orange_view
 
         manager = orange_view._APP_ACTIVE_SOURCE_MANAGER

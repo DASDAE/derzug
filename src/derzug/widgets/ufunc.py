@@ -13,8 +13,26 @@ from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
 
-from derzug.core.zugwidget import ZugWidget
+from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
+
+
+class UFuncOperatorTask(Task):
+    """Task wrapper around one selected binary NumPy ufunc."""
+
+    selected_op: str
+    input_variables: ClassVar[dict[str, object]] = {"x": object, "y": object}
+    output_variables: ClassVar[dict[str, object]] = {"result": object}
+
+    def run(self, x, y):
+        """Apply the selected NumPy ufunc to both inputs."""
+        ufunc = UFuncOperator._OP_LABEL_TO_UFUNC.get(self.selected_op)
+        if ufunc is None:
+            ufunc = UFuncOperator._OP_LABEL_TO_UFUNC[
+                next(iter(UFuncOperator._OP_LABEL_TO_UFUNC))
+            ]
+        return ufunc(x, y)
 
 
 class UFuncOperator(ZugWidget):
@@ -103,24 +121,54 @@ class UFuncOperator(ZugWidget):
         self.selected_op = label
         self.run()
 
-    def _run(self):
-        """Compute selected binary ufunc result, or None if input missing."""
+    def _supports_async_execution(self) -> bool:
+        """Run binary ufuncs off-thread by default."""
+        return True
+
+    def _build_execution_request(self) -> WidgetExecutionRequest | None:
+        """Build one binary-ufunc execution request."""
+        resolved = self._validated_execution_inputs()
+        if resolved is None:
+            return None
+        workflow_obj, x, y = resolved
+        return self._build_task_execution_request(
+            workflow_obj,
+            input_values={"x": x, "y": y},
+            output_names=("result",),
+        )
+
+    def _validated_execution_inputs(self) -> tuple[Task, object, object] | None:
+        """Return the current task and normalized operands, or None."""
         if self._x is self._UNSET or self._y is self._UNSET:
             return None
-
         x = self._resolve_operand(self._x, "x")
         if x is self._UNSET:
             return None
         y = self._resolve_operand(self._y, "y")
         if y is self._UNSET:
             return None
+        return self.get_task(), x, y
 
-        ufunc = self._get_selected_ufunc()
-        try:
-            return ufunc(x, y)
-        except Exception as exc:
-            self._show_exception("operation_failed", exc, self.selected_op)
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the operation-specific banner."""
+        self._show_exception("operation_failed", exc, self.selected_op)
+
+    def _run(self):
+        """Compute selected binary ufunc result, or None if input missing."""
+        resolved = self._validated_execution_inputs()
+        if resolved is None:
             return None
+        workflow_obj, x, y = resolved
+        return self._execute_workflow_object(
+            workflow_obj,
+            input_values={"x": x, "y": y},
+            output_names=("result",),
+        )
+
+    def get_task(self) -> Task:
+        """Return the configured binary ufunc task."""
+        self._get_selected_ufunc()
+        return UFuncOperatorTask(selected_op=self.selected_op)
 
     def _resolve_operand(self, value: object, label: str) -> object:
         """Unwrap length-1 spools to patches and reject unsupported spool inputs."""

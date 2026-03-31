@@ -26,7 +26,9 @@ from AnyQt.QtWidgets import (
 )
 from Orange.widgets.widget import OWWidget
 
+from derzug.core.widget_runtime import WidgetExecutionRequest, WidgetExecutionRuntime
 from derzug.views.orange_errors import DerZugErrorDialog, _build_exception_report_data
+from derzug.workflow import Pipe, Task
 
 
 class _WidgetKeyboardShortcutsDialog(QDialog):
@@ -117,6 +119,15 @@ class ZugWidget(OWWidget, openclass=True):
             self._show_pending_message_bar_popup
         )
         self._pending_message_bar_popup_pos: QPoint | None = None
+        self._execution_runtime = WidgetExecutionRuntime(
+            self,
+            execute_request=self._execute_execution_request,
+            apply_result=self._apply_async_result,
+            apply_error=self._apply_async_error,
+            apply_empty_result=self._apply_async_empty_result,
+            handle_preflight_error=self._handle_async_preflight_error,
+            handle_worker_unavailable=self._handle_async_worker_unavailable,
+        )
         self._compact_control_area_layout()
         self.statusBar()
         if getattr(self, "message_bar", None) is not None:
@@ -665,6 +676,11 @@ class ZugWidget(OWWidget, openclass=True):
         self.Error.clear()
         self.Warning.clear()
         self._reported_error_during_run = False
+        if self._async_teardown_started:
+            return
+        if self._supports_async_execution():
+            self._run_async()
+            return
         try:
             result = self._run()
         except Exception as exc:
@@ -684,6 +700,121 @@ class ZugWidget(OWWidget, openclass=True):
         dialog = DerZugErrorDialog(details, traceback_text)
         dialog.exec()
 
+    def _supports_async_execution(self) -> bool:
+        """Return True when this widget should dispatch execution off-thread."""
+        return False
+
+    def _build_execution_request(self) -> WidgetExecutionRequest | None:
+        """Return a worker-safe execution request or None for an empty result."""
+        return None
+
+    def _build_task_execution_request(
+        self,
+        workflow_obj: Task | Pipe | None,
+        *,
+        input_values: dict[str, object],
+        output_names: tuple[str, ...],
+    ) -> WidgetExecutionRequest | None:
+        """Return a standard request for one canonical task-backed execution."""
+        if workflow_obj is None:
+            return None
+        return WidgetExecutionRequest(
+            workflow_obj=workflow_obj,
+            input_values=input_values,
+            output_names=output_names,
+        )
+
+    @staticmethod
+    def _execute_execution_request(request: WidgetExecutionRequest):
+        """Execute one captured request in a worker thread."""
+        if request.execute is not None:
+            return request.execute()
+        return ZugWidget._execute_task_or_pipe_static(
+            request.workflow_obj,
+            input_values=request.input_values or {},
+            output_names=request.output_names,
+        )
+
+    def _run_async(self) -> None:
+        """Dispatch one execution request to the widget's worker thread."""
+        self._execution_runtime.dispatch(
+            self._build_execution_request,
+        )
+
+    def _apply_async_result(self, result) -> None:
+        """Apply a worker result on the main thread."""
+        self._cancel_message_bar_popup()
+        if not self._reported_error_during_run:
+            self._last_error_exc = None
+        self._on_result(result)
+
+    def _apply_async_error(self, exc: Exception) -> None:
+        """Apply a worker exception on the main thread."""
+        self._handle_execution_exception(exc)
+        self._on_result(None)
+
+    def _apply_async_empty_result(self) -> None:
+        """Apply an empty async result without surfacing an error."""
+        self._cancel_message_bar_popup()
+        if not self._reported_error_during_run:
+            self._last_error_exc = None
+        self._on_result(None)
+
+    def _handle_async_preflight_error(self, exc: Exception) -> None:
+        """Handle request-building failures before work reaches the worker."""
+        if not self._reported_error_during_run:
+            self._show_exception("general", exc)
+        self._on_result(None)
+
+    def _handle_async_worker_unavailable(self) -> None:
+        """Handle attempts to dispatch work after the runtime is unavailable."""
+        self._show_error_message("general", "worker is unavailable")
+        self._on_result(None)
+
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Show one execution exception on the main thread."""
+        self._show_exception("general", exc)
+
+    def _execute_workflow_object(
+        self,
+        workflow_obj: Task | Pipe | None,
+        *,
+        input_values: dict[str, object],
+        output_names: tuple[str, ...],
+    ):
+        """Execute one validated workflow object and normalize widget outputs."""
+        if workflow_obj is None:
+            return None
+        try:
+            result = self._execute_task_or_pipe(
+                workflow_obj,
+                input_values=input_values,
+                output_names=output_names,
+            )
+        except Exception as exc:
+            self._handle_execution_exception(exc)
+            return None
+        return self._unwrap_execution_result(result, output_names)
+
+    def _shutdown_async_executor(self) -> None:
+        """Stop the per-widget worker pool."""
+        self._execution_runtime.shutdown()
+
+    def onDeleteWidget(self) -> None:
+        """Release widget-owned worker resources before teardown."""
+        self._shutdown_async_executor()
+        super().onDeleteWidget()
+
+    @property
+    def _active_execution_token(self) -> int | None:
+        """Compatibility view of the runtime's active execution token."""
+        return self._execution_runtime.active_execution_token
+
+    @property
+    def _async_teardown_started(self) -> bool:
+        """Compatibility view of the runtime teardown state."""
+        return self._execution_runtime.teardown_started
+
     def _run(self):
         """Override to implement the widget's core computation; return the result."""
         return None
@@ -694,3 +825,71 @@ class ZugWidget(OWWidget, openclass=True):
 
         Override to update the widget display.
         """
+
+    def get_task(self) -> Task | Pipe:
+        """Return the current workflow representation for this widget."""
+        raise TypeError(f"{type(self).__name__} does not implement get_task()")
+
+    def _execute_task_or_pipe(
+        self,
+        workflow_obj: Task | Pipe,
+        *,
+        input_values: dict[str, object],
+        output_names: tuple[str, ...],
+    ):
+        """Execute one task or sub-pipe for interactive widget use."""
+        return self._execute_task_or_pipe_static(
+            workflow_obj,
+            input_values=input_values,
+            output_names=output_names,
+        )
+
+    @staticmethod
+    def _execute_task_or_pipe_static(
+        workflow_obj: Task | Pipe,
+        *,
+        input_values: dict[str, object],
+        output_names: tuple[str, ...],
+    ):
+        """Execute one task or sub-pipe without touching widget state."""
+        if workflow_obj is None:
+            raise TypeError("workflow_obj may not be None without request.execute")
+        if isinstance(workflow_obj, Task):
+            raw = workflow_obj.run(**input_values)
+            return ZugWidget._normalize_task_outputs(workflow_obj, raw, output_names)
+        if isinstance(workflow_obj, Pipe):
+            results = workflow_obj.run(**input_values, output_keys=list(output_names))
+            return {name: results.get(name) for name in output_names}
+        raise TypeError(f"unsupported workflow object {workflow_obj!r}")
+
+    @staticmethod
+    def _unwrap_execution_result(result, output_names: tuple[str, ...]):
+        """Return the single requested output value when possible."""
+        if isinstance(result, dict) and len(output_names) == 1:
+            return result.get(output_names[0])
+        return result
+
+    @staticmethod
+    def _normalize_task_outputs(
+        task: Task,
+        raw: object,
+        output_names: tuple[str, ...],
+    ):
+        """Normalize task return values for widget `_on_result()` handlers."""
+        mapping = task.resolved_scalar_output_variables()
+        if not mapping:
+            return None
+        if len(mapping) == 1:
+            value = raw
+            if len(output_names) == 1:
+                return value
+            return {output_names[0]: value}
+        if isinstance(raw, dict):
+            return {name: raw.get(name) for name in output_names}
+        if isinstance(raw, tuple) and len(raw) == len(mapping):
+            normalized = dict(zip(mapping.keys(), raw, strict=True))
+            return {name: normalized.get(name) for name in output_names}
+        raise ValueError(
+            f"task {task.__class__.__name__} returned {raw!r} "
+            f"but outputs are {tuple(mapping)}"
+        )

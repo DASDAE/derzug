@@ -12,6 +12,8 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
 class Taper(PatchDimWidget):
@@ -123,20 +125,19 @@ class Taper(PatchDimWidget):
             self._p_spin.blockSignals(False)
         return clamped
 
-    def _run(self) -> dc.Patch | None:
-        """Apply the taper and return the output patch."""
-        if self._patch is None:
-            return None
-        dim = self._get_dim()
-        if dim is None:
-            return None
-        window_type = self._coerce_window_type()
-        p = self._coerce_p()
-        try:
-            return self._patch.taper(window_type=window_type, **{dim: p})
-        except Exception as exc:
-            self._show_exception("taper_failed", exc)
-            return None
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the taper-specific banner."""
+        self._show_exception("taper_failed", exc)
+
+    def get_task(self) -> Task:
+        """Return the current taper operation as a workflow task."""
+        return PatchConfiguredMethodTask(
+            method_name="taper",
+            call_style="keyword_dim",
+            dim=self._get_dim() or self.selected_dim,
+            dim_value=self._coerce_p(),
+            method_kwargs={"window_type": self._coerce_window_type()},
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

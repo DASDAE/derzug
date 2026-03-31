@@ -998,7 +998,7 @@ class TestSpool:
 
         token = spool_widget._patch_name_for_source_row(1)
 
-        assert token == "path:a_patch"
+        assert token == "path:/tmp/a_patch.h5"
 
     def test_restore_source_row_uses_contents_only(self, spool_widget):
         """Restoring a persisted selection token should not iterate patches."""
@@ -1017,7 +1017,30 @@ class TestSpool:
 
         spool_widget._source_spool = _FakeSpool()
 
-        restored = spool_widget._source_row_for_patch_name("path:a_patch")
+        restored = spool_widget._source_row_for_patch_name("path:/tmp/a_patch.h5")
+
+        assert restored == 1
+
+    def test_restore_source_row_uses_full_path_token_to_avoid_collisions(
+        self, spool_widget
+    ):
+        """Persisted row tokens should distinguish rows with the same file stem."""
+
+        class _FakeSpool:
+            def __iter__(self):
+                raise AssertionError("patch iteration should not happen here")
+
+            def get_contents(self):
+                return pd.DataFrame(
+                    [
+                        {"path": "/tmp/one/event.h5", "tag": "first"},
+                        {"path": "/tmp/two/event.h5", "tag": "second"},
+                    ]
+                )
+
+        spool_widget._source_spool = _FakeSpool()
+
+        restored = spool_widget._source_row_for_patch_name("path:/tmp/two/event.h5")
 
         assert restored == 1
 

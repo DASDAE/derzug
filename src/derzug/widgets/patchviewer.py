@@ -28,6 +28,8 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.utils.display import format_display
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchPassThroughTask
 
 
 @dataclass(frozen=True)
@@ -198,6 +200,10 @@ class PatchViewer(ZugWidget):
             self.Outputs.patch.send(None)
             return
         self.Outputs.patch.send(patch)
+
+    def get_task(self) -> Task:
+        """Return the compiled workflow representation for PatchViewer."""
+        return PatchPassThroughTask()
 
     def _refresh_ui(self) -> None:
         """Rebuild the visible tree and preview for the current patch."""

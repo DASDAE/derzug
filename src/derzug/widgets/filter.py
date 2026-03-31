@@ -20,9 +20,11 @@ from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
+from derzug.core.zugwidget import WidgetExecutionRequest
 from derzug.orange import Setting
 from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.parsing import parse_patch_text_value
+from derzug.workflow import Task
 
 _FILTER_NAMES: tuple[str, ...] = (
     "gaussian_filter",
@@ -62,6 +64,159 @@ def _make_page(*widgets: QWidget) -> QWidget:
     for w in widgets:
         layout.addWidget(w)
     return page
+
+
+class FilterTask(Task):
+    """Portable filter task mirroring the widget's persisted settings."""
+
+    input_variables: ClassVar[dict[str, object]] = {"patch": object}
+    output_variables: ClassVar[dict[str, object]] = {"patch": object}
+
+    selected_filter: str = "pass_filter"
+    selected_dim: str = ""
+    low_bound: str = ""
+    high_bound: str = ""
+    corners: int = 4
+    zerophase: bool = True
+    filter_window: str = "0.01"
+    apply_taper: bool = True
+    taper_window: str = "0.01"
+    samples: bool = False
+    mode: str = "reflect"
+    cval: float = 0.0
+    truncate: float = 4.0
+    gaussian_dim_windows: tuple[dict[str, str], ...] = ()
+    threshold: float = 10.0
+    approximate: bool = True
+    q: float = 35.0
+    polyorder: int = 3
+    noise: str = ""
+    slope_filt: str = ""
+    slope_dim0: str = "distance"
+    slope_dim1: str = "time"
+    slope_directional: bool = False
+    slope_notch: bool = False
+    slope_invert: bool = False
+
+    def _validated_gaussian_kwargs(
+        self, available_dims: tuple[str, ...]
+    ) -> dict[str, object]:
+        kwargs: dict[str, object] = {}
+        seen_dims: set[str] = set()
+        for row in self.gaussian_dim_windows:
+            dim = str(row.get("dim", "")).strip()
+            window = str(row.get("window", "")).strip()
+            if not dim and not window:
+                continue
+            if not dim or not window:
+                raise ValueError(
+                    "each Gaussian row needs both a dimension and a window"
+                )
+            if dim not in available_dims:
+                raise ValueError(f"'{dim}' is not an available dimension")
+            if dim in seen_dims:
+                raise ValueError(f"duplicate Gaussian dimension '{dim}'")
+            kwargs[dim] = parse_patch_text_value(window, required=True)
+            seen_dims.add(dim)
+        if not kwargs:
+            raise ValueError("at least one Gaussian dimension/window is required")
+        return kwargs
+
+    def run(self, patch):
+        """Apply the selected persisted DASCore filter to one patch."""
+        f = self.selected_filter
+        if f not in _FILTER_NAMES:
+            raise ValueError(f"Unknown filter: {f!r}")
+        available_dims = tuple(patch.dims)
+        dim = (
+            self.selected_dim
+            if self.selected_dim in available_dims
+            else (available_dims[0] if available_dims else None)
+        )
+        if self.apply_taper and self.taper_window.strip() and dim is not None:
+            patch = patch.taper(
+                **{dim: parse_patch_text_value(self.taper_window, required=True)}
+            )
+        fn = getattr(patch, f)
+        if f == "slope_filter":
+            filt = [float(x) for x in self.slope_filt.split(",") if x.strip()]
+            if not filt:
+                return patch
+            return fn(
+                filt=filt,
+                dims=(self.slope_dim0, self.slope_dim1),
+                directional=bool(self.slope_directional),
+                notch=bool(self.slope_notch) or None,
+                invert=bool(self.slope_invert),
+            )
+        if dim is None:
+            return patch
+        if f == "pass_filter":
+            low = parse_patch_text_value(
+                self.low_bound,
+                allow_none=True,
+                allow_ellipsis=True,
+            )
+            high = parse_patch_text_value(
+                self.high_bound,
+                allow_none=True,
+                allow_ellipsis=True,
+            )
+            if low is None and high is None:
+                return patch
+            return fn(
+                corners=int(self.corners),
+                zerophase=bool(self.zerophase),
+                **{dim: (low, high)},
+            )
+        if f == "gaussian_filter":
+            return fn(
+                samples=bool(self.samples),
+                mode=self.mode,
+                cval=float(self.cval),
+                truncate=float(self.truncate),
+                **self._validated_gaussian_kwargs(available_dims),
+            )
+        if f == "hampel_filter":
+            return fn(
+                threshold=float(self.threshold),
+                samples=bool(self.samples),
+                approximate=bool(self.approximate),
+                **{dim: parse_patch_text_value(self.filter_window, required=True)},
+            )
+        if f == "median_filter":
+            return fn(
+                samples=bool(self.samples),
+                mode=self.mode,
+                cval=float(self.cval),
+                **{dim: parse_patch_text_value(self.filter_window, required=True)},
+            )
+        if f == "notch_filter":
+            return fn(
+                q=float(self.q),
+                **{dim: parse_patch_text_value(self.filter_window, required=True)},
+            )
+        if f == "savgol_filter":
+            return fn(
+                polyorder=int(self.polyorder),
+                samples=bool(self.samples),
+                mode=self.mode,
+                cval=float(self.cval),
+                **{dim: parse_patch_text_value(self.filter_window, required=True)},
+            )
+        if f == "sobel_filter":
+            return fn(dim=dim, mode=self.mode, cval=float(self.cval))
+        if f == "wiener_filter":
+            return fn(
+                noise=parse_patch_text_value(
+                    self.noise,
+                    allow_none=True,
+                    allow_quantity=False,
+                ),
+                samples=bool(self.samples),
+                **{dim: parse_patch_text_value(self.filter_window, required=True)},
+            )
+        raise ValueError(f"Unhandled filter: {f!r}")
 
 
 class Filter(PatchDimWidget):
@@ -582,132 +737,113 @@ class Filter(PatchDimWidget):
             raise ValueError("at least one Gaussian dimension/window is required")
         return kwargs
 
+    def _build_execution_request(self) -> WidgetExecutionRequest | None:
+        """Build one filter execution request with validated parameters."""
+        patch = self._patch
+        if patch is None:
+            return None
+        return self._build_task_execution_request(
+            self._validated_task(),
+            input_values={"patch": patch},
+            output_names=("patch",),
+        )
+
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the filter-specific banner."""
+        self._show_exception("general", exc)
+
     # ------------------------------------------------------------------
     # Core computation
     # ------------------------------------------------------------------
 
     def _run(self):
         """Dispatch to the selected DASCore filter method."""
-        if self._patch is None:
-            return None
-
-        f = self.selected_filter
-        if f not in _FILTER_NAMES:
-            raise ValueError(f"Unknown filter: {f!r}")
-
         patch = self._patch
-        if self._available_dims:
-            taper_dim = (
-                self.selected_dim
-                if self.selected_dim in self._available_dims
-                else self._available_dims[0]
-            )
-            if self.apply_taper and self.taper_window.strip():
-                patch = patch.taper(
-                    **{
-                        taper_dim: parse_patch_text_value(
-                            self.taper_window,
-                            required=True,
-                        )
-                    }
-                )
-
-        fn = getattr(patch, f)
-
-        if f == "slope_filter":
-            filt = [float(x) for x in self.slope_filt.split(",") if x.strip()]
-            if not filt:
-                return patch
-            return fn(
-                filt=filt,
-                dims=(self.slope_dim0, self.slope_dim1),
-                directional=bool(self.slope_directional),
-                notch=bool(self.slope_notch) or None,
-                invert=bool(self.slope_invert),
-            )
-
-        # All other filters need a valid dim from the patch.
-        dim = self._get_dim()
-        if dim is None:
+        if patch is None:
             return None
+        return self._execute_workflow_object(
+            self._validated_task(),
+            input_values={"patch": patch},
+            output_names=("patch",),
+        )
 
-        if f == "pass_filter":
-            low = parse_patch_text_value(
+    def _validated_task(self) -> FilterTask | None:
+        """Return the current validated filter task, or None on invalid state."""
+        selected_filter = self.selected_filter
+        selected_dim = str(self.selected_dim or "")
+        if selected_filter not in _FILTER_NAMES:
+            raise ValueError(f"Unknown filter: {selected_filter!r}")
+        if self.apply_taper and self.taper_window.strip() and self._available_dims:
+            parse_patch_text_value(self.taper_window, required=True)
+        if selected_filter == "pass_filter":
+            selected_dim = str(self._get_dim() or selected_dim)
+            parse_patch_text_value(
                 self.low_bound,
                 allow_none=True,
                 allow_ellipsis=True,
             )
-            high = parse_patch_text_value(
+            parse_patch_text_value(
                 self.high_bound,
                 allow_none=True,
                 allow_ellipsis=True,
             )
-            if low is None and high is None:
-                return patch
-            return fn(
-                corners=int(self.corners),
-                zerophase=bool(self.zerophase),
-                **{dim: (low, high)},
-            )
-
-        if f == "gaussian_filter":
-            return fn(
-                samples=bool(self.samples),
-                mode=self.mode,
-                cval=float(self.cval),
-                truncate=float(self.truncate),
-                **self._validated_gaussian_kwargs(),
-            )
-
-        if f == "hampel_filter":
-            return fn(
-                threshold=float(self.threshold),
-                samples=bool(self.samples),
-                approximate=bool(self.approximate),
-                **{dim: parse_patch_text_value(self.filter_window, required=True)},
-            )
-
-        if f == "median_filter":
-            return fn(
-                samples=bool(self.samples),
-                mode=self.mode,
-                cval=float(self.cval),
-                **{dim: parse_patch_text_value(self.filter_window, required=True)},
-            )
-
-        if f == "notch_filter":
-            return fn(
-                q=float(self.q),
-                **{dim: parse_patch_text_value(self.filter_window, required=True)},
-            )
-
-        if f == "savgol_filter":
-            return fn(
-                polyorder=int(self.polyorder),
-                samples=bool(self.samples),
-                mode=self.mode,
-                cval=float(self.cval),
-                **{dim: parse_patch_text_value(self.filter_window, required=True)},
-            )
-
-        if f == "sobel_filter":
-            return fn(dim=dim, mode=self.mode, cval=float(self.cval))
-
-        if f == "wiener_filter":
-            return fn(
-                noise=parse_patch_text_value(
+        elif selected_filter == "gaussian_filter":
+            self._validated_gaussian_kwargs()
+        elif selected_filter == "slope_filter":
+            for value in self.slope_filt.split(","):
+                stripped = value.strip()
+                if stripped:
+                    float(stripped)
+        else:
+            selected_dim = str(self._get_dim() or selected_dim)
+            if not selected_dim:
+                return None
+            parse_patch_text_value(self.filter_window, required=True)
+            if selected_filter == "wiener_filter":
+                parse_patch_text_value(
                     self.noise,
                     allow_none=True,
                     allow_quantity=False,
-                ),
-                samples=bool(self.samples),
-                **{dim: parse_patch_text_value(self.filter_window, required=True)},
-            )
-
-        raise ValueError(f"Unhandled filter: {f!r}")
+                )
+        return FilterTask(
+            selected_filter=str(selected_filter or "pass_filter"),
+            selected_dim=selected_dim,
+            low_bound=str(self.low_bound or ""),
+            high_bound=str(self.high_bound or ""),
+            corners=int(self.corners),
+            zerophase=bool(self.zerophase),
+            filter_window=str(self.filter_window or ""),
+            apply_taper=bool(self.apply_taper),
+            taper_window=str(self.taper_window or ""),
+            samples=bool(self.samples),
+            mode=str(self.mode or "reflect"),
+            cval=float(self.cval),
+            truncate=float(self.truncate),
+            gaussian_dim_windows=tuple(
+                self._normalize_gaussian_dim_windows(self.gaussian_dim_windows)
+            ),
+            threshold=float(self.threshold),
+            approximate=bool(self.approximate),
+            q=float(self.q),
+            polyorder=int(self.polyorder),
+            noise=str(self.noise or ""),
+            slope_filt=str(self.slope_filt or ""),
+            slope_dim0=str(self.slope_dim0 or ""),
+            slope_dim1=str(self.slope_dim1 or ""),
+            slope_directional=bool(self.slope_directional),
+            slope_notch=bool(self.slope_notch),
+            slope_invert=bool(self.slope_invert),
+        )
 
     def _on_result(self, result) -> None:
         self.Outputs.patch.send(result)
+
+    def get_task(self) -> Task:
+        """Return the current filter semantics as a workflow task."""
+        task = self._validated_task()
+        if task is None:
+            raise ValueError("current Filter state is not valid")
+        return task
 
 
 if __name__ == "__main__":  # pragma: no cover

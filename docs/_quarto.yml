@@ -1,0 +1,95 @@
+project:
+  type: website
+  output-dir: _site
+
+execute:
+  eval: false
+  warning: false
+
+format:
+  html:
+    toc: true
+    theme:
+      light: yeti
+      dark: darkly
+    code-copy: true
+    code-overflow: wrap
+
+website:
+  title: DerZug
+  repo-url: https://github.com/dasdae/derzug
+  repo-subdir: docs
+  repo-branch: main
+  repo-actions: [edit]
+  page-navigation: true
+  image: "static/logo_v2.png"
+  favicon: "static/logo_v2.png"
+
+  navbar:
+    logo: static/logo_v2.png
+    logo-alt: "DerZug logo."
+    background: light
+    search: true
+    left:
+      - text: Introduction
+        file: index.qmd
+
+      - text: Development
+        file: dev/dev.qmd
+
+      - text: Architecture
+        file: dev/architecture.qmd
+
+    right:
+      - icon: github
+        href: https://github.com/dasdae/derzug
+        aria-label: DerZug GitHub
+
+  sidebar:
+    - id: about
+      title: "About"
+      style: "floating"
+      collapse-level: 2
+      contents:
+        - text: Introduction
+          href: index.qmd
+
+        - text: Roadmap
+          href: dev/roadmap.md
+
+    - id: development
+      title: "Development"
+      style: "floating"
+      collapse-level: 2
+      contents:
+        - text: Overview
+          href: dev/dev.qmd
+
+        - text: Creating Widgets
+          href: dev/creating_widgets.qmd
+
+        - text: Widget Development
+          href: dev/widget_development.md
+
+        - text: Guidelines
+          href: dev/guidelines.md
+
+    - id: architecture
+      title: "Architecture"
+      style: "floating"
+      collapse-level: 2
+      contents:
+        - text: Overview
+          href: dev/architecture.qmd
+
+        - text: Design
+          href: dev/design.md
+
+        - text: Workflow Design
+          href: dev/workflow-design.md
+
+        - text: Workflow Spec
+          href: dev/workflow_spec.md
+
+        - text: Streaming Engine Spec
+          href: dev/streaming-engine-spec.md

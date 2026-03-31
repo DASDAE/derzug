@@ -5,7 +5,12 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from derzug.models.annotations import AnnotationSet, PointGeometry, SpanGeometry
-from derzug.utils.testing import TestWidgetDefaults, capture_output, widget_context
+from derzug.utils.testing import (
+    TestWidgetDefaults,
+    capture_output,
+    wait_for_widget_idle,
+    widget_context,
+)
 from derzug.widgets.table2annotation import Table2Annotation
 
 # ---------------------------------------------------------------------------
@@ -56,6 +61,7 @@ class TestSetData:
         """None input triggers the no_data warning."""
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)
         widget.set_data(None)
+        wait_for_widget_idle(widget, timeout=5.0)
         assert widget.Warning.no_data.is_shown()
         assert received[-1] is None
 
@@ -63,6 +69,7 @@ class TestSetData:
         """Empty DataFrame triggers the no_data warning."""
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)
         widget.set_data(pd.DataFrame())
+        wait_for_widget_idle(widget, timeout=5.0)
         assert widget.Warning.no_data.is_shown()
         assert received[-1] is None
 
@@ -80,6 +87,7 @@ class TestRunOutput:
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)
         widget.dims_text = ""
         widget.set_data(_point_df())
+        wait_for_widget_idle(widget, timeout=5.0)
         assert widget.Error.no_dims.is_shown()
         assert received[-1] is None
 
@@ -88,6 +96,7 @@ class TestRunOutput:
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)
         _configure_point_widget(widget)
         widget.set_data(_point_df())
+        wait_for_widget_idle(widget, timeout=5.0)
         result = received[-1]
         assert isinstance(result, AnnotationSet)
         assert len(result.annotations) == 2
@@ -97,6 +106,7 @@ class TestRunOutput:
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)
         _configure_point_widget(widget)
         widget.set_data(_point_df())
+        wait_for_widget_idle(widget, timeout=5.0)
         result = received[-1]
         first = result.annotations[0]
         assert isinstance(first.geometry, PointGeometry)
@@ -113,6 +123,7 @@ class TestRunOutput:
         widget.line_axis_dim = "time"
         widget.col_map = {"time": "time"}
         widget.set_data(_point_df())
+        wait_for_widget_idle(widget, timeout=5.0)
         result = received[-1]
         assert isinstance(result, AnnotationSet)
         assert all(isinstance(a.geometry, SpanGeometry) for a in result.annotations)
@@ -123,6 +134,7 @@ class TestRunOutput:
         _configure_point_widget(widget)
         df = pd.DataFrame({"time": [1.0, float("nan")], "dist": [10.0, 20.0]})
         widget.set_data(df)
+        wait_for_widget_idle(widget, timeout=5.0)
         assert widget.Warning.rows_skipped.is_shown()
         result = received[-1]
         assert len(result.annotations) == 1
@@ -132,5 +144,21 @@ class TestRunOutput:
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)
         _configure_point_widget(widget)
         widget.set_data(_point_df())
+        wait_for_widget_idle(widget, timeout=5.0)
         widget.set_data(None)
+        wait_for_widget_idle(widget, timeout=5.0)
         assert received[-1] is None
+
+    def test_get_task_matches_widget_output(self, widget, monkeypatch):
+        """The canonical task should produce the same annotation set as the widget."""
+        received = capture_output(widget.Outputs.annotation_set, monkeypatch)
+        _configure_point_widget(widget)
+        df = _point_df()
+
+        widget.set_data(df)
+        wait_for_widget_idle(widget, timeout=5.0)
+
+        widget_result = received[-1]
+        task_result = widget.get_task().run(df)
+
+        assert widget_result == task_result

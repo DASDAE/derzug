@@ -10,8 +10,26 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
-from derzug.core.zugwidget import ZugWidget
+from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
+
+
+class AggregateTask(Task):
+    """Task wrapper around DASCore aggregate reduction."""
+
+    selected_dim: str = ""
+    method: str = "mean"
+    dim_reduce: str = "empty"
+    input_variables: ClassVar[dict[str, object]] = {"patch": object}
+    output_variables: ClassVar[dict[str, object]] = {"patch": object}
+
+    def run(self, patch):
+        """Apply the configured aggregate reduction to one patch."""
+        dim = None if self.selected_dim in ("", "All") else self.selected_dim
+        if self.method == "phase_weighted_stack":
+            return patch.phase_weighted_stack(stack_dim=dim, dim_reduce=self.dim_reduce)
+        return patch.aggregate(dim=dim, method=self.method, dim_reduce=self.dim_reduce)
 
 
 class Aggregate(ZugWidget):
@@ -146,18 +164,29 @@ class Aggregate(ZugWidget):
         self.dim_reduce = value
         self.run()
 
-    def _run(self) -> dc.Patch | None:
-        """Apply aggregate reduction with current settings and return output patch."""
-        if self._patch is None:
-            return None
+    def _supports_async_execution(self) -> bool:
+        """Run aggregate reductions off-thread by default."""
+        return True
 
+    def _build_execution_request(self) -> WidgetExecutionRequest | None:
+        """Build one aggregate execution request from current widget state."""
+        patch = self._patch
+        if patch is None:
+            return None
+        return self._build_task_execution_request(
+            self._validated_task(),
+            input_values={"patch": patch},
+            output_names=("patch",),
+        )
+
+    def _validated_task(self) -> Task | None:
+        """Return the aggregate task after normalizing persisted settings."""
         method = self.method if self.method in self._METHODS else self._METHODS[0]
         if method != self.method:
             self.method = method
             self._method_combo.blockSignals(True)
             self._method_combo.setCurrentText(method)
             self._method_combo.blockSignals(False)
-
         dim_reduce = (
             self.dim_reduce
             if self.dim_reduce in self._DIM_REDUCES
@@ -168,26 +197,33 @@ class Aggregate(ZugWidget):
             self._dim_reduce_combo.blockSignals(True)
             self._dim_reduce_combo.setCurrentText(dim_reduce)
             self._dim_reduce_combo.blockSignals(False)
+        return AggregateTask(
+            selected_dim=self.selected_dim,
+            method=method,
+            dim_reduce=dim_reduce,
+        )
 
-        dim = None if self.selected_dim in ("", "All") else self.selected_dim
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the aggregate-specific banner."""
+        self._show_exception("aggregate_failed", exc)
 
-        try:
-            if method == "phase_weighted_stack":
-                out = self._patch.phase_weighted_stack(
-                    stack_dim=dim,
-                    dim_reduce=dim_reduce,
-                )
-            else:
-                out = self._patch.aggregate(
-                    dim=dim,
-                    method=method,
-                    dim_reduce=dim_reduce,
-                )
-        except Exception as exc:
-            self._show_exception("aggregate_failed", exc)
+    def _run(self) -> dc.Patch | None:
+        """Apply aggregate reduction with current settings and return output patch."""
+        patch = self._patch
+        if patch is None:
             return None
+        return self._execute_workflow_object(
+            self._validated_task(),
+            input_values={"patch": patch},
+            output_names=("patch",),
+        )
 
-        return out
+    def get_task(self) -> Task:
+        """Return the configured aggregate task."""
+        workflow_obj = self._validated_task()
+        if workflow_obj is None:
+            raise ValueError("current Aggregate state is not valid")
+        return workflow_obj
 
     def _on_result(self, result: dc.Patch | None) -> None:
         """Send aggregate result patch on output."""

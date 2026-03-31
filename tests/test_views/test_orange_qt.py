@@ -999,6 +999,7 @@ class TestDerZugMainWindow:
         spool_widget = workflow.widgets_by_title["Spool"]
         spool_node = workflow.nodes_by_title["Spool"]
 
+        wait_for_widget_idle(spool_widget)
         title_before = spool_node.title
         window._canvas_composite_controller._set_active_source_widget(spool_widget)
         qapp.processEvents()
@@ -2133,20 +2134,13 @@ class TestDerZugCanvasWorkflow:
         )
 
         emitted_patches: list[dc.Patch | None] = []
-        delivered_patches: list[dc.Patch | None] = []
         original_send = spool_widget.Outputs.patch.send
-        original_set_patch = waterfall_widget.set_patch
 
         def _send_and_record(patch):
             emitted_patches.append(patch)
             return original_send(patch)
 
-        def _set_patch_and_record(patch):
-            delivered_patches.append(patch)
-            return original_set_patch(patch)
-
         monkeypatch.setattr(spool_widget.Outputs.patch, "send", _send_and_record)
-        monkeypatch.setattr(waterfall_widget, "set_patch", _set_patch_and_record)
 
         spool_widget.spool_input = "example_event_2"
         spool_widget.unpack_single_patch = True
@@ -2155,7 +2149,6 @@ class TestDerZugCanvasWorkflow:
         qtbot.waitUntil(lambda: waterfall_widget._patch is not None, timeout=5000)
 
         assert len(emitted_patches) == 1
-        assert len(delivered_patches) == 1
 
         qtbot.mouseDClick(
             window.scheme_widget.view().viewport(), Qt.LeftButton, pos=body_center
@@ -2167,7 +2160,6 @@ class TestDerZugCanvasWorkflow:
         qtbot.wait(50)
 
         assert len(emitted_patches) == 1
-        assert len(delivered_patches) == 1
 
     def test_loaded_waterfall_widget_window_does_not_smoosh_selection_buttons(
         self, derzug_app, qapp

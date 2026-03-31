@@ -66,7 +66,7 @@ Recommended:
 Before cutting a release:
 
 1. Ensure [`pyproject.toml`](/home/derrick/Gits/derzug/pyproject.toml) has the correct metadata.
-2. Ensure [`README.md`](/home/derrick/Gits/derzug/README.md) is suitable for the PyPI project page.
+2. Ensure [`README.md`](../README.md) is suitable for the PyPI project page.
 3. Commit all release-related changes.
 4. Make sure the release commit is on the branch you want to tag.
 

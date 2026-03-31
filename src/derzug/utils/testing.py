@@ -10,7 +10,7 @@ import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import ClassVar, TypeVar
+from typing import ClassVar
 
 import pytest
 from AnyQt.QtCore import Qt
@@ -26,11 +26,10 @@ from orangecanvas.registry import WidgetRegistry
 
 from derzug.core import ZugWidget
 from derzug.core.patchdimwidget import PatchDimWidget
+from derzug.workflow import Pipe, Task
 
-T = TypeVar("T", bound=OWWidget)
 
-
-def wait_for_widget_idle(widget: OWWidget, timeout: float = 2.0) -> None:
+def wait_for_widget_idle(widget: OWWidget, timeout: float = 5.0) -> None:
     """Pump Qt events until a widget finishes all active background tasks.
 
     Handles widgets that chain tasks (e.g. spool-load followed by a deferred
@@ -41,7 +40,12 @@ def wait_for_widget_idle(widget: OWWidget, timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         QApplication.processEvents()
-        if getattr(widget, "task", None) is None:
+        if getattr(widget, "_async_teardown_started", False):
+            QApplication.processEvents()
+            return
+        has_orange_task = getattr(widget, "task", None) is not None
+        has_async_task = getattr(widget, "_active_execution_token", None) is not None
+        if not has_orange_task and not has_async_task:
             # Double-check is intentional: Spool chains two tasks (load-index
             # then read-patch) via QTimer.singleShot(0, ...).  The first
             # processEvents() above fires on_done for task-1 and queues the
@@ -49,8 +53,17 @@ def wait_for_widget_idle(widget: OWWidget, timeout: float = 2.0) -> None:
             # starts task-2.  Without it we'd declare the widget idle while
             # task-2 is still pending, causing races in tests.
             QApplication.processEvents()
-            if getattr(widget, "task", None) is None:
+            has_orange_task = getattr(widget, "task", None) is not None
+            has_async_task = (
+                getattr(widget, "_active_execution_token", None) is not None
+            )
+            if not has_orange_task and not has_async_task:
+                QApplication.processEvents()
                 return
+        time.sleep(0.01)
+    raise AssertionError(
+        f"{type(widget).__name__} did not become idle within {timeout}s"
+    )
 
 
 def capture_output(output_slot, monkeypatch) -> list:
@@ -83,7 +96,7 @@ class BuiltWorkflow:
 
 
 @contextmanager
-def widget_context(cls: type[T], stored_settings: dict | None = None):
+def widget_context[T: OWWidget](cls: type[T], stored_settings: dict | None = None):
     """
     Context manager for safely creating and cleaning up an OWidget in tests.
 
@@ -260,6 +273,13 @@ class TestWidgetDefaults(WidgetTest):
         error_general = getattr(widget_object.Error, "general", None)
         if error_general is not None:
             assert not error_general.is_shown()
+
+    def test_widget_exposes_workflow_object(self):
+        """Widget returns a workflow `Task` or `Pipe` for compilation."""
+        widget_object = self.create_default_widget()
+        workflow_obj = widget_object.get_task()
+
+        assert isinstance(workflow_obj, Task | Pipe)
 
     def test_minimum_size(self):
         """Widget meets Orange minimum-size expectations."""

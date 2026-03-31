@@ -4,13 +4,9 @@ DERZUG utility module.
 
 from derzug.utils.code2widget import (
     INPUTS_NOT_READY,
-    WidgetFunctionSchema,
-    WidgetInputSpec,
-    WidgetOutputSpec,
     function_to_widget,
-    invoke_schema_function,
-    schema_from_function,
-    widget_class_from_schema,
+    task_from_callable,
+    widget_class_from_callable,
 )
 from derzug.utils.display import format_display
 from derzug.utils.docstring import (
@@ -24,15 +20,11 @@ __all__ = [
     "INPUTS_NOT_READY",
     "ParsedDocEntry",
     "ParsedNumpyDocstring",
-    "WidgetFunctionSchema",
-    "WidgetInputSpec",
-    "WidgetOutputSpec",
     "format_display",
     "function_to_widget",
-    "invoke_schema_function",
     "parse_numpy_docstring",
     "parse_patch_text_value",
     "parse_text_value",
-    "schema_from_function",
-    "widget_class_from_schema",
+    "task_from_callable",
+    "widget_class_from_callable",
 ]

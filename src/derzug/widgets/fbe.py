@@ -14,6 +14,69 @@ from Orange.widgets.widget import Msg
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
 from derzug.utils.parsing import parse_patch_text_value
+from derzug.workflow import Task
+
+
+class FBETask(Task):
+    """Portable FBE task mirroring the widget's persisted settings."""
+
+    input_variables: ClassVar[dict[str, object]] = {"patch": object}
+    output_variables: ClassVar[dict[str, object]] = {"patch": object}
+
+    selected_dim: str = "time"
+    window_length: str = "0.01"
+    overlap: str = "50 %"
+    taper_window: str = "hann"
+    samples: bool = False
+    detrend: bool = False
+    fbe_lower: str = ""
+    fbe_upper: str = ""
+
+    def _parse_overlap(self):
+        text = self.overlap.strip()
+        if not text:
+            return None
+        lowered = text.lower()
+        if "%" in text or "percent" in lowered:
+            value = parse_patch_text_value(
+                text.replace("%", "").replace("percent", "").strip(),
+                required=True,
+            )
+            return value * percent
+        return parse_patch_text_value(text, allow_none=True, required=False)
+
+    def _parse_fbe_bound(self, text: str):
+        if not text.strip():
+            return None
+        return parse_patch_text_value(text, allow_none=True, required=False)
+
+    def run(self, patch):
+        """Apply FBE reduction to one patch using persisted settings."""
+        if "time" not in patch.dims:
+            return None
+        dim = self.selected_dim if self.selected_dim in patch.dims else "time"
+        window_length = parse_patch_text_value(self.window_length, required=True)
+        overlap = self._parse_overlap()
+        stft_patch = patch.stft(
+            overlap=overlap,
+            taper_window=self.taper_window,
+            samples=bool(self.samples),
+            detrend=bool(self.detrend),
+            **{dim: window_length},
+        )
+        ft_values = stft_patch.get_array("ft_time")
+        low = self._parse_fbe_bound(self.fbe_lower)
+        high = self._parse_fbe_bound(self.fbe_upper)
+        low = ft_values[0] if low is None else low
+        high = ft_values[-1] if high is None else high
+        if low > high:
+            raise ValueError("lower must be less than or equal to upper")
+        return (
+            (stft_patch * stft_patch.conj())
+            .select(ft_time=(low, high))
+            .sum("ft_time")
+            .squeeze()
+        )
 
 
 class FBE(PatchDimWidget):
@@ -226,56 +289,69 @@ class FBE(PatchDimWidget):
             raise
         return low, high
 
-    def _run(self) -> dc.Patch | None:
-        """Apply STFT power-band extraction and return the reduced patch."""
-        if self._patch is None:
-            return None
-        if "time" not in self._patch.dims:
+    def _validated_task(self) -> Task | None:
+        """Return the current FBE task after widget-side validation."""
+        patch = self._patch
+        if patch is not None and "time" not in patch.dims:
             self._show_error_message("invalid_patch")
             return None
-
         dim = self._get_dim()
         if dim is None:
             return None
-
         try:
-            window_length = self._parse_window_length()
+            self._parse_window_length()
         except Exception as exc:
             self._show_exception("invalid_window_length", exc, self.window_length)
             return None
-
         try:
-            overlap = self._parse_overlap()
+            self._parse_overlap()
         except Exception as exc:
             self._show_exception("invalid_overlap", exc, self.overlap)
             return None
-
-        taper_window = self._coerce_taper_window()
-
         try:
-            stft_patch = self._patch.stft(
-                overlap=overlap,
-                taper_window=taper_window,
-                samples=self.samples,
-                detrend=self.detrend,
-                **{dim: window_length},
-            )
-            low, high = self._resolved_fbe_bounds(stft_patch)
-            return (
-                (stft_patch * stft_patch.conj())
-                .select(ft_time=(low, high))
-                .sum("ft_time")
-                .squeeze()
-            )
+            lower = self._parse_fbe_bound(self.fbe_lower)
         except Exception as exc:
-            if (
-                self.Error.invalid_fbe_lower.is_shown()
-                or self.Error.invalid_fbe_upper.is_shown()
-                or self.Error.invalid_fbe_band.is_shown()
-            ):
-                return None
-            self._show_exception("transform_failed", exc)
+            self._show_exception("invalid_fbe_lower", exc, self.fbe_lower)
             return None
+        try:
+            upper = self._parse_fbe_bound(self.fbe_upper)
+        except Exception as exc:
+            self._show_exception("invalid_fbe_upper", exc, self.fbe_upper)
+            return None
+        if lower is not None and upper is not None:
+            try:
+                if lower > upper:
+                    raise ValueError("lower must be less than or equal to upper")
+            except Exception as exc:
+                self._show_exception("invalid_fbe_band", exc)
+                return None
+        return FBETask(
+            selected_dim=str(dim or "time"),
+            window_length=str(self.window_length or ""),
+            overlap=str(self.overlap or ""),
+            taper_window=str(self._coerce_taper_window()),
+            samples=bool(self.samples),
+            detrend=bool(self.detrend),
+            fbe_lower=str(self.fbe_lower or ""),
+            fbe_upper=str(self.fbe_upper or ""),
+        )
+
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the transform-specific banner."""
+        self._show_exception("transform_failed", exc)
+
+    def get_task(self) -> Task:
+        """Return the current FBE semantics as a workflow task."""
+        return FBETask(
+            selected_dim=str(self.selected_dim or "time"),
+            window_length=str(self.window_length or ""),
+            overlap=str(self.overlap or ""),
+            taper_window=str(self._coerce_taper_window()),
+            samples=bool(self.samples),
+            detrend=bool(self.detrend),
+            fbe_lower=str(self.fbe_lower or ""),
+            fbe_upper=str(self.fbe_upper or ""),
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

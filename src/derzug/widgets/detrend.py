@@ -12,6 +12,8 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
 class Detrend(PatchDimWidget):
@@ -81,14 +83,12 @@ class Detrend(PatchDimWidget):
         self.detrend_type = value
         self.run()
 
-    def _run(self) -> dc.Patch | None:
-        """Apply detrending with current settings and return output patch."""
-        if self._patch is None:
-            return None
-        dim = self._get_dim()
-        if dim is None:
-            return None
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the detrend-specific banner."""
+        self._show_exception("detrend_failed", exc)
 
+    def _coerce_detrend_type(self) -> str:
+        """Return a supported detrend type and normalize widget state."""
         detrend_type = (
             self.detrend_type if self.detrend_type in self._TYPES else self._TYPES[0]
         )
@@ -97,12 +97,16 @@ class Detrend(PatchDimWidget):
             self._type_combo.blockSignals(True)
             self._type_combo.setCurrentText(detrend_type)
             self._type_combo.blockSignals(False)
+        return detrend_type
 
-        try:
-            return self._patch.detrend(dim, detrend_type)
-        except Exception as exc:
-            self._show_exception("detrend_failed", exc)
-            return None
+    def get_task(self) -> Task:
+        """Return the current detrend operation as a workflow task."""
+        return PatchConfiguredMethodTask(
+            method_name="detrend",
+            call_style="positional_dim",
+            dim=self._get_dim() or self.selected_dim,
+            method_args=(self._coerce_detrend_type(),),
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

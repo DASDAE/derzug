@@ -8,6 +8,7 @@ import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from html import escape
+from typing import ClassVar
 
 import dascore as dc
 import numpy as np
@@ -29,11 +30,8 @@ from orangewidget.utils.signals import PartialSummary
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.orange import Setting
-from derzug.utils.code2widget import (
-    INPUTS_NOT_READY,
-    invoke_schema_function,
-    schema_from_function,
-)
+from derzug.utils.code2widget import INPUTS_NOT_READY, task_from_callable
+from derzug.workflow import Task
 
 DEFAULT_SCRIPT = """def transform(patch):
     \"\"\"Return the value to emit from this widget.\"\"\"
@@ -41,6 +39,45 @@ DEFAULT_SCRIPT = """def transform(patch):
 """
 
 logger = logging.getLogger(__name__)
+
+
+class _LoggedTaskExecutionError(Exception):
+    """Internal wrapper that preserves captured stdout/stderr on failure."""
+
+    def __init__(self, exc: Exception, stream_text: str) -> None:
+        super().__init__(str(exc))
+        self.original = exc
+        self.stream_text = stream_text
+
+
+class CodeTransformTask(Task):
+    """Task that compiles widget script text and invokes `transform`."""
+
+    script_text: str
+    input_variables: ClassVar[dict[str, object]] = {"patch": object}
+    output_variables: ClassVar[dict[str, object]] = {"result": object}
+
+    def run(self, patch):
+        """Compile the saved script and execute its `transform` callable."""
+        namespace: dict[str, object] = {
+            "__builtins__": __builtins__,
+            "__name__": "__main__",
+            "dc": dc,
+            "np": np,
+        }
+        code = compile(self.script_text, "<derzug-code>", "exec")
+        exec(code, namespace, namespace)
+        transform = namespace.get("transform")
+        if not callable(transform):
+            raise ValueError("script must define a callable `transform(patch)`")
+        task_type = task_from_callable(transform)
+        if Code._has_unsupported_required_inputs(task_type):
+            raise ValueError(
+                "script transform has unsupported required inputs; only "
+                "`patch` may be required"
+            )
+        task = task_type()
+        return task.run(patch=patch)
 
 
 class _FallbackPythonEditor(QPlainTextEdit):
@@ -202,62 +239,58 @@ class Code(ZugWidget):
     def _run(self):
         """Execute user code and return the `transform` result."""
         self._last_run_succeeded = False
-
-        output_buffer = io.StringIO()
-
         try:
-            with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
-                transform = self._extract_transform()
-                schema = schema_from_function(transform)
-                if self._has_unsupported_required_inputs(schema):
-                    raise ValueError(
-                        "script transform has unsupported required inputs; "
-                        "only `patch` may be required"
+            stream_text, result = self._execute_logged_task()
+        except _LoggedTaskExecutionError as exc:
+            self._set_log_text(
+                exc.stream_text,
+                "".join(
+                    traceback.format_exception(
+                        type(exc.original),
+                        exc.original,
+                        exc.original.__traceback__,
                     )
-                result = invoke_schema_function(
-                    schema,
-                    transform,
-                    {"patch": self._patch},
-                )
-                if result is None and self._patch is None:
-                    result = None
-        except Exception as exc:
-            self._set_log_text(output_buffer.getvalue(), traceback.format_exc())
-            self._show_exception("execution_failed", exc)
+                ),
+            )
+            self._show_exception("execution_failed", exc.original)
             return None
 
         if result is INPUTS_NOT_READY:
-            self._set_log_text(output_buffer.getvalue())
+            self._set_log_text(stream_text)
             return None
 
-        self._set_log_text(output_buffer.getvalue())
+        self._set_log_text(stream_text)
         self._last_run_succeeded = True
         return result
 
-    def _extract_transform(self):
-        """Compile the script text and return the callable `transform`."""
-        namespace: dict[str, object] = {
-            "__builtins__": __builtins__,
-            "__name__": "__main__",
-            "dc": dc,
-            "np": np,
-        }
-        code = compile(self.script_text, "<derzug-code>", "exec")
-        exec(code, namespace, namespace)
-        transform = namespace.get("transform")
-        if not callable(transform):
-            raise ValueError("script must define a callable `transform(patch)`")
-        return transform
+    def get_task(self) -> Task:
+        """Return the current editor script as a task."""
+        return CodeTransformTask(script_text=self.script_text)
 
     @staticmethod
-    def _has_unsupported_required_inputs(schema) -> bool:
+    def _has_unsupported_required_inputs(task_type: type[Task]) -> bool:
         """Return True when required inputs other than patch are declared."""
-        for input_spec in schema.inputs:
-            if input_spec.signal_name == "patch":
+        for name in task_type.required_scalar_inputs():
+            if name == "patch":
                 continue
-            if not input_spec.has_default:
-                return True
+            return True
         return False
+
+    def _execute_logged_task(self) -> tuple[str, object]:
+        """Execute the canonical task and return captured streams plus result."""
+        output_buffer = io.StringIO()
+        try:
+            with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
+                result = self._execute_task_or_pipe(
+                    self.get_task(),
+                    input_values={"patch": self._patch},
+                    output_names=("result",),
+                )
+        except Exception as exc:
+            raise _LoggedTaskExecutionError(exc, output_buffer.getvalue()) from exc
+        if isinstance(result, dict):
+            result = result.get("result")
+        return output_buffer.getvalue(), result
 
     def _set_log_text(self, stream_text: str, traceback_text: str = "") -> None:
         """Render stdout/stderr and optional traceback in the log pane."""

@@ -11,6 +11,7 @@
   - More than this is overkill.
   
 - Comments should be used liberally, while avoiding redundant use. Generally, every 3-7 lines of code should have a comment.
+- Never manually hard-wrap Markdown or Quarto prose. In `.md` and `.qmd` files, write normal paragraphs and let the editor handle visual wrapping.
 
 - Always run `prek run --all-files` before completing a task.
 - Keep repo hooks configured in `prek.toml`.

@@ -11,6 +11,7 @@ from derzug.utils.testing import (
     TestPatchInputStateDefaults,
     TestWidgetDefaults,
     capture_output,
+    wait_for_widget_idle,
     widget_context,
 )
 from derzug.widgets.select import Select
@@ -180,6 +181,38 @@ class TestSelect:
         status = select_widget._build_status_text(selected=patch)
 
         assert status == "absolute basis, 0 active range filter(s)"
+
+    def test_get_task_matches_patch_output(self, select_widget, monkeypatch):
+        """Patch-mode output should match executing the canonical selection task."""
+        received = capture_output(select_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+
+        select_widget.set_patch(patch)
+        wait_for_widget_idle(select_widget, timeout=5.0)
+
+        task_result = select_widget.get_task().run(
+            patch=patch,
+            spool=None,
+            annotation_set=None,
+        )
+
+        assert received[-1] == task_result["patch"]
+
+    def test_get_task_matches_spool_output(self, select_widget, monkeypatch):
+        """Spool-mode output should match executing the canonical selection task."""
+        received = capture_output(select_widget.Outputs.spool, monkeypatch)
+        spool = _multi_select_spool()
+
+        select_widget.set_spool(spool)
+        wait_for_widget_idle(select_widget, timeout=5.0)
+
+        task_result = select_widget.get_task().run(
+            patch=None,
+            spool=spool,
+            annotation_set=None,
+        )
+
+        assert list(received[-1]) == list(task_result["spool"])
 
     def test_hidden_patch_input_defers_control_refresh_until_show(
         self, monkeypatch, qtbot

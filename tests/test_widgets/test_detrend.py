@@ -9,6 +9,7 @@ from derzug.utils.testing import (
     TestPatchDimWidgetDefaults,
     capture_output,
     wait_for_output,
+    wait_for_widget_idle,
     widget_context,
 )
 from derzug.widgets.detrend import Detrend
@@ -45,7 +46,7 @@ class TestDetrend:
         patch = dc.get_example_patch("example_event_1")
 
         detrend_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(detrend_widget)
 
         out = received[-1]
         assert out is not None
@@ -57,11 +58,11 @@ class TestDetrend:
         received = capture_output(detrend_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_1")
         detrend_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(detrend_widget)
         start_count = len(received)
 
         detrend_widget._type_combo.setCurrentText("constant")
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(detrend_widget)
 
         assert len(received) > start_count
         assert detrend_widget.detrend_type == "constant"
@@ -72,7 +73,7 @@ class TestDetrend:
         received = capture_output(detrend_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_1")
         detrend_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(detrend_widget)
 
         if detrend_widget._dim_combo.count() < 2:
             pytest.skip("Need at least two dimensions for this test")
@@ -84,7 +85,7 @@ class TestDetrend:
             if detrend_widget._dim_combo.itemText(i) != current
         )
         detrend_widget._dim_combo.setCurrentText(other_dim)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(detrend_widget)
 
         assert detrend_widget.selected_dim == other_dim
         assert received[-1] is not None
@@ -96,7 +97,7 @@ class TestDetrend:
         detrend_widget.detrend_type = "not-a-type"
 
         detrend_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(detrend_widget)
 
         assert detrend_widget.detrend_type == "linear"
         assert detrend_widget._type_combo.currentText() == "linear"
@@ -109,7 +110,7 @@ class TestDetrend:
         detrend_widget.selected_dim = "not-a-dim"
 
         detrend_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(detrend_widget)
 
         assert detrend_widget.selected_dim == "time"
         assert detrend_widget._dim_combo.currentText() == "time"
@@ -129,7 +130,7 @@ class TestDetrend:
         monkeypatch.setattr(patch, "detrend", _fake_detrend)
         detrend_widget.detrend_type = "constant"
         detrend_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(detrend_widget)
 
         assert received[-1] is patch
         assert captured["dim"] == "time"
@@ -149,7 +150,7 @@ class TestDetrend:
         detrend_widget.selected_dim = "time"
         detrend_widget.detrend_type = "linear"
         detrend_widget.run()
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(detrend_widget)
 
         assert received[-1] is None
         assert detrend_widget.Error.detrend_failed.is_shown()

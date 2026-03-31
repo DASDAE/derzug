@@ -9,6 +9,7 @@ from derzug.utils.testing import (
     TestPatchDimWidgetDefaults,
     capture_output,
     wait_for_output,
+    wait_for_widget_idle,
     widget_context,
 )
 from derzug.widgets.rolling import Rolling
@@ -52,7 +53,7 @@ class TestRolling:
         rolling_widget.aggregation = "mean"
 
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         out = received[-1]
         assert out is not None
@@ -66,11 +67,11 @@ class TestRolling:
         received = capture_output(rolling_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
         start_count = len(received)
 
         rolling_widget._agg_combo.setCurrentText("max")
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         assert len(received) > start_count
         assert rolling_widget.aggregation == "max"
@@ -81,7 +82,7 @@ class TestRolling:
         received = capture_output(rolling_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         if rolling_widget._dim_combo.count() < 2:
             pytest.skip("Need at least two dimensions for this test")
@@ -94,7 +95,7 @@ class TestRolling:
             if rolling_widget._dim_combo.itemText(i) != current
         )
         rolling_widget._dim_combo.setCurrentText(other_dim)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         assert len(received) > first_count
         assert rolling_widget.selected_dim == other_dim
@@ -107,11 +108,11 @@ class TestRolling:
         received = capture_output(rolling_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         rolling_widget.rolling_window = "10 ms"
         rolling_widget.run()
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(rolling_widget)
         assert received[-1] is not None
 
     def test_step_blank_and_value(self, rolling_widget, monkeypatch, qtbot):
@@ -119,16 +120,16 @@ class TestRolling:
         received = capture_output(rolling_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         rolling_widget.step = ""
         rolling_widget.run()
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(rolling_widget)
         assert received[-1] is not None
 
         rolling_widget.step = "0.005"
         rolling_widget.run()
-        wait_for_output(qtbot, received, 3)
+        wait_for_widget_idle(rolling_widget)
         assert received[-1] is not None
 
     def test_step_supports_unit_values(self, rolling_widget, monkeypatch, qtbot):
@@ -136,11 +137,11 @@ class TestRolling:
         received = capture_output(rolling_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         rolling_widget.step = "5 ms"
         rolling_widget.run()
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(rolling_widget)
 
         assert received[-1] is not None
 
@@ -166,7 +167,7 @@ class TestRolling:
         rolling_widget.aggregation = "mean"
 
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         assert received[-1] is patch
         assert captured["time"] == 2
@@ -196,7 +197,7 @@ class TestRolling:
         rolling_widget.aggregation = "mean"
 
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         assert received[-1] is patch
         assert captured["time"] == 2.0
@@ -211,7 +212,7 @@ class TestRolling:
         rolling_widget.center = True
 
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         out = received[-1]
         assert out is not None
@@ -224,7 +225,7 @@ class TestRolling:
         rolling_widget.rolling_window = "not-a-window"
 
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         assert received[-1] is None
         assert rolling_widget.Error.invalid_window.is_shown()
@@ -237,7 +238,7 @@ class TestRolling:
         rolling_widget.step = "not-a-step"
 
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         assert received[-1] is None
         assert rolling_widget.Error.invalid_step.is_shown()
@@ -250,12 +251,12 @@ class TestRolling:
         patch = dc.get_example_patch("example_event_2")
         rolling_widget.rolling_window = "not-a-window"
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
         assert rolling_widget.Error.invalid_window.is_shown()
 
         rolling_widget.rolling_window = "0.01"
         rolling_widget.run()
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(rolling_widget)
 
         assert not rolling_widget.Error.invalid_window.is_shown()
         assert received[-1] is not None
@@ -269,7 +270,7 @@ class TestRolling:
         rolling_widget.aggregation = "not-a-real-aggregation"
 
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         assert rolling_widget.aggregation == Rolling._AGGREGATIONS[0]
         assert rolling_widget._agg_combo.currentText() == Rolling._AGGREGATIONS[0]
@@ -287,7 +288,7 @@ class TestRolling:
         rolling_widget.dropna = False
 
         rolling_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(rolling_widget)
 
         out_no_drop = received[-1]
         assert out_no_drop is not None
@@ -295,7 +296,7 @@ class TestRolling:
 
         rolling_widget.dropna = True
         rolling_widget.run()
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(rolling_widget)
         out_drop = received[-1]
         assert out_drop is not None
         assert out_drop.shape[1] < out_no_drop.shape[1]

@@ -12,6 +12,8 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
 class Calculus(PatchDimWidget):
@@ -138,6 +140,10 @@ class Calculus(PatchDimWidget):
         self.step = int(value)
         self.run()
 
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the transform-specific banner."""
+        self._show_exception("transform_failed", exc)
+
     def _coerce_transform(self) -> str:
         """Return the selected transform or reset to the default."""
         if self.transform in self._TRANSFORMS:
@@ -149,27 +155,20 @@ class Calculus(PatchDimWidget):
         self._stack.setCurrentIndex(0)
         return self.transform
 
-    def _run(self) -> dc.Patch | None:
-        """Apply the selected calculus transform and return the output patch."""
-        if self._patch is None:
-            return None
-
-        dim = self._get_dim()
-        if dim is None:
-            return None
-
+    def get_task(self) -> Task:
+        """Return the current calculus operation as a workflow task."""
         transform = self._coerce_transform()
-        try:
-            if transform == "differentiate":
-                return self._patch.differentiate(
-                    dim,
-                    order=int(self.order),
-                    step=int(self.step),
-                )
-            return self._patch.integrate(dim, definite=bool(self.definite))
-        except Exception as exc:
-            self._show_exception("transform_failed", exc)
-            return None
+        kwargs = (
+            {"order": int(self.order), "step": int(self.step)}
+            if transform == "differentiate"
+            else {"definite": bool(self.definite)}
+        )
+        return PatchConfiguredMethodTask(
+            method_name=transform,
+            call_style="positional_dim",
+            dim=self._get_dim() or self.selected_dim,
+            method_kwargs=kwargs,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 from AnyQt.QtCore import Qt
 from AnyQt.QtWidgets import (
@@ -13,8 +15,8 @@ from AnyQt.QtWidgets import (
     QMenu,
     QWidget,
 )
-from derzug.core.zugwidget import ZugWidget
-from derzug.utils.testing import widget_context
+from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
+from derzug.utils.testing import wait_for_widget_idle, widget_context
 from derzug.views.orange_errors import DerZugErrorDialog
 from derzug.widgets.aggregate import Aggregate
 from derzug.widgets.analytic import Analytic
@@ -37,6 +39,7 @@ from derzug.widgets.stft import Stft
 from derzug.widgets.ufunc import UFuncOperator
 from derzug.widgets.waterfall import Waterfall
 from derzug.widgets.wiggle import Wiggle
+from derzug.workflow import Task
 from Orange.widgets import gui
 from Orange.widgets.widget import Msg
 
@@ -198,6 +201,53 @@ class _HiddenSidebarWidthWidget(ZugWidget):
         self.hidden_label = QLabel("A very long hidden control label", box)
         box.layout().addWidget(self.hidden_label)
         self.hidden_label.hide()
+
+
+class _AsyncEchoTask(Task):
+    input_variables: ClassVar = {"value": object, "delay": float}
+    output_variables: ClassVar = {"result": object}
+
+    def run(self, value, delay=0.0):
+        import time
+
+        if delay:
+            time.sleep(delay)
+        return value
+
+
+class _AsyncWidget(ZugWidget):
+    """Concrete test widget used to verify async execution behavior."""
+
+    name = "Async Widget"
+    description = "Test widget for async execution"
+    category = "Test"
+
+    class Error(ZugWidget.Error):
+        general = Msg("{}")
+
+    def __init__(self):
+        super().__init__()
+        self.value = None
+        self.delay = 0.0
+        self.raise_error = False
+        self.results: list[object] = []
+
+    def _supports_async_execution(self) -> bool:
+        return True
+
+    def _build_execution_request(self):
+        if self.raise_error:
+            raise RuntimeError("async boom")
+        if self.value is None:
+            return None
+        return WidgetExecutionRequest(
+            workflow_obj=_AsyncEchoTask(),
+            input_values={"value": self.value, "delay": self.delay},
+            output_names=("result",),
+        )
+
+    def _on_result(self, result) -> None:
+        self.results.append(result)
 
 
 @pytest.fixture
@@ -513,6 +563,74 @@ class TestZugWidgetErrors:
             qtbot.mouseDClick(target, Qt.LeftButton)
 
         assert not dialogs
+
+
+class TestZugWidgetAsyncExecution:
+    """Tests for the async execution path on ZugWidget."""
+
+    def test_async_run_applies_result(self, qtbot):
+        """A completed async run should apply its result on the widget thread."""
+        with widget_context(_AsyncWidget) as widget:
+            widget.value = "done"
+            widget.run()
+            wait_for_widget_idle(widget)
+            qtbot.waitUntil(lambda: bool(widget.results), timeout=1000)
+
+            assert widget.results[-1] == "done"
+
+    def test_latest_wins_ignores_stale_completion(self, qtbot):
+        """A slower earlier run should be dropped after a newer result wins."""
+        with widget_context(_AsyncWidget) as widget:
+            widget.value = "slow"
+            widget.delay = 0.05
+            widget.run()
+
+            widget.value = "fast"
+            widget.delay = 0.0
+            widget.run()
+
+            wait_for_widget_idle(widget)
+            qtbot.waitUntil(lambda: bool(widget.results), timeout=1000)
+
+            assert widget.results[-1] == "fast"
+            assert "slow" not in widget.results
+
+    def test_async_exception_routes_to_error_banner(self, qtbot):
+        """Worker exceptions should reach the widget's main-thread error path."""
+        with widget_context(_AsyncWidget) as widget:
+            widget.raise_error = True
+            widget.run()
+            wait_for_widget_idle(widget)
+            qtbot.waitUntil(lambda: widget.Error.general.is_shown(), timeout=1000)
+
+            assert widget.results[-1] is None
+            assert "async boom" in str(widget.message_bar.message.asHtml())
+
+    def test_async_completion_ignored_after_delete(self, qtbot):
+        """Late worker completions should be ignored once teardown starts."""
+        with widget_context(_AsyncWidget) as widget:
+            widget.value = "late"
+            widget.delay = 0.05
+            widget.run()
+
+            widget.onDeleteWidget()
+            qtbot.wait(100)
+            QApplication.processEvents()
+
+            assert widget.results == []
+            assert widget._active_execution_token is None
+
+    def test_async_run_is_ignored_after_delete(self, qtbot):
+        """Widgets should not schedule new async work after teardown starts."""
+        with widget_context(_AsyncWidget) as widget:
+            widget.onDeleteWidget()
+            widget.value = "ignored"
+            widget.run()
+            qtbot.wait(20)
+            QApplication.processEvents()
+
+            assert widget.results == []
+            assert widget._active_execution_token is None
 
 
 class TestZugWidgetDeferredRefresh:

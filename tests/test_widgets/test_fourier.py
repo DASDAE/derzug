@@ -5,7 +5,12 @@ from __future__ import annotations
 import dascore as dc
 import pytest
 from AnyQt.QtCore import Qt
-from derzug.utils.testing import capture_output, wait_for_output, widget_context
+from derzug.utils.testing import (
+    capture_output,
+    wait_for_output,
+    wait_for_widget_idle,
+    widget_context,
+)
 from derzug.widgets.fourier import Fourier
 
 
@@ -42,7 +47,7 @@ class TestFourier:
         patch = dc.get_example_patch("example_event_1")
 
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         out = received[-1]
         assert out is not None
@@ -53,10 +58,10 @@ class TestFourier:
         received = capture_output(fourier_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_1").dft("time")
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         fourier_widget._transform_combo.setCurrentText("idft")
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         out = received[-1]
         assert fourier_widget.transform == "idft"
@@ -73,7 +78,7 @@ class TestFourier:
         fourier_widget.transform = "idft"
         fourier_widget.selected_dim = "ft_time"
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         out = received[-1]
         assert out is not None
@@ -86,7 +91,7 @@ class TestFourier:
         received = capture_output(fourier_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_1")
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         if fourier_widget._dim_list.count() < 2:
             pytest.skip("Need at least two dimensions for this test")
@@ -98,7 +103,7 @@ class TestFourier:
             if fourier_widget._dim_list.item(i).text() not in current
         )
         other_item.setCheckState(Qt.Checked)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         assert other_item.text() in fourier_widget.selected_dims
         out = received[-1]
@@ -114,11 +119,11 @@ class TestFourier:
 
         fourier_widget.real_mode = "Auto"
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
         full_out = received[-1]
 
         fourier_widget._real_combo.setCurrentText("Real")
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(fourier_widget)
         real_out = received[-1]
 
         assert full_out is not None
@@ -143,7 +148,7 @@ class TestFourier:
         fourier_widget.pad = False
         fourier_widget.real_mode = "Complex"
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         assert received[-1] is patch
         assert captured["dim"] == ("time",)
@@ -157,7 +162,7 @@ class TestFourier:
         fourier_widget.transform = "not-a-transform"
 
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         assert fourier_widget.transform == "dft"
         assert fourier_widget._transform_combo.currentText() == "dft"
@@ -170,7 +175,7 @@ class TestFourier:
         fourier_widget.selected_dim = "not-a-dim"
 
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         assert fourier_widget.selected_dim == "time"
         assert fourier_widget._dim_combo.currentText() == "time"
@@ -207,7 +212,7 @@ class TestFourier:
         monkeypatch.setattr(patch, "dft", _fake_dft)
         fourier_widget.selected_dims = ["time", "distance"]
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         assert received[-1] is patch
         assert captured["dim"] == ("time", "distance")
@@ -220,7 +225,7 @@ class TestFourier:
         patch = dc.get_example_patch("example_event_1").dft(("time", "distance"))
         fourier_widget.transform = "idft"
         fourier_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         if fourier_widget._dim_combo.count() < 2:
             pytest.skip("Need at least two Fourier dimensions for this test")
@@ -232,7 +237,7 @@ class TestFourier:
             if fourier_widget._dim_combo.itemText(i) != current
         )
         fourier_widget._dim_combo.setCurrentText(other_dim)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         assert fourier_widget.selected_dim == other_dim
         assert received[-1] is not None
@@ -251,7 +256,7 @@ class TestFourier:
         fourier_widget.selected_dim = "time"
         fourier_widget.transform = "dft"
         fourier_widget.run()
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(fourier_widget)
 
         assert received[-1] is None
         assert fourier_widget.Error.transform_failed.is_shown()

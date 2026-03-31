@@ -1,0 +1,10 @@
+---
+title: Development
+sidebar: development
+---
+
+This section covers developer-facing guides for working on DerZug and creating custom widgets.
+
+- [Creating Widgets](creating_widgets.qmd) — how to generate DerZug widgets from callables and tasks
+- [Widget Development](widget_development.md) — writing full custom `ZugWidget` subclasses
+- [Guidelines](guidelines.md) — coding style, testing conventions, and tooling requirements

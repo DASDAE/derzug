@@ -36,7 +36,7 @@ To keep node interoperability predictable:
 
 - Core metadata should be preserved whenever possible.
 - Reusable visual-annotation behavior should follow the shared annotation design
-  in [annotations.md](/home/derrick/Gits/derzug/docs/dev/annotations.md)
+  in [annotations.md](annotations.md)
   rather than introducing widget-specific overlay schemas.
 
 ## Auto-Generation (Future)
@@ -110,4 +110,4 @@ import derzug as dz
 
 ## Roadmap
 
-See [roadmap.md](/home/derrick/Gits/derzug/docs/dev/roadmap.md) for phased milestones.
+See [roadmap.md](roadmap.md) for phased milestones.

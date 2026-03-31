@@ -4,7 +4,7 @@ Widget for converting DataFrame rows into an AnnotationSet.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import pandas as pd
 from AnyQt.QtWidgets import (
@@ -17,8 +17,9 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import Field
 
-from derzug.core.zugwidget import ZugWidget
+from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.models.annotations import (
     Annotation,
     AnnotationSet,
@@ -27,6 +28,7 @@ from derzug.models.annotations import (
 )
 from derzug.orange import Setting
 from derzug.utils.annotation_metadata import LABEL_SLOTS, optional_text
+from derzug.workflow import Task
 
 _GEOM_DOT = 0
 _GEOM_LINE = 1
@@ -48,6 +50,118 @@ def _is_missing(value: Any) -> bool:
         return bool(pd.isna(value))
     except (TypeError, ValueError):
         return False
+
+
+def _make_table_geometry(
+    *,
+    row: pd.Series,
+    dims: tuple[str, ...],
+    geometry_type: int,
+    line_axis_dim: str,
+    col_map: dict,
+):
+    """Return one geometry for a DataFrame row."""
+    if geometry_type == _GEOM_DOT:
+        values = []
+        for dim in dims:
+            col = col_map[dim]
+            val = row[col]
+            if _is_missing(val):
+                raise ValueError(f"NaN in column '{col}'")
+            values.append(val)
+        return PointGeometry(dims=dims, values=tuple(values))
+
+    dim = line_axis_dim
+    col = col_map[dim]
+    val = row[col]
+    if _is_missing(val):
+        raise ValueError(f"NaN in column '{col}'")
+    return SpanGeometry(dim=dim, start=val, end=val)
+
+
+def _table_notes(row: pd.Series, notes_col: str) -> str | None:
+    """Return Annotation.notes from one configured column."""
+    if not notes_col or notes_col not in row.index:
+        return None
+    val = row[notes_col]
+    if _is_missing(val):
+        return None
+    return optional_text(val)
+
+
+def _table_label(
+    row: pd.Series,
+    label_mode: int,
+    label_col: str,
+    fixed_label: str,
+) -> str | None:
+    """Return Annotation.label from fixed setting or per-row column."""
+    if label_mode == _LABEL_MODE_COLUMN:
+        if label_col and label_col in row.index:
+            val = row[label_col]
+            if not _is_missing(val):
+                return optional_text(val)
+        return None
+    return optional_text(fixed_label)
+
+
+def _table_tags(row: pd.Series, tags_col: str) -> tuple[str, ...]:
+    """Return comma-separated tags from one row."""
+    if not tags_col or tags_col not in row.index:
+        return ()
+    val = row[tags_col]
+    if _is_missing(val):
+        return ()
+    return tuple(t.strip() for t in str(val).split(",") if t.strip())
+
+
+class TableToAnnotationTask(Task):
+    """Convert DataFrame rows into annotations."""
+
+    geometry_type: int = _GEOM_DOT
+    line_axis_dim: str = ""
+    dims_text: str = ""
+    col_map: dict = Field(default_factory=dict)
+    semantic_type_text: str = "generic"
+    notes_col: str = _NO_COLUMN
+    label_mode: int = _LABEL_MODE_FIXED
+    fixed_label: str = ""
+    label_col: str = _NO_COLUMN
+    tags_col: str = _NO_COLUMN
+    input_variables: ClassVar[dict[str, object]] = {"data": object}
+    output_variables: ClassVar[dict[str, object]] = {"annotation_set": object}
+
+    def run(self, data):
+        """Convert each DataFrame row into one annotation when valid."""
+        dims = _parse_dims(self.dims_text)
+        annotations = []
+        for i, row in data.iterrows():
+            try:
+                geometry = _make_table_geometry(
+                    row=row,
+                    dims=dims,
+                    geometry_type=self.geometry_type,
+                    line_axis_dim=self.line_axis_dim,
+                    col_map=self.col_map,
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            annotations.append(
+                Annotation(
+                    id=f"t2a-{i}",
+                    geometry=geometry,
+                    semantic_type=self.semantic_type_text.strip() or "generic",
+                    notes=_table_notes(row, self.notes_col),
+                    label=_table_label(
+                        row,
+                        self.label_mode,
+                        self.label_col,
+                        self.fixed_label,
+                    ),
+                    tags=_table_tags(row, self.tags_col),
+                )
+            )
+        return AnnotationSet(dims=dims, annotations=tuple(annotations))
 
 
 class Table2Annotation(ZugWidget):
@@ -220,57 +334,79 @@ class Table2Annotation(ZugWidget):
         self._update_column_combos()
         self.run()
 
+    def _supports_async_execution(self) -> bool:
+        """Run table conversion off-thread by default."""
+        return True
+
+    def _build_execution_request(self) -> WidgetExecutionRequest | None:
+        """Build one table-to-annotation execution request."""
+        validated = self._validated_task()
+        if validated is None:
+            return None
+        task, df = validated
+        return self._build_task_execution_request(
+            task,
+            input_values={"data": df},
+            output_names=("annotation_set",),
+        )
+
     # ── ZugWidget lifecycle ───────────────────────────────────────
 
     def _run(self) -> AnnotationSet | None:
         """Build and return an AnnotationSet from the current DataFrame."""
-        df = self._df
+        validated = self._validated_task()
+        if validated is None:
+            return None
+        task, df = validated
+        return self._execute_workflow_object(
+            task,
+            input_values={"data": df},
+            output_names=("annotation_set",),
+        )
 
+    def get_task(self) -> Task:
+        """Return the configured table-to-annotation task."""
+        return TableToAnnotationTask(
+            geometry_type=self.geometry_type,
+            line_axis_dim=self.line_axis_dim,
+            dims_text=self.dims_text,
+            col_map=self.col_map,
+            semantic_type_text=self.semantic_type_text,
+            notes_col=self.notes_col,
+            label_mode=self.label_mode,
+            fixed_label=self.fixed_label,
+            label_col=self.label_col,
+            tags_col=self.tags_col,
+        )
+
+    def _validated_task(self) -> tuple[TableToAnnotationTask, pd.DataFrame] | None:
+        """Return the current validated task and dataframe, or None on UI error."""
+        df = self._df
         if df is None or df.empty:
             self.Warning.no_data()
             return None
-
         dims = _parse_dims(self.dims_text)
         if not dims:
             self.Error.no_dims()
             return None
-
-        # Validate column mapping
         active_dims = self._active_dims(dims)
         for dim in active_dims:
             col = self.col_map.get(dim, _NO_COLUMN)
             if not col or col not in df.columns:
                 self.Error.no_col_mapped(dim)
                 return None
-
         if self.geometry_type == _GEOM_LINE and not self.line_axis_dim:
             self.Error.line_axis_missing()
             return None
-
-        annotations = []
         skipped = 0
-        for i, row in df.iterrows():
+        for _, row in df.iterrows():
             try:
-                geometry = self._make_geometry(row, dims)
+                self._make_geometry(row, dims)
             except (KeyError, TypeError, ValueError):
                 skipped += 1
-                continue
-
-            annotations.append(
-                Annotation(
-                    id=f"t2a-{i}",
-                    geometry=geometry,
-                    semantic_type=self.semantic_type_text.strip() or "generic",
-                    notes=self._get_notes(row),
-                    label=self._get_label(row),
-                    tags=self._get_tags(row),
-                )
-            )
-
         if skipped:
             self.Warning.rows_skipped(skipped)
-
-        return AnnotationSet(dims=dims, annotations=tuple(annotations))
+        return self.get_task(), df
 
     def _on_result(self, result: AnnotationSet | None) -> None:
         """Emit the result and update the status label."""
@@ -285,54 +421,25 @@ class Table2Annotation(ZugWidget):
 
     def _make_geometry(self, row: pd.Series, dims: tuple[str, ...]):
         """Return a PointGeometry or SpanGeometry for one DataFrame row."""
-        if self.geometry_type == _GEOM_DOT:
-            values = []
-            for dim in dims:
-                col = self.col_map[dim]
-                val = row[col]
-                if _is_missing(val):
-                    raise ValueError(f"NaN in column '{col}'")
-                values.append(val)
-            return PointGeometry(dims=dims, values=tuple(values))
-
-        # Line: pin one dim
-        dim = self.line_axis_dim
-        col = self.col_map[dim]
-        val = row[col]
-        if _is_missing(val):
-            raise ValueError(f"NaN in column '{col}'")
-        return SpanGeometry(dim=dim, start=val, end=val)
+        return _make_table_geometry(
+            row=row,
+            dims=dims,
+            geometry_type=self.geometry_type,
+            line_axis_dim=self.line_axis_dim,
+            col_map=self.col_map,
+        )
 
     def _get_notes(self, row: pd.Series) -> str | None:
         """Return Annotation.notes from the configured column, or None."""
-        col = self.notes_col
-        if not col or col not in row.index:
-            return None
-        val = row[col]
-        if _is_missing(val):
-            return None
-        return optional_text(val)
+        return _table_notes(row, self.notes_col)
 
     def _get_label(self, row: pd.Series) -> str | None:
         """Return Annotation.label from fixed setting or per-row column."""
-        if self.label_mode == _LABEL_MODE_COLUMN:
-            col = self.label_col
-            if col and col in row.index:
-                val = row[col]
-                if not _is_missing(val):
-                    return optional_text(val)
-            return None
-        return optional_text(self.fixed_label)
+        return _table_label(row, self.label_mode, self.label_col, self.fixed_label)
 
     def _get_tags(self, row: pd.Series) -> tuple[str, ...]:
         """Return Annotation.tags split from a comma-separated column value."""
-        col = self.tags_col
-        if not col or col not in row.index:
-            return ()
-        val = row[col]
-        if _is_missing(val):
-            return ()
-        return tuple(t.strip() for t in str(val).split(",") if t.strip())
+        return _table_tags(row, self.tags_col)
 
     # ── Active dim logic ──────────────────────────────────────────
 

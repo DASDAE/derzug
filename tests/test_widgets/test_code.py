@@ -111,7 +111,7 @@ class TestCode:
 
     def test_stdout_is_captured(self, primed, qtbot):
         """Printed output is captured in the widget log pane."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText(
             "def transform(patch):\n    print('hello')\n    return patch"
@@ -123,7 +123,7 @@ class TestCode:
 
     def test_stderr_is_captured(self, primed, qtbot):
         """Stderr writes are captured in the widget log pane."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText(
             "import sys\n\n"
@@ -138,7 +138,7 @@ class TestCode:
 
     def test_exception_shows_error_and_emits_none(self, primed, qtbot):
         """Exceptions are shown in the log and emit None."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText("raise ValueError('boom')")
         code_widget._run_button.click()
@@ -151,7 +151,7 @@ class TestCode:
 
     def test_syntax_error_shows_error_and_emits_none(self, primed, qtbot):
         """Syntax errors are shown in the log and emit None."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText("def transform(patch)\n    return patch")
         code_widget._run_button.click()
@@ -165,7 +165,7 @@ class TestCode:
         self, primed, qtbot, monkeypatch
     ):
         """The Code widget's bottom error banner should open the full traceback."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
         dialogs: list[DerZugErrorDialog] = []
 
         def _fake_exec(dialog):
@@ -188,7 +188,7 @@ class TestCode:
 
     def test_missing_result_emits_none(self, primed, qtbot):
         """Scripts that never set result emit None."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText("def transform(patch):\n    x = 1")
         code_widget._run_button.click()
@@ -297,7 +297,7 @@ class TestCode:
 
     def test_missing_transform_function_shows_error(self, primed, qtbot):
         """Scripts must define a callable transform function."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText("x = 1")
         code_widget._run_button.click()
@@ -308,7 +308,7 @@ class TestCode:
 
     def test_unsupported_required_inputs_show_error(self, primed, qtbot):
         """Scripts may not require extra inputs beyond the widget patch input."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText(
             "def transform(patch, scale):\n" "    return scale"
@@ -322,7 +322,7 @@ class TestCode:
 
     def test_dc_and_np_are_available_in_namespace(self, primed, qtbot):
         """The script namespace exposes dascore and numpy helpers."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText(
             "def transform(patch):\n"
@@ -348,7 +348,7 @@ class TestCode:
 
     def test_log_replaced_after_successful_rerun(self, primed, qtbot):
         """A successful rerun replaces old traceback text in the visible log."""
-        code_widget, patch, received = primed
+        code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText(
             "def transform(patch):\n    raise ValueError('boom')"

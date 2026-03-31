@@ -1,91 +1,83 @@
-"""Tests for code-to-widget helpers."""
+# ruff: noqa: D103
+
+"""Tests for task-backed code-to-widget helpers."""
 
 from __future__ import annotations
 
 import dascore as dc
 import pytest
 from derzug.utils.code2widget import (
-    WidgetFunctionSchema,
     _validate_unique_signal_names,
     function_to_widget,
-    schema_from_function,
-    widget_class_from_schema,
+    task_from_callable,
+    widget_class_from_callable,
 )
-from derzug.utils.testing import widget_context
+from derzug.utils.testing import wait_for_widget_idle, widget_context
+from derzug.workflow import PipeBuilder
+from derzug.workflow.widget_tasks import CallableTaskAdapter
 
 
-def test_schema_from_function_single_patch_round_trip():
-    """A simple patch function becomes a one-input/one-output schema."""
+def module_level_transform(patch: dc.Patch) -> dc.Patch:
+    return patch
 
+
+def module_level_dict_transform(patch: dc.Patch) -> dict[str, dc.Patch]:
+    return {"first": patch, "second": patch}
+
+
+def test_task_from_callable_single_patch_round_trip():
     def transform(patch: dc.Patch) -> dc.Patch:
         return patch
 
-    schema = schema_from_function(transform)
+    task_type = task_from_callable(transform)
+    task = task_type()
+    patch = dc.get_example_patch("example_event_1")
 
-    assert isinstance(schema, WidgetFunctionSchema)
-    assert schema.function_name == "transform"
-    assert len(schema.inputs) == 1
-    assert schema.inputs[0].name == "patch"
-    assert schema.inputs[0].signal_type is dc.Patch
-    assert len(schema.outputs) == 1
-    assert schema.outputs[0].name == "result"
-    assert schema.outputs[0].signal_type is dc.Patch
-    assert schema.returns_dict is False
+    assert task_type.scalar_input_variables()["patch"] is dc.Patch
+    assert tuple(task_type.scalar_output_variables()) == ("result",)
+    assert task.run(patch=patch) is patch
 
 
-def test_schema_preserves_input_order_and_defaults():
-    """Parameter order and defaults are reflected in the schema."""
-
+def test_task_from_callable_preserves_required_inputs_and_defaults():
     def transform(scale: float = 1.0, patch: dc.Patch | None = None) -> object:
         return patch
 
-    schema = schema_from_function(transform)
+    task_type = task_from_callable(transform)
 
-    assert [item.name for item in schema.inputs] == ["scale", "patch"]
-    assert schema.inputs[0].signal_type is float
-    assert schema.inputs[0].has_default is True
-    assert schema.inputs[0].default == 1.0
-    assert schema.inputs[1].signal_type is dc.Patch
+    assert tuple(task_type.scalar_input_variables()) == ("scale", "patch")
+    assert task_type.required_scalar_inputs() == ()
+    assert task_type().run(scale=1.0, patch=None) is None
 
 
 def test_unresolved_type_hints_fall_back_to_object():
-    """Unknown annotations degrade safely to object ports."""
-
     def transform(arg):
         return arg
 
     transform.__annotations__ = {"arg": "MissingType", "return": "OtherMissing"}
-    schema = schema_from_function(transform)
+    task_type = task_from_callable(transform)
 
-    assert schema.inputs[0].signal_type is object
-    assert schema.outputs[0].signal_type is object
+    assert task_type.scalar_input_variables()["arg"] is object
+    assert task_type.scalar_output_variables()["result"] is object
 
 
 def test_dict_return_requires_explicit_output_names():
-    """Dict-like return annotations need explicit output names."""
-
     def transform(patch: dc.Patch) -> dict[str, dc.Patch]:
         return {"x": patch}
 
     with pytest.raises(ValueError, match="output_names"):
-        schema_from_function(transform)
+        task_from_callable(transform)
 
 
-def test_dict_return_with_output_names_uses_value_type():
-    """Dict-like returns generate one output spec per configured name."""
-
+def test_dict_return_with_output_names_uses_named_outputs():
     def transform(patch: dc.Patch) -> dict[str, dc.Patch]:
         return {"first": patch, "second": patch}
 
-    schema = schema_from_function(transform, output_names=("first", "second"))
+    task_type = task_from_callable(transform, output_names=("first", "second"))
 
-    assert schema.returns_dict is True
-    assert [item.name for item in schema.outputs] == ["first", "second"]
-    assert all(item.signal_type is dc.Patch for item in schema.outputs)
+    assert tuple(task_type.scalar_output_variables()) == ("first", "second")
 
 
 def test_input_name_collisions_after_normalization_are_rejected():
-    """Distinct input names that normalize identically should fail schema creation."""
     with pytest.raises(ValueError, match="normalize to the same signal name"):
         _validate_unique_signal_names(
             (("a-b", "a_b"), ("a b", "a_b")),
@@ -94,34 +86,26 @@ def test_input_name_collisions_after_normalization_are_rejected():
 
 
 def test_output_name_collisions_after_normalization_are_rejected():
-    """Distinct output names that normalize identically should fail schema creation."""
-
     def transform(value: int) -> dict[str, int]:
         return {"a-b": value, "a b": value}
 
     with pytest.raises(ValueError, match="normalize to the same signal name"):
-        schema_from_function(transform, output_names=("a-b", "a b"))
+        task_from_callable(transform, output_names=("a-b", "a b"))
 
 
 def test_varargs_are_rejected():
-    """Dynamic widget generation does not support varargs in v1."""
-
     def transform(*patches: dc.Patch) -> object:
         return None
 
     with pytest.raises(ValueError, match="not supported"):
-        schema_from_function(transform)
+        task_from_callable(transform)
 
 
-def test_widget_class_from_schema_emits_single_result(monkeypatch):
-    """Generated widgets can receive inputs and emit a single output."""
-
+def test_widget_class_from_callable_emits_single_result(monkeypatch):
     def transform(patch: dc.Patch) -> dc.Patch:
         return patch
 
-    schema = schema_from_function(transform)
-    widget_cls = widget_class_from_schema(
-        schema,
+    widget_cls = widget_class_from_callable(
         fn=transform,
         name="Generated",
         description="Generated widget",
@@ -135,20 +119,18 @@ def test_widget_class_from_schema_emits_single_result(monkeypatch):
         monkeypatch.setattr(widget.Outputs.result, "send", received.append)
         patch = dc.get_example_patch("example_event_1")
         widget.set_patch(patch)
+        wait_for_widget_idle(widget)
         assert received[-1] is patch
 
 
 def test_widget_uses_callable_defaults_for_unset_optional_inputs(monkeypatch):
-    """Unset optional inputs should use the wrapped function's Python defaults."""
     captured: list[tuple[int, int]] = []
 
     def transform(value: int, scale: int = 3) -> int:
         captured.append((value, scale))
         return value * scale
 
-    schema = schema_from_function(transform)
-    widget_cls = widget_class_from_schema(
-        schema,
+    widget_cls = widget_class_from_callable(
         fn=transform,
         name="Generated",
         description="Generated widget",
@@ -161,22 +143,20 @@ def test_widget_uses_callable_defaults_for_unset_optional_inputs(monkeypatch):
         received: list = []
         monkeypatch.setattr(widget.Outputs.result, "send", received.append)
         widget.set_value(2)
+        wait_for_widget_idle(widget)
 
         assert captured == [(2, 3)]
         assert received[-1] == 6
 
 
 def test_widget_explicit_none_overrides_optional_default(monkeypatch):
-    """Explicit None should be passed through instead of using the default."""
     captured: list[tuple[int, object]] = []
 
     def transform(value: int, patch: dc.Patch | None = None) -> object:
         captured.append((value, patch))
         return patch
 
-    schema = schema_from_function(transform)
-    widget_cls = widget_class_from_schema(
-        schema,
+    widget_cls = widget_class_from_callable(
         fn=transform,
         name="Generated",
         description="Generated widget",
@@ -190,13 +170,13 @@ def test_widget_explicit_none_overrides_optional_default(monkeypatch):
         monkeypatch.setattr(widget.Outputs.result, "send", received.append)
         widget.set_patch(None)
         widget.set_value(4)
+        wait_for_widget_idle(widget)
 
         assert captured == [(4, None)]
         assert received[-1] is None
 
 
 def test_widget_does_not_run_until_all_required_inputs_are_present(monkeypatch):
-    """Generated widgets should stay idle until every required input is set."""
     call_count = 0
 
     def transform(left: int, right: int) -> int:
@@ -204,9 +184,7 @@ def test_widget_does_not_run_until_all_required_inputs_are_present(monkeypatch):
         call_count += 1
         return left + right
 
-    schema = schema_from_function(transform)
-    widget_cls = widget_class_from_schema(
-        schema,
+    widget_cls = widget_class_from_callable(
         fn=transform,
         name="Generated",
         description="Generated widget",
@@ -224,22 +202,20 @@ def test_widget_does_not_run_until_all_required_inputs_are_present(monkeypatch):
         assert received[-1] is None
 
         widget.set_right(5)
+        wait_for_widget_idle(widget)
 
         assert call_count == 1
         assert received[-1] == 7
 
 
 def test_widget_uses_defaults_and_waits_only_for_required_inputs(monkeypatch):
-    """Only unset required inputs should block execution."""
     captured: list[tuple[int, int, int]] = []
 
     def transform(left: int, right: int, scale: int = 10) -> int:
         captured.append((left, right, scale))
         return (left + right) * scale
 
-    schema = schema_from_function(transform)
-    widget_cls = widget_class_from_schema(
-        schema,
+    widget_cls = widget_class_from_callable(
         fn=transform,
         name="Generated",
         description="Generated widget",
@@ -257,26 +233,24 @@ def test_widget_uses_defaults_and_waits_only_for_required_inputs(monkeypatch):
         assert received[-1] is None
 
         widget.set_right(2)
+        wait_for_widget_idle(widget)
 
         assert captured == [(1, 2, 10)]
         assert received[-1] == 30
 
 
-def test_widget_class_from_schema_emits_named_dict_outputs(monkeypatch):
-    """Generated dict-output widgets dispatch one signal per configured key."""
-
+def test_widget_class_from_callable_emits_named_dict_outputs(monkeypatch):
     def transform(patch: dc.Patch) -> dict[str, dc.Patch]:
         return {"first": patch, "second": patch}
 
-    schema = schema_from_function(transform, output_names=("first", "second"))
-    widget_cls = widget_class_from_schema(
-        schema,
+    widget_cls = widget_class_from_callable(
         fn=transform,
         name="Generated Dict",
         description="Generated dict widget",
         icon="icons/PythonScript.svg",
         category="Processing",
         priority=1,
+        output_names=("first", "second"),
     )
 
     with widget_context(widget_cls) as widget:
@@ -286,25 +260,23 @@ def test_widget_class_from_schema_emits_named_dict_outputs(monkeypatch):
         monkeypatch.setattr(widget.Outputs.second, "send", second_received.append)
         patch = dc.get_example_patch("example_event_1")
         widget.set_patch(patch)
+        wait_for_widget_idle(widget)
         assert first_received[-1] is patch
         assert second_received[-1] is patch
 
 
-def test_widget_class_from_schema_missing_dict_keys_emit_none(monkeypatch):
-    """Missing dict keys are emitted as None on the configured outputs."""
-
+def test_widget_class_from_callable_missing_dict_keys_emit_none(monkeypatch):
     def transform(patch: dc.Patch) -> dict[str, dc.Patch]:
         return {"first": patch}
 
-    schema = schema_from_function(transform, output_names=("first", "second"))
-    widget_cls = widget_class_from_schema(
-        schema,
+    widget_cls = widget_class_from_callable(
         fn=transform,
         name="Generated Dict",
         description="Generated dict widget",
         icon="icons/PythonScript.svg",
         category="Processing",
         priority=1,
+        output_names=("first", "second"),
     )
 
     with widget_context(widget_cls) as widget:
@@ -314,13 +286,12 @@ def test_widget_class_from_schema_missing_dict_keys_emit_none(monkeypatch):
         monkeypatch.setattr(widget.Outputs.second, "send", second_received.append)
         patch = dc.get_example_patch("example_event_1")
         widget.set_patch(patch)
+        wait_for_widget_idle(widget)
         assert first_received[-1] is patch
         assert second_received[-1] is None
 
 
-def test_function_to_widget_wraps_schema_and_widget_generation(monkeypatch):
-    """Convenience helper returns a usable widget class."""
-
+def test_function_to_widget_wraps_callable_generation(monkeypatch):
     def transform(value: int) -> int:
         return value + 1
 
@@ -337,4 +308,45 @@ def test_function_to_widget_wraps_schema_and_widget_generation(monkeypatch):
         received: list = []
         monkeypatch.setattr(widget.Outputs.result, "send", received.append)
         widget.set_value(2)
+        wait_for_widget_idle(widget)
         assert received[-1] == 3
+
+
+def test_task_from_callable_plain_function_builds_and_round_trips(tmp_path):
+    task_type = task_from_callable(module_level_transform)
+    builder = PipeBuilder()
+    builder.add(task_type(), name="transform")
+    pipe = builder.build()
+    path = tmp_path / "callable_task.yaml"
+
+    pipe.to_yaml(path)
+    restored = type(pipe).from_yaml(path)
+    patch = dc.get_example_patch("example_event_1")
+
+    assert isinstance(
+        restored.tasks[restored.get_handle("transform")],
+        CallableTaskAdapter,
+    )
+    assert restored.run(patch=patch, output_keys=["transform"])["transform"] is patch
+
+
+def test_task_from_callable_dict_output_round_trips(tmp_path):
+    task_type = task_from_callable(
+        module_level_dict_transform, output_names=("first", "second")
+    )
+    builder = PipeBuilder()
+    builder.add(task_type(), name="transform")
+    pipe = builder.build()
+    path = tmp_path / "dict_callable_task.yaml"
+
+    pipe.to_yaml(path)
+    restored = type(pipe).from_yaml(path)
+    patch = dc.get_example_patch("example_event_1")
+    result = restored.run(patch=patch, output_keys=["transform"])
+
+    assert isinstance(
+        restored.tasks[restored.get_handle("transform")],
+        CallableTaskAdapter,
+    )
+    assert result["transform", "first"] is patch
+    assert result["transform", "second"] is patch

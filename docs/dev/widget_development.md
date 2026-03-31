@@ -16,7 +16,7 @@ Widgets can be internal DerZug widgets or written in their own stand-along progr
 - When widget behavior depends on introspection, parsing, or generated controls, prefer extracting those pure rules into `src/derzug/utils` and keeping the widget focused on Qt wiring/state orchestration. The `Spool` example-parameter dialog is the model: signature inspection and value parsing live in a reusable utility, while the widget only opens the dialog and applies the resulting state.
 - Widgets that need persistent overlay interpretation or picks should follow the
   shared annotation architecture in
-  [annotations.md](/home/derrick/Gits/derzug/docs/dev/annotations.md) rather
+  [annotations.md](annotations.md) rather
   than inventing widget-local annotation formats.
 - Always update the widget's keyboard shortcut reference when adding or changing
   widget interactions. Override `widget_shortcuts()` for widget-specific

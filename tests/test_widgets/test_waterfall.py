@@ -1238,7 +1238,7 @@ class TestWaterfall:
             float(axes.y_plot[170]),
         )
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
-        assert waterfall_widget._annotation_tool is None
+        assert waterfall_widget._annotation_tool == "annotation_select"
 
         first_item = waterfall_widget._annotation_items[first_id]
         waterfall_widget._annotation_controller.on_item_clicked(first_item, None)
@@ -1297,7 +1297,7 @@ class TestWaterfall:
         )
         second_id = waterfall_widget._active_annotation_id
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
-        assert waterfall_widget._annotation_tool is None
+        assert waterfall_widget._annotation_tool == "annotation_select"
 
         waterfall_widget._annotation_controller.set_selected_annotations(
             {first_id, second_id}
@@ -3830,10 +3830,10 @@ class TestWaterfall:
         assert not roi.isSelected()
         assert waterfall_widget.hasFocus()
 
-    def test_escape_from_point_tool_clears_active_annotation_mode(
+    def test_escape_from_point_tool_restores_annotation_select_mode(
         self, waterfall_widget, qtbot
     ):
-        """Escape should leave point placement and clear the active annotation mode."""
+        """Escape should leave point placement and restore annotation selection."""
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
         waterfall_widget._annotation_tool = "point"
@@ -3843,8 +3843,11 @@ class TestWaterfall:
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
 
         assert waterfall_widget.isVisible()
-        assert waterfall_widget._annotation_tool is None
+        assert waterfall_widget._annotation_tool == "annotation_select"
         assert waterfall_widget._overlay_mode == "annotate"
+        assert waterfall_widget._annotation_toolbox.tool_buttons[
+            "annotation_select"
+        ].isChecked()
 
     def test_escape_clears_selected_square_annotation(self, waterfall_widget, qtbot):
         """Escape should deselect a highlighted square annotation."""
@@ -3907,10 +3910,10 @@ class TestWaterfall:
         assert waterfall_widget._annotation_toolbox.isVisible() is False
         assert waterfall_widget._annotation_toolbox_hidden is True
 
-    def test_escape_clears_tool_selection_until_annotation_or_roi_is_clicked(
+    def test_escape_restores_annotation_select_until_roi_is_clicked(
         self, waterfall_widget, qtbot
     ):
-        """Escape should leave a neutral state until an annotation or ROI is clicked."""
+        """Escape should restore arrow-mode annotation selection while visible."""
         patch = dc.get_example_patch("example_event_2")
         waterfall_widget.set_patch(patch)
         axes = waterfall_widget._axes
@@ -3937,10 +3940,10 @@ class TestWaterfall:
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
         qtbot.wait(10)
 
-        assert not any(
-            button.isChecked()
-            for button in waterfall_widget._annotation_toolbox.tool_buttons.values()
-        )
+        assert waterfall_widget._annotation_tool == "annotation_select"
+        assert waterfall_widget._annotation_toolbox.tool_buttons[
+            "annotation_select"
+        ].isChecked()
         assert waterfall_widget._add_selection_button.isChecked() is False
 
         waterfall_widget._on_plot_mouse_clicked(
@@ -3952,11 +3955,10 @@ class TestWaterfall:
         )
         qtbot.wait(10)
 
-        assert waterfall_widget._annotation_tool is None
-        assert not any(
-            button.isChecked()
-            for button in waterfall_widget._annotation_toolbox.tool_buttons.values()
-        )
+        assert waterfall_widget._annotation_tool == "annotation_select"
+        assert waterfall_widget._annotation_toolbox.tool_buttons[
+            "annotation_select"
+        ].isChecked()
 
         QTest.keyClick(waterfall_widget, Qt.Key_Escape)
         qtbot.wait(10)

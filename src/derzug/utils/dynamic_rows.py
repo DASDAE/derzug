@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 RowStateT = TypeVar("RowStateT")
 RowWidgetT = TypeVar("RowWidgetT")
 
 
-class DynamicRowManager(Generic[RowStateT, RowWidgetT]):
+class DynamicRowManager[RowStateT, RowWidgetT]:
     """Manage a small list of dynamic UI rows backed by serialized state."""
 
     def __init__(

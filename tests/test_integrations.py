@@ -20,6 +20,16 @@ from derzug.widgets.spool import Spool
 from derzug.widgets.stft import Stft
 from derzug.widgets.waterfall import Waterfall
 from derzug.widgets.wiggle import Wiggle
+from derzug.workflow import Pipe, Task
+from derzug.workflow.compiler import widget_signal_name_map
+
+# Inputs here are intentionally widget-local context/state channels, not part
+# of the exported workflow task contract used by `compile_workflow()`.
+_NON_WORKFLOW_INPUTS = {
+    "Annotations": {"annotation_set"},
+    "Spool": {"patch", "spool"},
+    "Waterfall": {"annotation_set"},
+}
 
 
 def _graph_signature(scheme) -> tuple[set[str], set[tuple[str, str, str, str]]]:
@@ -154,6 +164,66 @@ def test_all_derzug_registry_widgets_instantiate_in_live_canvas(derzug_app, qapp
 
 
 @pytest.mark.integration
+def test_all_derzug_registry_widgets_expose_workflow_objects(derzug_app, qapp):
+    """Every DerZug widget exports a workflow object with matching port names."""
+    window = derzug_app.window
+    registry = derzug_app.main.registry
+    scheme = window.current_document().scheme()
+    descriptions = [
+        desc
+        for desc in registry.widgets()
+        if desc.package.startswith(constants.PKG_NAME)
+    ]
+    assert descriptions, "Expected at least one DerZug widget in the live registry."
+
+    failures: list[str] = []
+
+    for node in list(scheme.nodes):
+        scheme.remove_node(node)
+    qapp.processEvents()
+
+    for index, desc in enumerate(descriptions):
+        node = scheme.new_node(desc, title=f"{desc.name}-{index}")
+        qapp.processEvents()
+        try:
+            widget = scheme.widget_for_node(node)
+            qapp.processEvents()
+            workflow_obj = widget.get_task()
+            assert isinstance(workflow_obj, Task | Pipe)
+            task_inputs = set(workflow_obj.resolved_scalar_input_variables())
+            required_inputs = set(workflow_obj.resolved_required_scalar_inputs())
+            task_outputs = set(workflow_obj.resolved_scalar_output_variables())
+            widget_inputs = set(widget_signal_name_map(widget, "Inputs").values())
+            widget_outputs = set(widget_signal_name_map(widget, "Outputs").values())
+            allowed_extra_inputs = _NON_WORKFLOW_INPUTS.get(desc.name, set())
+            undocumented_extra_inputs = sorted(
+                (widget_inputs - task_inputs) - allowed_extra_inputs
+            )
+            missing_required_inputs = sorted(required_inputs - widget_inputs)
+            missing_outputs = sorted(task_outputs - widget_outputs)
+            assert not undocumented_extra_inputs, (
+                f"widget inputs {undocumented_extra_inputs!r} are not represented "
+                f"by task inputs {sorted(task_inputs)!r}"
+            )
+            assert not missing_required_inputs, (
+                f"required task inputs {missing_required_inputs!r} missing from "
+                f"widget inputs {sorted(widget_inputs)!r}"
+            )
+            assert not missing_outputs, (
+                f"task outputs {missing_outputs!r} missing from widget outputs "
+                f"{sorted(widget_outputs)!r}"
+            )
+        except Exception as exc:
+            failures.append(f"{desc.name}: {type(exc).__name__}: {exc}")
+        finally:
+            if node in scheme.nodes:
+                scheme.remove_node(node)
+            qapp.processEvents()
+
+    assert not failures, "Widgets failed workflow contract: " + "; ".join(failures)
+
+
+@pytest.mark.integration
 def test_integration_spool_rolling_waterfall_example_event2(monkeypatch):
     """Single-patch pipeline works from source through processing and visualization."""
     with (
@@ -182,11 +252,13 @@ def test_integration_spool_rolling_waterfall_example_event2(monkeypatch):
 
         # Feed into rolling, then waterfall.
         rolling_widget.set_patch(source_patch)
+        wait_for_widget_idle(rolling_widget)
         assert rolling_received
         rolled_patch = rolling_received[-1]
         assert rolled_patch is not None
 
         waterfall_widget.set_patch(rolled_patch)
+        wait_for_widget_idle(waterfall_widget)
         assert waterfall_received
         out_patch = waterfall_received[-1]
         assert out_patch is not None
@@ -242,11 +314,13 @@ def test_integration_multi_patch_spool_selection_pipeline(monkeypatch):
         assert selected_patch is not None
 
         rolling_widget.set_patch(selected_patch)
+        wait_for_widget_idle(rolling_widget)
         assert rolling_received
         rolled_patch = rolling_received[-1]
         assert rolled_patch is not None
 
         waterfall_widget.set_patch(rolled_patch)
+        wait_for_widget_idle(waterfall_widget)
         assert waterfall_received
         out_patch = waterfall_received[-1]
         assert out_patch is not None
@@ -305,11 +379,13 @@ def test_integration_directory_spool_row_selection_pipeline(tmp_path, monkeypatc
         assert selected_patch.dims == expected_patch.dims
 
         rolling_widget.set_patch(selected_patch)
+        wait_for_widget_idle(rolling_widget)
         assert rolling_received
         rolled_patch = rolling_received[-1]
         assert rolled_patch is not None
 
         waterfall_widget.set_patch(rolled_patch)
+        wait_for_widget_idle(waterfall_widget)
         assert waterfall_received
         out_patch = waterfall_received[-1]
         assert out_patch is not None
@@ -346,6 +422,7 @@ class TestConnections:
             assert patch is not None
 
             filter_widget.set_patch(patch)
+            wait_for_widget_idle(filter_widget)
 
             assert received, "Filter should emit a patch after receiving a patch input"
             assert received[-1] is not None
@@ -377,6 +454,7 @@ class TestConnections:
             stft_widget.window_length = "128"
             stft_widget.overlap = "64"
             stft_widget.set_patch(patch)
+            wait_for_widget_idle(stft_widget)
 
             assert received, "Stft should emit a patch after receiving a patch input"
             assert received[-1] is not None
@@ -399,6 +477,7 @@ class TestConnections:
 
             source_patch = dc.get_example_patch()
             rolling_widget.set_patch(source_patch)
+            wait_for_widget_idle(rolling_widget)
             assert rolling_received
             rolled_patch = rolling_received[-1]
             assert rolled_patch is not None
@@ -431,6 +510,7 @@ class TestConnections:
             aggregate_widget.dim_reduce = "squeeze"
 
             aggregate_widget.set_patch(patch)
+            wait_for_widget_idle(aggregate_widget)
             assert aggregate_received
             aggregated = aggregate_received[-1]
             assert aggregated is not None
@@ -519,6 +599,7 @@ class TestConnections:
             filter_widget.low_bound = "1"
             filter_widget.high_bound = "10"
             filter_widget.set_patch(patch)
+            wait_for_widget_idle(filter_widget)
 
             assert filter_received
             filtered_patch = filter_received[-1]
@@ -528,6 +609,8 @@ class TestConnections:
 
             raw_waterfall.set_patch(patch)
             filtered_waterfall.set_patch(filtered_patch)
+            wait_for_widget_idle(raw_waterfall)
+            wait_for_widget_idle(filtered_waterfall)
             assert raw_received
             assert filtered_received
             assert raw_received[-1] is patch
@@ -567,6 +650,7 @@ class TestConnections:
             stft_widget.window_length = "128"
             stft_widget.overlap = "64"
             stft_widget.set_patch(selected_patch)
+            wait_for_widget_idle(stft_widget)
 
             assert stft_received
             transformed = stft_received[-1]
@@ -608,6 +692,8 @@ class TestConnections:
             rolling_widget.rolling_window = "0.01"
             rolling_widget.aggregation = "mean"
             rolling_widget.set_patch(patch)
+            wait_for_widget_idle(filter_widget)
+            wait_for_widget_idle(rolling_widget)
 
             assert filter_received
             assert rolling_received
@@ -652,6 +738,7 @@ class TestConnections:
             filter_widget.low_bound = "1"
             filter_widget.high_bound = "10"
             filter_widget.set_patch(patch)
+            wait_for_widget_idle(filter_widget)
             assert filter_received
             filtered_patch = filter_received[-1]
             assert filtered_patch is not None
@@ -660,12 +747,14 @@ class TestConnections:
             aggregate_widget.method = "mean"
             aggregate_widget.dim_reduce = "squeeze"
             aggregate_widget.set_patch(filtered_patch)
+            wait_for_widget_idle(aggregate_widget)
             assert aggregate_received
             reduced = aggregate_received[-1]
             assert reduced is not None
             assert reduced.data.ndim == 1
 
             wiggle_widget.set_patch(reduced)
+            wait_for_widget_idle(wiggle_widget)
             assert wiggle_received
             assert wiggle_received[-1] is reduced
             assert wiggle_widget.mode == "time series"

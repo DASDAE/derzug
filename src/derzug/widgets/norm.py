@@ -12,6 +12,8 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
 class Norm(PatchDimWidget):
@@ -90,20 +92,18 @@ class Norm(PatchDimWidget):
         self._norm_combo.blockSignals(False)
         return self.norm
 
-    def _run(self) -> dc.Patch | None:
-        """Apply the selected norm and return the output patch."""
-        if self._patch is None:
-            return None
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the norm-specific banner."""
+        self._show_exception("operation_failed", exc)
 
-        dim = self._get_dim()
-        if dim is None:
-            return None
-
-        try:
-            return self._patch.normalize(dim, norm=self._coerce_norm())
-        except Exception as exc:
-            self._show_exception("operation_failed", exc)
-            return None
+    def get_task(self) -> Task:
+        """Return the current norm operation as a workflow task."""
+        return PatchConfiguredMethodTask(
+            method_name="normalize",
+            call_style="positional_dim",
+            dim=self._get_dim() or self.selected_dim,
+            method_kwargs={"norm": self._coerce_norm()},
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

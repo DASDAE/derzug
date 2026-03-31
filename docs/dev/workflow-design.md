@@ -336,9 +336,9 @@ A display widget that captures user configuration (e.g. Waterfall with a visual 
 | Concept | Source | Disposition |
 |---|---|---|
 | Immutable task instances, fingerprints, versioning | `workflow/task.py` | Keep, fix `@task` decorator |
-| Named input/output introspection | `models/computation.py` | Absorb into task model |
-| `ComputationResult` ok/err contract | `models/computation.py` | Absorb into `Results` |
-| Docstring parsing | `models/computation.py` | Keep |
+| Named input/output introspection | workflow task metadata | Now part of the task model |
+| Per-run ok/err contract | workflow `Results` | Now handled by `Results` |
+| Docstring parsing | utility layer | Keep as optional metadata support |
 | Topological sort | `workflow/utils` | Keep |
 | `Provenance` / `Sink` / `Source` concepts | `workflow/` | Keep, fix `source_provenance` placement |
 | `slanrod.*` imports and base models | `workflow/` | Remove entirely |

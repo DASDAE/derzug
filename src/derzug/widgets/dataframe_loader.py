@@ -5,6 +5,7 @@ Widget for loading a pandas DataFrame from a file on disk.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -21,13 +22,13 @@ from AnyQt.QtWidgets import (
     QWidget,
 )
 from Orange.widgets import gui
-from Orange.widgets.utils.concurrent import ConcurrentWidgetMixin, TaskState
 from Orange.widgets.utils.signals import Output
 from Orange.widgets.utils.tableview import TableView
 from Orange.widgets.widget import Msg
 
-from derzug.core.zugwidget import ZugWidget
+from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
 
 # Display name → (reader callable, accepted extensions)
 _FORMATS: dict[str, tuple[object, tuple[str, ...]]] = {
@@ -66,25 +67,34 @@ def _detect_format(path: str) -> str | None:
     return _EXT_TO_FORMAT.get(Path(path).suffix.lower())
 
 
-def _load_dataframe(path: str, format_name: str, state: TaskState) -> pd.DataFrame:
-    """Load a DataFrame from disk; auto-detect format when format_name is 'Auto'."""
-    state.set_progress_value(10)
-    if format_name == _AUTO:
-        detected = _detect_format(path)
-        if detected is None:
-            suffix = Path(path).suffix or "(no extension)"
-            raise ValueError(
-                f"Cannot auto-detect format for '{suffix}'. "
-                "Select a format explicitly from the dropdown."
-            )
-        format_name = detected
-    reader, _ = _FORMATS[format_name]
-    state.set_progress_value(30)
-    df = reader(path)
-    if not isinstance(df, pd.DataFrame):
-        raise TypeError(f"Reader returned {type(df).__name__}, expected DataFrame.")
-    state.set_progress_value(100)
-    return df
+class DataFrameLoaderTask(Task):
+    """Portable DataFrame loader used for compiled bound-source execution."""
+
+    output_variables: ClassVar[dict[str, object]] = {"data": object}
+
+    file_path: str = ""
+    format_name: str = _AUTO
+
+    def run(self):
+        """Load the configured DataFrame and return it."""
+        path = self.file_path.strip()
+        if not path:
+            return None
+        format_name = self.format_name or _AUTO
+        if format_name == _AUTO:
+            detected = _detect_format(path)
+            if detected is None:
+                suffix = Path(path).suffix or "(no extension)"
+                raise ValueError(
+                    "Cannot auto-detect format for "
+                    f"'{suffix}'. Select a format explicitly."
+                )
+            format_name = detected
+        reader, _ = _FORMATS[format_name]
+        df = reader(path)
+        if not isinstance(df, pd.DataFrame):
+            raise TypeError(f"Reader returned {type(df).__name__}, expected DataFrame.")
+        return df
 
 
 class _DataFrameModel(QAbstractTableModel):
@@ -157,7 +167,7 @@ def _cell_alignment(value) -> Qt.AlignmentFlag:
     return Qt.AlignLeft | Qt.AlignVCenter
 
 
-class DataFrameLoader(ConcurrentWidgetMixin, ZugWidget):
+class DataFrameLoader(ZugWidget):
     """Orange widget for loading a pandas DataFrame from a file on disk."""
 
     name = "DataFrame Loader"
@@ -195,8 +205,7 @@ class DataFrameLoader(ConcurrentWidgetMixin, ZugWidget):
         data = Output("Data", pd.DataFrame, auto_summary=False)
 
     def __init__(self) -> None:
-        ZugWidget.__init__(self)
-        ConcurrentWidgetMixin.__init__(self)
+        super().__init__()
         self._df: pd.DataFrame | None = None
 
         content = QWidget(self.mainArea)
@@ -292,30 +301,30 @@ class DataFrameLoader(ConcurrentWidgetMixin, ZugWidget):
             self._load()
 
     def _load(self) -> None:
-        """Cancel any running task and start a fresh background load."""
+        """Dispatch one background load for the current file selection."""
+        self.run()
+
+    def _supports_async_execution(self) -> bool:
+        """Load the dataframe off-thread by default."""
+        return True
+
+    def _build_execution_request(self) -> WidgetExecutionRequest | None:
+        """Build one worker-safe dataframe loading request."""
         self.Error.clear()
         self.Warning.clear()
         self._info_label.setText("")
         if not self.file_path:
             self.Warning.no_file()
-            self._set_output(None)
-            return
-        self.cancel()
-        self.start(_load_dataframe, self.file_path, self.format_name)
+            return None
+        return WidgetExecutionRequest(
+            workflow_obj=self.get_task(),
+            input_values={},
+            output_names=("data",),
+        )
 
-    def on_done(self, result: pd.DataFrame) -> None:
-        """Receive the loaded DataFrame from the worker thread."""
-        self._set_output(result)
-
-    def on_exception(self, ex: Exception) -> None:
-        """Show a load error and clear the output."""
-        self.Error.load_failed(str(ex))
-        self._set_output(None)
-
-    def onDeleteWidget(self) -> None:
-        """Shut down the background thread pool on widget close."""
-        self.shutdown()
-        super().onDeleteWidget()
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the file-load error banner."""
+        self._show_exception("load_failed", exc)
 
     def _set_output(self, df: pd.DataFrame | None) -> None:
         """Store, render, and emit the DataFrame."""
@@ -323,6 +332,17 @@ class DataFrameLoader(ConcurrentWidgetMixin, ZugWidget):
         self._render_table(df)
         self._update_info(df)
         self.Outputs.data.send(df)
+
+    def _on_result(self, result: pd.DataFrame | None) -> None:
+        """Apply one completed dataframe load result."""
+        self._set_output(result)
+
+    def get_task(self) -> Task:
+        """Return the current bound-source workflow semantics."""
+        return DataFrameLoaderTask(
+            file_path=str(self.file_path or ""),
+            format_name=str(self.format_name or _AUTO),
+        )
 
     def _render_table(self, df: pd.DataFrame | None) -> None:
         """Populate the table view with the loaded DataFrame."""

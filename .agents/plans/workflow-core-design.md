@@ -4,8 +4,7 @@
 
 The vision is to have DerZug be a front-end to creating, testing, and debugging computational workflows. Then they can be run from the command or in larger compute environments.
 
-A derzug Widget: a visual editor for one or more task parameters that emits a configured Task (or Pipe) as its output signal. The widget's job is configuration, not execution. Orange just     
-  makes that configuration interactive.
+A derzug Widget: a visual editor for one or more task parameters that emits a configured Task (or Pipe) as its output signal. The widget's job is configuration, not execution. Orange just makes that configuration interactive.
 
 ## Summary
 Treat the new `workflow/*` package as the candidate foundation for DerZug's future internal graph model, but do not merge it by replacing `models/computation.py` directly. The target design is an internal, headless workflow graph whose nodes are task instances, with Orange acting as a UI/frontend over that graph. The near-term work should be a design/cleanup pass that extracts the valid DerZug concepts from the imported module, removes Slanrod-specific assumptions, and defines how current computation metadata maps into the new model.
@@ -184,7 +183,7 @@ DerZug is a DAS tool. `dc.Patch` is the primary data object flowing through most
                                                                                                                                                                                                                            
   Orange calls build() when it needs to execute (signal propagation), gets back an immutable Pipe, runs it, compares fingerprints to decide what's actually changed. The | operator in scripting calls build() implicitly  
   or explicitly. Both paths end up with the same Pipe contract.                                                                                                                                                            
-                                                                                                                                                                                                                           
+
   This also resolves the incremental propagation question from critique #1 — Orange diffs the new Pipe fingerprint against the last executed one to determine which nodes are stale, then re-executes only those subgraphs.
    The internal graph doesn't need to be reactive; Orange drives execution and uses fingerprint diffing to minimize re-work.
 

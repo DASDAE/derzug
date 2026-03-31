@@ -12,6 +12,8 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
 class Analytic(PatchDimWidget):
@@ -80,6 +82,10 @@ class Analytic(PatchDimWidget):
         self.selected_dim = value
         self.run()
 
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the transform-specific banner."""
+        self._show_exception("transform_failed", exc)
+
     def _coerce_transform(self) -> str:
         """Return the selected transform or reset to the default."""
         if self.transform in self._TRANSFORMS:
@@ -90,23 +96,13 @@ class Analytic(PatchDimWidget):
         self._transform_combo.blockSignals(False)
         return self.transform
 
-    def _run(self) -> dc.Patch | None:
-        """Apply the selected analytic transform and return the output patch."""
-        if self._patch is None:
-            return None
-
-        dim = self._get_dim()
-        if dim is None:
-            return None
-
-        transform = self._coerce_transform()
-        try:
-            if transform == "hilbert":
-                return self._patch.hilbert(dim)
-            return self._patch.envelope(dim)
-        except Exception as exc:
-            self._show_exception("transform_failed", exc)
-            return None
+    def get_task(self) -> Task:
+        """Return the current analytic transform as a workflow task."""
+        return PatchConfiguredMethodTask(
+            method_name=self._coerce_transform(),
+            call_style="positional_dim",
+            dim=self._get_dim() or self.selected_dim,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
