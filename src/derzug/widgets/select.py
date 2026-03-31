@@ -133,6 +133,7 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._input_kind: str | None = None
         self._preview_selected = None
         self._compact_width_done = False
+        self._saved_patch_restore_generation = 0
 
         params_box = gui.widgetBox(self.controlArea, "Parameters")
         self._build_selection_panel(params_box)
@@ -155,16 +156,25 @@ class Select(SelectionControlsMixin, ZugWidget):
     @Inputs.patch
     def set_patch(self, patch: dc.Patch | None) -> None:
         """Receive a patch input and expose patch-range selection controls."""
+        self._saved_patch_restore_generation += 1
+        generation = self._saved_patch_restore_generation
         self._input_kind = "patch"
         self._patch = patch
         self._spool = None
         self._ensure_saved_patch_selection_state_primed()
         self._selection_set_patch_source(patch, notify=False, refresh_ui=False)
         self._emit_selected_output()
+        QTimer.singleShot(
+            0,
+            lambda run_generation=generation: (
+                self._apply_deferred_saved_patch_selection_reconcile(run_generation)
+            ),
+        )
 
     @Inputs.spool
     def set_spool(self, spool: dc.BaseSpool | None) -> None:
         """Receive a spool input and expose metadata selection controls."""
+        self._saved_patch_restore_generation += 1
         self._input_kind = "spool"
         self._spool = spool
         self._patch = None
@@ -288,13 +298,63 @@ class Select(SelectionControlsMixin, ZugWidget):
         payload = self._load_saved_patch_selection_state()
         if payload is None:
             return
-        current_payload = self._selection_state.patch_settings_payload(
-            include_inactive=True
-        )
-        if current_payload == payload:
+        if self._saved_patch_selection_matches_live_state(payload):
             return
         if self._selection_state.prime_patch_state_from_settings(payload):
             self._selection_state.mode = SelectionMode.NONE
+
+    def _saved_patch_selection_matches_live_state(
+        self,
+        payload: dict[str, object] | None,
+    ) -> bool:
+        """Return True when the saved patch-selection rows already match live state."""
+        if not isinstance(payload, dict):
+            return False
+        live_payload = self._selection_state.patch_settings_payload(
+            include_inactive=True
+        )
+        if not isinstance(live_payload, dict):
+            return False
+        if live_payload.get("basis") != payload.get("basis"):
+            return False
+        live_rows = {
+            str(row.get("dim")): row
+            for row in live_payload.get("rows", [])
+            if isinstance(row, dict) and row.get("dim")
+        }
+        for saved_row in payload.get("rows", []):
+            if not isinstance(saved_row, dict):
+                return False
+            dim = str(saved_row.get("dim", "")).strip()
+            if not dim or live_rows.get(dim) != saved_row:
+                return False
+        return True
+
+    def _reconcile_saved_patch_selection_state(self) -> bool:
+        """Restore saved patch selection onto the current live patch, if needed."""
+        payload = self._load_saved_patch_selection_state()
+        patch = self._patch
+        if payload is None or patch is None:
+            return False
+        if self._saved_patch_selection_matches_live_state(payload):
+            return False
+        if not self._selection_state.prime_patch_state_from_settings(payload):
+            return False
+        self._selection_state.set_patch_source(patch)
+        self._selection_refresh_panel()
+        return True
+
+    def _apply_deferred_saved_patch_selection_reconcile(
+        self,
+        generation: int,
+    ) -> None:
+        """Reapply saved patch selection after load-time settings restoration."""
+        if generation != self._saved_patch_restore_generation:
+            return
+        if self._input_kind != "patch" or self._patch is None:
+            return
+        if self._reconcile_saved_patch_selection_state():
+            self._emit_selected_output()
 
     def _persist_selection_settings(self) -> None:
         """Mirror the current selection controls into schema-backed settings."""
