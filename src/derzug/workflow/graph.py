@@ -65,9 +65,11 @@ def ensure_code_path_is_portable(code_path: str) -> None:
 
 def hash_payload(payload: dict[str, Any]) -> str:
     """Return a stable short hash."""
-    return __import__("hashlib").sha256(
-        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()[:16]
+    return (
+        __import__("hashlib")
+        .sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8"))
+        .hexdigest()[:16]
+    )
 
 
 def _portable_task_payload(task: Task) -> dict[str, Any]:
@@ -78,8 +80,7 @@ def _portable_task_payload(task: Task) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if getattr(task_cls, "__portable_adapter_factory__", None) == "callable_task":
         code_path = (
-            f"{CallableTaskAdapter.__module__}:"
-            f"{CallableTaskAdapter.__qualname__}"
+            f"{CallableTaskAdapter.__module__}:" f"{CallableTaskAdapter.__qualname__}"
         )
         parameters = {
             "function_code_path": task.code_path(),

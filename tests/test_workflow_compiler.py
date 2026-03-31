@@ -9,9 +9,8 @@ import sys
 from dataclasses import dataclass
 from typing import ClassVar
 
-import pytest
-
 import derzug
+import pytest
 from derzug.workflow import CompiledWorkflow, PipeBuilder, Task, compile_workflow
 
 

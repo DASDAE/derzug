@@ -185,7 +185,9 @@ class StreamingExecutor:
             node_outputs=result_outputs,
             error_map=self.errors,
             skipped_map=self.skipped_nodes,
-            provenance=self.pipe.get_provenance(source_provenance=self.source_provenance),
+            provenance=self.pipe.get_provenance(
+                source_provenance=self.source_provenance
+            ),
             node_names=self.pipe.node_names,
         )
 
@@ -301,10 +303,7 @@ class StreamingExecutor:
             yielded = gen.send(STREAM_END)
         except StopIteration as stop:
             final = stop.value
-            if (
-                self.pipe.tasks[handle].final_output is not None
-                and final is not None
-            ):
+            if self.pipe.tasks[handle].final_output is not None and final is not None:
                 self.emit_scalar(handle, self.pipe.tasks[handle].final_output, final)
             for port in self.pipe.tasks[handle].resolved_stream_output_variables():
                 self.finalize_stream(handle, port)
@@ -345,10 +344,7 @@ class StreamingExecutor:
                     yielded = gen.send(value)
                 except StopIteration as stop:
                     self.active_coroutines.pop(edge.to_node, None)
-                    if (
-                        downstream.final_output is not None
-                        and stop.value is not None
-                    ):
+                    if downstream.final_output is not None and stop.value is not None:
                         self.emit_scalar(
                             edge.to_node,
                             downstream.final_output,

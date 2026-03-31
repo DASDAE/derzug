@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 import pytest
-
 from derzug.workflow import STREAM_END, Pipe, PipeBuilder, Provenance, Task
 from derzug.workflow.task import task
 
@@ -255,8 +254,7 @@ def test_pipe_fingerprint_does_not_depend_on_run_provenance():
     assert pipe.fingerprint == original_fingerprint
     assert result.provenance is not None
     assert (
-        result.provenance.source_provenance
-        == source_provenance.to_source_provenance()
+        result.provenance.source_provenance == source_provenance.to_source_provenance()
     )
 
 

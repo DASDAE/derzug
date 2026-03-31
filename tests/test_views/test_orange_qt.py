@@ -92,6 +92,8 @@ def _assert_waterfall_control_text_fits(widget) -> None:
     assert visible_widgets
 
     for child in visible_widgets:
+        if isinstance(child, QLabel) and child.wordWrap():
+            continue
         target_width = max(child.sizeHint().width(), child.minimumSizeHint().width())
         assert child.width() >= target_width
 

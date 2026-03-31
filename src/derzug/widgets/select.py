@@ -158,6 +158,7 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._input_kind = "patch"
         self._patch = patch
         self._spool = None
+        self._ensure_saved_patch_selection_state_primed()
         self._selection_set_patch_source(patch, notify=False, refresh_ui=False)
         self._emit_selected_output()
 
@@ -277,6 +278,21 @@ class Select(SelectionControlsMixin, ZugWidget):
         saved_filters = self._load_saved_spool_filter_state()
         if saved_filters:
             self._selection_state.set_spool_filters(saved_filters)
+
+    def _ensure_saved_patch_selection_state_primed(self) -> None:
+        """Prime delayed-restored patch selection settings before first patch load."""
+        if self._selection_state.patch_source is not None:
+            return
+        payload = self._load_saved_patch_selection_state()
+        if payload is None:
+            return
+        current_payload = self._selection_state.patch_settings_payload(
+            include_inactive=True
+        )
+        if current_payload == payload:
+            return
+        if self._selection_state.prime_patch_state_from_settings(payload):
+            self._selection_state.mode = SelectionMode.NONE
 
     def _persist_selection_settings(self) -> None:
         """Mirror the current selection controls into schema-backed settings."""

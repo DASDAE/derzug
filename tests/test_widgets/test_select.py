@@ -182,6 +182,34 @@ class TestSelect:
 
         assert status == "absolute basis, 0 active range filter(s)"
 
+    def test_first_patch_input_primes_delayed_saved_relative_selection(
+        self, select_widget
+    ):
+        """Saved relative patch settings should apply even if restored after init."""
+        patch = dc.get_example_patch("example_event_2")
+        payload = {
+            "basis": "relative",
+            "rows": [
+                {
+                    "dim": "distance",
+                    "enabled": True,
+                    "low": {"kind": "float", "value": 100.0},
+                    "high": {"kind": "float", "value": 200.0},
+                }
+            ],
+        }
+        select_widget.saved_selection_basis = payload["basis"]
+        select_widget.saved_selection_ranges = payload["rows"]
+        select_widget._selection_state = type(select_widget._selection_state)()
+
+        select_widget.set_patch(patch)
+
+        assert select_widget._selection_patch_basis == "relative"
+        assert select_widget._selection_current_patch_range("distance") == (
+            100.0,
+            200.0,
+        )
+
     def test_get_task_matches_patch_output(self, select_widget, monkeypatch):
         """Patch-mode output should match executing the canonical selection task."""
         received = capture_output(select_widget.Outputs.patch, monkeypatch)
