@@ -36,7 +36,7 @@ def test_point_annotations_filter_contents_on_shared_dims():
         annotations=(
             Annotation(
                 id="p1",
-                geometry=PointGeometry(dims=("distance",), values=(125.0,)),
+                geometry=PointGeometry(coords={"distance": 125.0}),
             ),
         ),
     )
@@ -73,9 +73,10 @@ def test_box_annotations_require_overlap_on_all_box_dims():
             Annotation(
                 id="b1",
                 geometry=BoxGeometry(
-                    dims=("distance", "time"),
-                    min_corner=(90.0, 2.0),
-                    max_corner=(140.0, 6.0),
+                    bounds={
+                        "distance": {"min": 90.0, "max": 140.0},
+                        "time": {"min": 2.0, "max": 6.0},
+                    },
                 ),
             ),
         ),
@@ -95,8 +96,11 @@ def test_path_annotations_match_when_any_sampled_point_falls_inside():
             Annotation(
                 id="path1",
                 geometry=PathGeometry(
-                    dims=("distance", "time"),
-                    points=((10.0, 3.0), (110.0, 4.0), (180.0, 5.0)),
+                    points=(
+                        {"distance": 10.0, "time": 3.0},
+                        {"distance": 110.0, "time": 4.0},
+                        {"distance": 180.0, "time": 5.0},
+                    ),
                 ),
             ),
         ),
@@ -115,11 +119,11 @@ def test_multiple_annotations_use_or_semantics():
         annotations=(
             Annotation(
                 id="p1",
-                geometry=PointGeometry(dims=("distance",), values=(25.0,)),
+                geometry=PointGeometry(coords={"distance": 25.0}),
             ),
             Annotation(
                 id="p2",
-                geometry=PointGeometry(dims=("distance",), values=(225.0,)),
+                geometry=PointGeometry(coords={"distance": 225.0}),
             ),
         ),
     )

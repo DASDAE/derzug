@@ -239,7 +239,9 @@ def import_annotation_set(
             selected_id=normalized_selected,
         )
     selected_entry = next((entry for entry in entries if entry.id == selected_id), None)
-    if selected_entry is None or selected_entry.annotation_set.dims != incoming.dims:
+    if selected_entry is None or set(selected_entry.annotation_set.dims) != set(
+        incoming.dims
+    ):
         entry = make_entry(incoming, existing_entries=entries)
         entry = _entry_with_directory_path(entry, directory)
         return AnnotationImportResult(entries=(*entries, entry), selected_id=entry.id)

@@ -16,9 +16,22 @@ class _StrictModel(BaseModel):
 
 
 CoordScalar = datetime | timedelta | float | int | str
+CoordMap = dict[str, CoordScalar]
 
 
-def _normalize_coord_value(value: Any) -> CoordScalar:
+class CoordRange(_StrictModel):
+    """One inclusive coordinate interval on a named dimension."""
+
+    min: CoordScalar
+    max: CoordScalar
+
+    @field_validator("min", "max", mode="before")
+    @classmethod
+    def _normalize_value(cls, value) -> CoordScalar:
+        return normalize_coord_value(value)
+
+
+def normalize_coord_value(value: Any) -> CoordScalar:
     """Normalize coordinate-like scalars into JSON-safe Python values."""
     if isinstance(value, np.generic):
         if np.issubdtype(value.dtype, np.datetime64):
@@ -33,36 +46,102 @@ def _normalize_coord_value(value: Any) -> CoordScalar:
     raise TypeError(f"unsupported coordinate value {value!r}")
 
 
-def _normalize_coord_sequence(values: tuple[Any, ...]) -> tuple[CoordScalar, ...]:
-    """Normalize one flat coordinate sequence."""
-    return tuple(_normalize_coord_value(value) for value in values)
+def _normalize_coord_map(value: Any) -> CoordMap:
+    """Normalize one mapping of dimension names to coordinate values."""
+    if not isinstance(value, dict):
+        raise TypeError("geometry coordinates must be a mapping")
+    coords: CoordMap = {}
+    for dim, coord in value.items():
+        dim_name = str(dim).strip()
+        if not dim_name:
+            raise ValueError("geometry dimensions must be non-empty")
+        if dim_name in coords:
+            raise ValueError("geometry dimensions must be unique")
+        coords[dim_name] = normalize_coord_value(coord)
+    return coords
+
+
+def geometry_dims(geometry: Geometry) -> tuple[str, ...]:
+    """Return geometry dimensions in display order."""
+    if isinstance(geometry, SpanGeometry):
+        return (geometry.dim,)
+    if isinstance(geometry, PointGeometry):
+        return tuple(geometry.coords)
+    if isinstance(geometry, BoxGeometry):
+        return tuple(geometry.bounds)
+    if isinstance(geometry, PathGeometry | PolygonGeometry):
+        if geometry.points:
+            return tuple(geometry.points[0])
+        return ()
+    raise TypeError(f"unsupported geometry type {type(geometry)!r}")
+
+
+def geometry_coord(geometry: Geometry, dim: str) -> CoordScalar | None:
+    """Return a point-like coordinate for one dim when available."""
+    if isinstance(geometry, SpanGeometry):
+        return geometry.start if geometry.dim == dim else None
+    if isinstance(geometry, PointGeometry):
+        return geometry.coords.get(dim)
+    if isinstance(geometry, BoxGeometry):
+        bounds = geometry.bounds.get(dim)
+        return None if bounds is None else bounds.min
+    if isinstance(geometry, PathGeometry | PolygonGeometry):
+        if not geometry.points:
+            return None
+        return geometry.points[0].get(dim)
+    raise TypeError(f"unsupported geometry type {type(geometry)!r}")
+
+
+def geometry_ordered_coords(
+    geometry: PointGeometry, dims: tuple[str, ...]
+) -> tuple[CoordScalar, ...]:
+    """Return point coordinates in the requested order."""
+    return tuple(geometry.coords[dim] for dim in dims)
+
+
+def geometry_bounds(geometry: Geometry, dim: str) -> CoordRange | None:
+    """Return bounds for one dimension when the geometry defines them."""
+    if isinstance(geometry, SpanGeometry):
+        if geometry.dim != dim:
+            return None
+        return CoordRange(min=geometry.start, max=geometry.end)
+    if isinstance(geometry, BoxGeometry):
+        return geometry.bounds.get(dim)
+    if isinstance(geometry, PointGeometry):
+        value = geometry.coords.get(dim)
+        return None if value is None else CoordRange(min=value, max=value)
+    if isinstance(geometry, PathGeometry | PolygonGeometry):
+        values = [point[dim] for point in geometry.points if dim in point]
+        if not values:
+            return None
+        return CoordRange(min=min(values), max=max(values))
+    raise TypeError(f"unsupported geometry type {type(geometry)!r}")
+
+
+def geometry_point_coords(
+    geometry: PathGeometry | PolygonGeometry,
+    index: int,
+    dims: tuple[str, ...],
+) -> tuple[CoordScalar, ...]:
+    """Return one path/polygon point in the requested dimension order."""
+    return tuple(geometry.points[index][dim] for dim in dims)
 
 
 class PointGeometry(_StrictModel):
     """One point annotation in one or more dimensions."""
 
     type: Literal["point"] = "point"
-    dims: tuple[str, ...]
-    values: tuple[CoordScalar, ...]
+    coords: CoordMap
 
-    @field_validator("dims")
+    @field_validator("coords", mode="before")
     @classmethod
-    def _validate_dims(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if not value:
-            raise ValueError("point dims must not be empty")
-        if len(set(value)) != len(value):
-            raise ValueError("point dims must be unique")
-        return value
-
-    @field_validator("values", mode="before")
-    @classmethod
-    def _normalize_values(cls, value) -> tuple[CoordScalar, ...]:
-        return _normalize_coord_sequence(tuple(value))
+    def _normalize_coords(cls, value) -> CoordMap:
+        return _normalize_coord_map(value)
 
     @model_validator(mode="after")
-    def _validate_values(self) -> PointGeometry:
-        if len(self.dims) != len(self.values):
-            raise ValueError("point values must match dims length")
+    def _validate_coords(self) -> PointGeometry:
+        if not self.coords:
+            raise ValueError("point coords must not be empty")
         return self
 
 
@@ -74,39 +153,49 @@ class SpanGeometry(_StrictModel):
     start: CoordScalar
     end: CoordScalar
 
+    @field_validator("dim")
+    @classmethod
+    def _validate_dim(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("span dim must not be empty")
+        return value
+
     @field_validator("start", "end", mode="before")
     @classmethod
     def _normalize_bounds(cls, value) -> CoordScalar:
-        return _normalize_coord_value(value)
+        return normalize_coord_value(value)
 
 
 class BoxGeometry(_StrictModel):
     """One axis-aligned box annotation across two or more dimensions."""
 
     type: Literal["box"] = "box"
-    dims: tuple[str, ...]
-    min_corner: tuple[CoordScalar, ...]
-    max_corner: tuple[CoordScalar, ...]
+    bounds: dict[str, CoordRange]
 
-    @field_validator("dims")
+    @field_validator("bounds", mode="before")
     @classmethod
-    def _validate_dims(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if len(value) < 2:
-            raise ValueError("box dims must contain at least two dimensions")
-        if len(set(value)) != len(value):
-            raise ValueError("box dims must be unique")
-        return value
-
-    @field_validator("min_corner", "max_corner", mode="before")
-    @classmethod
-    def _normalize_corners(cls, value) -> tuple[CoordScalar, ...]:
-        return _normalize_coord_sequence(tuple(value))
+    def _normalize_bounds(cls, value) -> dict[str, CoordRange]:
+        if not isinstance(value, dict):
+            raise TypeError("box bounds must be a mapping")
+        bounds: dict[str, CoordRange] = {}
+        for dim, coord_range in value.items():
+            dim_name = str(dim).strip()
+            if not dim_name:
+                raise ValueError("box dimensions must be non-empty")
+            if dim_name in bounds:
+                raise ValueError("box dimensions must be unique")
+            bounds[dim_name] = (
+                coord_range
+                if isinstance(coord_range, CoordRange)
+                else CoordRange.model_validate(coord_range)
+            )
+        return bounds
 
     @model_validator(mode="after")
-    def _validate_corners(self) -> BoxGeometry:
-        dim_count = len(self.dims)
-        if len(self.min_corner) != dim_count or len(self.max_corner) != dim_count:
-            raise ValueError("box corners must match dims length")
+    def _validate_bounds(self) -> BoxGeometry:
+        if len(self.bounds) < 2:
+            raise ValueError("box bounds must contain at least two dimensions")
         return self
 
 
@@ -114,30 +203,22 @@ class PathGeometry(_StrictModel):
     """One ordered path annotation."""
 
     type: Literal["path"] = "path"
-    dims: tuple[str, ...]
-    points: tuple[tuple[CoordScalar, ...], ...]
-
-    @field_validator("dims")
-    @classmethod
-    def _validate_dims(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if not value:
-            raise ValueError("path dims must not be empty")
-        if len(set(value)) != len(value):
-            raise ValueError("path dims must be unique")
-        return value
+    points: tuple[CoordMap, ...]
 
     @field_validator("points", mode="before")
     @classmethod
-    def _normalize_points(cls, value) -> tuple[tuple[CoordScalar, ...], ...]:
-        return tuple(_normalize_coord_sequence(tuple(point)) for point in tuple(value))
+    def _normalize_points(cls, value) -> tuple[CoordMap, ...]:
+        return tuple(_normalize_coord_map(point) for point in tuple(value))
 
     @model_validator(mode="after")
     def _validate_points(self) -> PathGeometry:
         if not self.points:
             raise ValueError("path points must not be empty")
-        dim_count = len(self.dims)
-        if any(len(point) != dim_count for point in self.points):
-            raise ValueError("each path point must match dims length")
+        dims = tuple(self.points[0])
+        if not dims:
+            raise ValueError("path points must not be empty")
+        if any(tuple(point) != dims for point in self.points[1:]):
+            raise ValueError("each path point must use the same dims")
         return self
 
 
@@ -145,30 +226,22 @@ class PolygonGeometry(_StrictModel):
     """One polygon annotation."""
 
     type: Literal["polygon"] = "polygon"
-    dims: tuple[str, ...]
-    points: tuple[tuple[CoordScalar, ...], ...]
-
-    @field_validator("dims")
-    @classmethod
-    def _validate_dims(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if len(value) < 2:
-            raise ValueError("polygon dims must contain at least two dimensions")
-        if len(set(value)) != len(value):
-            raise ValueError("polygon dims must be unique")
-        return value
+    points: tuple[CoordMap, ...]
 
     @field_validator("points", mode="before")
     @classmethod
-    def _normalize_points(cls, value) -> tuple[tuple[CoordScalar, ...], ...]:
-        return tuple(_normalize_coord_sequence(tuple(point)) for point in tuple(value))
+    def _normalize_points(cls, value) -> tuple[CoordMap, ...]:
+        return tuple(_normalize_coord_map(point) for point in tuple(value))
 
     @model_validator(mode="after")
     def _validate_points(self) -> PolygonGeometry:
         if len(self.points) < 3:
             raise ValueError("polygon points must contain at least three points")
-        dim_count = len(self.dims)
-        if any(len(point) != dim_count for point in self.points):
-            raise ValueError("each polygon point must match dims length")
+        dims = tuple(self.points[0])
+        if len(dims) < 2:
+            raise ValueError("polygon points must contain at least two dimensions")
+        if any(tuple(point) != dims for point in self.points[1:]):
+            raise ValueError("each polygon point must use the same dims")
         return self
 
 
@@ -197,7 +270,7 @@ class Annotation(_StrictModel):
 class AnnotationSet(_StrictModel):
     """One collection of persisted annotations in absolute coordinates."""
 
-    schema_version: str = "2"
+    schema_version: Literal["3"] = "3"
     dims: tuple[str, ...]
     annotations: tuple[Annotation, ...] = ()
     provenance: dict[str, Any] = Field(default_factory=dict)
@@ -215,12 +288,7 @@ class AnnotationSet(_StrictModel):
     def _validate_annotation_dims(self) -> AnnotationSet:
         valid_dims = set(self.dims)
         for annotation in self.annotations:
-            geometry = annotation.geometry
-            if isinstance(geometry, SpanGeometry):
-                geometry_dims = {geometry.dim}
-            else:
-                geometry_dims = set(geometry.dims)
-            if not geometry_dims <= valid_dims:
+            if not set(geometry_dims(annotation.geometry)) <= valid_dims:
                 raise ValueError(
                     f"annotation {annotation.id!r} uses dims outside the annotation set"
                 )
@@ -231,9 +299,18 @@ __all__ = (
     "Annotation",
     "AnnotationSet",
     "BoxGeometry",
+    "CoordMap",
+    "CoordRange",
+    "CoordScalar",
     "Geometry",
     "PathGeometry",
     "PointGeometry",
     "PolygonGeometry",
     "SpanGeometry",
+    "geometry_bounds",
+    "geometry_coord",
+    "geometry_dims",
+    "geometry_ordered_coords",
+    "geometry_point_coords",
+    "normalize_coord_value",
 )

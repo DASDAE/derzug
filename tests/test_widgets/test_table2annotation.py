@@ -110,7 +110,7 @@ class TestRunOutput:
         result = received[-1]
         first = result.annotations[0]
         assert isinstance(first.geometry, PointGeometry)
-        assert first.geometry.values == (1.0, 10.0)
+        assert first.geometry.coords == {"time": 1.0, "dist": 10.0}
 
     def test_line_geometry_produces_span_annotations(self, widget, monkeypatch):
         """Line mode produces SpanGeometry annotations."""

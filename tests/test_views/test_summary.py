@@ -54,7 +54,7 @@ def test_summarize_annotation_set_uses_formatted_html_details():
         annotations=(
             Annotation(
                 id="a",
-                geometry=PointGeometry(dims=("time",), values=(1.0,)),
+                geometry=PointGeometry(coords={"time": 1.0}),
             ),
         ),
     )
@@ -64,7 +64,7 @@ def test_summarize_annotation_set_uses_formatted_html_details():
     assert out.summary == "Annotations"
     assert out.details is not None
     assert out.details.startswith("<pre")
-    assert "&quot;schema_version&quot;: &quot;2&quot;" in out.details
+    assert "&quot;schema_version&quot;: &quot;3&quot;" in out.details
     assert "&quot;dims&quot;: [" in out.details
     assert "\n  &quot;annotations&quot;: [" in out.details
     assert "&quot;id&quot;: &quot;a&quot;" in out.details

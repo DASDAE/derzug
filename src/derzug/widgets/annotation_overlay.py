@@ -22,8 +22,14 @@ from derzug.models.annotations import (
     Annotation,
     AnnotationSet,
     BoxGeometry,
+    CoordRange,
     PathGeometry,
     PointGeometry,
+    geometry_coord,
+    geometry_dims,
+    geometry_ordered_coords,
+    geometry_point_coords,
+    normalize_coord_value,
 )
 from derzug.utils.annotation_metadata import (
     annotation_label_color,
@@ -76,6 +82,44 @@ def _plot_distance_sq(first: tuple[float, float], second: tuple[float, float]) -
     dx = float(first[0]) - float(second[0])
     dy = float(first[1]) - float(second[1])
     return (dx * dx) + (dy * dy)
+
+
+def _point_plot_xy(geometry: PointGeometry, axes) -> tuple[float, float]:
+    """Return one point geometry in current plot-axis order."""
+    x_coord, y_coord = geometry_ordered_coords(geometry, (axes.x_dim, axes.y_dim))
+    return (
+        float(map_coord_to_plot_value(x_coord, axes.x_coord, axes.x_plot)),
+        float(map_coord_to_plot_value(y_coord, axes.y_coord, axes.y_plot)),
+    )
+
+
+def _path_plot_xy_points(
+    geometry: PathGeometry, axes
+) -> tuple[tuple[float, float], ...]:
+    """Return one path geometry in current plot-axis order."""
+    dims = (axes.x_dim, axes.y_dim)
+    return tuple(
+        (
+            float(map_coord_to_plot_value(coords[0], axes.x_coord, axes.x_plot)),
+            float(map_coord_to_plot_value(coords[1], axes.y_coord, axes.y_plot)),
+        )
+        for coords in (
+            geometry_point_coords(geometry, i, dims)
+            for i in range(len(geometry.points))
+        )
+    )
+
+
+def _box_plot_rect(geometry: BoxGeometry, axes) -> tuple[float, float, float, float]:
+    """Return one box geometry in current plot-axis order."""
+    x_bounds = geometry.bounds[axes.x_dim]
+    y_bounds = geometry.bounds[axes.y_dim]
+    return (
+        float(map_coord_to_plot_value(x_bounds.min, axes.x_coord, axes.x_plot)),
+        float(map_coord_to_plot_value(y_bounds.min, axes.y_coord, axes.y_plot)),
+        float(map_coord_to_plot_value(x_bounds.max, axes.x_coord, axes.x_plot)),
+        float(map_coord_to_plot_value(y_bounds.max, axes.y_coord, axes.y_plot)),
+    )
 
 
 def _color_for_label(label: str | None) -> tuple[int, int, int]:
@@ -838,6 +882,7 @@ class AnnotationOverlayController:
         self._point_drag_state: dict[str, Any] | None = None
         self._snap_to_annotations = False
         self._applying_live_snap = False
+        self._slice_coords: dict[str, Any] = {}
 
         self.toolbox = AnnotationToolbox(self._host._plot_widget, tools=self._tools)
         self.toolbox.toolChanged.connect(self.set_tool)
@@ -960,6 +1005,46 @@ class AnnotationOverlayController:
             "organization": config.organization or None,
         }
 
+    def _extend_geometry_with_slice(self, geometry):
+        """Extend geometry dims with current slice coordinate constraints."""
+        if not self._slice_coords:
+            return geometry
+        if isinstance(geometry, PointGeometry):
+            return PointGeometry(coords={**geometry.coords, **self._slice_coords})
+        if isinstance(geometry, BoxGeometry):
+            return BoxGeometry(
+                bounds={
+                    **geometry.bounds,
+                    **{
+                        dim: CoordRange(min=value, max=value)
+                        for dim, value in self._slice_coords.items()
+                    },
+                },
+            )
+        if isinstance(geometry, PathGeometry):
+            return PathGeometry(
+                points=tuple(
+                    {**point, **self._slice_coords} for point in geometry.points
+                ),
+            )
+        return geometry
+
+    def _annotation_matches_slice(self, annotation: Annotation) -> bool:
+        """Return True if the annotation is visible at the current slice position."""
+        if not self._slice_coords:
+            return True
+        geom = annotation.geometry
+        geom_dims = geometry_dims(geom)
+        if not geom_dims:
+            return True  # SpanGeometry or unknown — no slice constraint
+        for slice_dim, current_val in self._slice_coords.items():
+            if slice_dim not in geom_dims:
+                continue  # geometry has no constraint on this dim → always visible
+            stored_val = geometry_coord(geom, slice_dim)
+            if stored_val != current_val:
+                return False
+        return True
+
     def _new_annotation(
         self,
         *,
@@ -973,7 +1058,7 @@ class AnnotationOverlayController:
             return None
         return Annotation(
             id=f"annotation-{uuid4().hex[:8]}",
-            geometry=geometry,
+            geometry=self._extend_geometry_with_slice(geometry),
             semantic_type=semantic_type,
             properties=properties or {},
             **identity_fields,
@@ -1003,12 +1088,26 @@ class AnnotationOverlayController:
             provenance={"data_kind": "patch", "dims": dims},
         )
 
-    def annotation_dims(self) -> tuple[str, str] | None:
-        """Return annotation dimensions in plot order."""
+    def annotation_dims(self) -> tuple[str, ...] | None:
+        """Return annotation dimensions: plot dims first, then slice dims."""
         axes = self._host._axes
         if axes is None:
             return None
-        return axes.x_dim, axes.y_dim
+        return (axes.x_dim, axes.y_dim, *tuple(self._slice_coords.keys()))
+
+    @property
+    def slice_coords(self) -> dict[str, Any]:
+        """Current slice coordinate values keyed by dim name."""
+        return self._slice_coords
+
+    @slice_coords.setter
+    def slice_coords(self, value: dict[str, Any]) -> None:
+        normalized = {k: normalize_coord_value(v) for k, v in value.items()}
+        if normalized == self._slice_coords:
+            return
+        self._slice_coords = normalized
+        self.ensure_annotation_set()
+        self.rebuild_items()
 
     def ensure_annotation_set(self) -> None:
         """Ensure an annotation set exists for the host's current dims."""
@@ -1016,7 +1115,16 @@ class AnnotationOverlayController:
         if dims is None:
             self.annotation_set = None
             return
-        if self.annotation_set is not None and self.annotation_set.dims == dims:
+        if self.annotation_set is not None and set(self.annotation_set.dims) == set(
+            dims
+        ):
+            if self.annotation_set.dims != dims:
+                self.annotation_set = self.annotation_set.model_copy(
+                    update={
+                        "dims": dims,
+                        "provenance": {**self.annotation_set.provenance, "dims": dims},
+                    }
+                )
             return
         self.clear_annotation_items()
         self.annotation_set = self.build_empty_set()
@@ -1043,9 +1151,11 @@ class AnnotationOverlayController:
         if self.annotation_set is None:
             return
         dims = self.annotation_dims()
-        if dims is None or self.annotation_set.dims != dims:
+        if dims is None or set(self.annotation_set.dims) != set(dims):
             return
         for annotation in self.annotation_set.annotations:
+            if not self._annotation_matches_slice(annotation):
+                continue
             item = self._build_item_for_annotation(annotation)
             if item is None:
                 continue
@@ -1641,18 +1751,20 @@ class AnnotationOverlayController:
 
     def create_point_annotation(self, plot_x: float, plot_y: float) -> None:
         """Create one point annotation from plot coordinates."""
-        dims = self.annotation_dims()
         axes = self._host._axes
-        if dims is None or axes is None:
+        if self.annotation_dims() is None or axes is None:
             return
         plot_x, plot_y = self._snap_plot_pos((plot_x, plot_y))
         annotation = self._new_annotation(
             geometry=PointGeometry(
-                dims=dims,
-                values=(
-                    map_plot_value_to_coord(plot_x, axes.x_plot, axes.x_coord),
-                    map_plot_value_to_coord(plot_y, axes.y_plot, axes.y_coord),
-                ),
+                coords={
+                    axes.x_dim: map_plot_value_to_coord(
+                        plot_x, axes.x_plot, axes.x_coord
+                    ),
+                    axes.y_dim: map_plot_value_to_coord(
+                        plot_y, axes.y_plot, axes.y_coord
+                    ),
+                },
             ),
         )
         if annotation is None:
@@ -1665,9 +1777,8 @@ class AnnotationOverlayController:
         end: tuple[float, float],
     ) -> None:
         """Create one box annotation from plot coordinates."""
-        dims = self.annotation_dims()
         axes = self._host._axes
-        if dims is None or axes is None:
+        if self.annotation_dims() is None or axes is None:
             return
         end = self._snap_plot_pos(end)
         x0, x1 = sorted((start[0], end[0]))
@@ -1676,15 +1787,16 @@ class AnnotationOverlayController:
             return
         annotation = self._new_annotation(
             geometry=BoxGeometry(
-                dims=dims,
-                min_corner=(
-                    map_plot_value_to_coord(x0, axes.x_plot, axes.x_coord),
-                    map_plot_value_to_coord(y0, axes.y_plot, axes.y_coord),
-                ),
-                max_corner=(
-                    map_plot_value_to_coord(x1, axes.x_plot, axes.x_coord),
-                    map_plot_value_to_coord(y1, axes.y_plot, axes.y_coord),
-                ),
+                bounds={
+                    axes.x_dim: CoordRange(
+                        min=map_plot_value_to_coord(x0, axes.x_plot, axes.x_coord),
+                        max=map_plot_value_to_coord(x1, axes.x_plot, axes.x_coord),
+                    ),
+                    axes.y_dim: CoordRange(
+                        min=map_plot_value_to_coord(y0, axes.y_plot, axes.y_coord),
+                        max=map_plot_value_to_coord(y1, axes.y_plot, axes.y_coord),
+                    ),
+                },
             ),
         )
         if annotation is None:
@@ -1697,25 +1809,31 @@ class AnnotationOverlayController:
         end: tuple[float, float],
     ) -> None:
         """Create one two-point path annotation from plot coordinates."""
-        dims = self.annotation_dims()
         axes = self._host._axes
-        if dims is None or axes is None:
+        if self.annotation_dims() is None or axes is None:
             return
         end = self._snap_plot_pos(end)
         if abs(end[0] - start[0]) < 1e-12 and abs(end[1] - start[1]) < 1e-12:
             return
         annotation = self._new_annotation(
             geometry=PathGeometry(
-                dims=dims,
                 points=(
-                    (
-                        map_plot_value_to_coord(start[0], axes.x_plot, axes.x_coord),
-                        map_plot_value_to_coord(start[1], axes.y_plot, axes.y_coord),
-                    ),
-                    (
-                        map_plot_value_to_coord(end[0], axes.x_plot, axes.x_coord),
-                        map_plot_value_to_coord(end[1], axes.y_plot, axes.y_coord),
-                    ),
+                    {
+                        axes.x_dim: map_plot_value_to_coord(
+                            start[0], axes.x_plot, axes.x_coord
+                        ),
+                        axes.y_dim: map_plot_value_to_coord(
+                            start[1], axes.y_plot, axes.y_coord
+                        ),
+                    },
+                    {
+                        axes.x_dim: map_plot_value_to_coord(
+                            end[0], axes.x_plot, axes.x_coord
+                        ),
+                        axes.y_dim: map_plot_value_to_coord(
+                            end[1], axes.y_plot, axes.y_coord
+                        ),
+                    },
                 ),
             ),
             semantic_type="line",
@@ -1730,9 +1848,8 @@ class AnnotationOverlayController:
         end: tuple[float, float],
     ) -> None:
         """Create one visible hyperbola branch from plot coordinates."""
-        dims = self.annotation_dims()
         axes = self._host._axes
-        if dims is None or axes is None:
+        if self.annotation_dims() is None or axes is None:
             return
         params = self._hyperbola_parameters_from_drag(start, end)
         xs, ys = self._sample_hyperbola_plot_points(params)
@@ -1740,16 +1857,15 @@ class AnnotationOverlayController:
             return
         annotation = self._new_annotation(
             geometry=PathGeometry(
-                dims=dims,
                 points=tuple(
-                    (
-                        map_plot_value_to_coord(
+                    {
+                        axes.x_dim: map_plot_value_to_coord(
                             float(plot_x), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(plot_y), axes.y_plot, axes.y_coord
                         ),
-                    )
+                    }
                     for plot_x, plot_y in zip(xs, ys, strict=True)
                 ),
             ),
@@ -1767,9 +1883,8 @@ class AnnotationOverlayController:
 
     def create_default_hyperbola_annotation(self, plot_x: float, plot_y: float) -> None:
         """Create one default hyperbola annotation near the target position."""
-        dims = self.annotation_dims()
         axes = self._host._axes
-        if dims is None or axes is None:
+        if self.annotation_dims() is None or axes is None:
             return
         dx, dy = self._default_shape_half_spans()
         params = {
@@ -1787,16 +1902,15 @@ class AnnotationOverlayController:
             return
         annotation = self._new_annotation(
             geometry=PathGeometry(
-                dims=dims,
                 points=tuple(
-                    (
-                        map_plot_value_to_coord(
+                    {
+                        axes.x_dim: map_plot_value_to_coord(
                             float(plot_x), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(plot_y), axes.y_plot, axes.y_coord
                         ),
-                    )
+                    }
                     for plot_x, plot_y in zip(xs, ys, strict=True)
                 ),
             ),
@@ -1818,9 +1932,8 @@ class AnnotationOverlayController:
         end: tuple[float, float],
     ) -> None:
         """Create one ellipse annotation from plot coordinates."""
-        dims = self.annotation_dims()
         axes = self._host._axes
-        if dims is None or axes is None:
+        if self.annotation_dims() is None or axes is None:
             return
         params = self._ellipse_parameters_from_drag(start, end)
         xs, ys = self._sample_ellipse_plot_points(params)
@@ -1828,16 +1941,15 @@ class AnnotationOverlayController:
             return
         annotation = self._new_annotation(
             geometry=PathGeometry(
-                dims=dims,
                 points=tuple(
-                    (
-                        map_plot_value_to_coord(
+                    {
+                        axes.x_dim: map_plot_value_to_coord(
                             float(plot_x), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(plot_y), axes.y_plot, axes.y_coord
                         ),
-                    )
+                    }
                     for plot_x, plot_y in zip(xs, ys, strict=True)
                 ),
             ),
@@ -1885,16 +1997,15 @@ class AnnotationOverlayController:
         xs, ys = self._sample_ellipse_plot_points(params)
         annotation = self._new_annotation(
             geometry=PathGeometry(
-                dims=self.annotation_set.dims,
                 points=tuple(
-                    (
-                        map_plot_value_to_coord(
+                    {
+                        axes.x_dim: map_plot_value_to_coord(
                             float(plot_x), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(plot_y), axes.y_plot, axes.y_coord
                         ),
-                    )
+                    }
                     for plot_x, plot_y in zip(xs, ys, strict=True)
                 ),
             ),
@@ -1930,24 +2041,23 @@ class AnnotationOverlayController:
             return False
         annotation = self._new_annotation(
             geometry=PathGeometry(
-                dims=self.annotation_set.dims,
                 points=(
-                    (
-                        map_plot_value_to_coord(
+                    {
+                        axes.x_dim: map_plot_value_to_coord(
                             float(start[0]), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(start[1]), axes.y_plot, axes.y_coord
                         ),
-                    ),
-                    (
-                        map_plot_value_to_coord(
+                    },
+                    {
+                        axes.x_dim: map_plot_value_to_coord(
                             float(end[0]), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(end[1]), axes.y_plot, axes.y_coord
                         ),
-                    ),
+                    },
                 ),
             ),
             semantic_type="line",
@@ -1983,23 +2093,24 @@ class AnnotationOverlayController:
         half_side = side / 2.0
         annotation = self._new_annotation(
             geometry=BoxGeometry(
-                dims=self.annotation_set.dims,
-                min_corner=(
-                    map_plot_value_to_coord(
-                        center_x - half_side, axes.x_plot, axes.x_coord
+                bounds={
+                    axes.x_dim: CoordRange(
+                        min=map_plot_value_to_coord(
+                            center_x - half_side, axes.x_plot, axes.x_coord
+                        ),
+                        max=map_plot_value_to_coord(
+                            center_x + half_side, axes.x_plot, axes.x_coord
+                        ),
                     ),
-                    map_plot_value_to_coord(
-                        center_y - half_side, axes.y_plot, axes.y_coord
+                    axes.y_dim: CoordRange(
+                        min=map_plot_value_to_coord(
+                            center_y - half_side, axes.y_plot, axes.y_coord
+                        ),
+                        max=map_plot_value_to_coord(
+                            center_y + half_side, axes.y_plot, axes.y_coord
+                        ),
                     ),
-                ),
-                max_corner=(
-                    map_plot_value_to_coord(
-                        center_x + half_side, axes.x_plot, axes.x_coord
-                    ),
-                    map_plot_value_to_coord(
-                        center_y + half_side, axes.y_plot, axes.y_coord
-                    ),
-                ),
+                },
             ),
             semantic_type="square",
             properties={
@@ -2032,16 +2143,15 @@ class AnnotationOverlayController:
         xs, ys = self._sample_hyperbola_plot_points(params)
         annotation = self._new_annotation(
             geometry=PathGeometry(
-                dims=self.annotation_set.dims,
                 points=tuple(
-                    (
-                        map_plot_value_to_coord(
+                    {
+                        axes.x_dim: map_plot_value_to_coord(
                             float(plot_x), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(plot_y), axes.y_plot, axes.y_coord
                         ),
-                    )
+                    }
                     for plot_x, plot_y in zip(xs, ys, strict=True)
                 ),
             ),
@@ -2076,14 +2186,7 @@ class AnnotationOverlayController:
         axes = self._host._axes
         points = np.array(
             [
-                (
-                    map_coord_to_plot_value(
-                        annotation.geometry.values[0], axes.x_coord, axes.x_plot
-                    ),
-                    map_coord_to_plot_value(
-                        annotation.geometry.values[1], axes.y_coord, axes.y_plot
-                    ),
-                )
+                _point_plot_xy(annotation.geometry, axes)
                 for annotation in point_annotations
             ],
             dtype=float,
@@ -2191,56 +2294,14 @@ class AnnotationOverlayController:
                 continue
             geometry = annotation.geometry
             if isinstance(geometry, PointGeometry):
-                candidates.append(
-                    (
-                        float(
-                            map_coord_to_plot_value(
-                                geometry.values[0], axes.x_coord, axes.x_plot
-                            )
-                        ),
-                        float(
-                            map_coord_to_plot_value(
-                                geometry.values[1], axes.y_coord, axes.y_plot
-                            )
-                        ),
-                    )
-                )
+                candidates.append(_point_plot_xy(geometry, axes))
             elif isinstance(geometry, BoxGeometry):
-                xmin = float(
-                    map_coord_to_plot_value(
-                        geometry.min_corner[0], axes.x_coord, axes.x_plot
-                    )
-                )
-                ymin = float(
-                    map_coord_to_plot_value(
-                        geometry.min_corner[1], axes.y_coord, axes.y_plot
-                    )
-                )
-                xmax = float(
-                    map_coord_to_plot_value(
-                        geometry.max_corner[0], axes.x_coord, axes.x_plot
-                    )
-                )
-                ymax = float(
-                    map_coord_to_plot_value(
-                        geometry.max_corner[1], axes.y_coord, axes.y_plot
-                    )
-                )
+                xmin, ymin, xmax, ymax = _box_plot_rect(geometry, axes)
                 candidates.extend(
                     ((xmin, ymin), (xmin, ymax), (xmax, ymin), (xmax, ymax))
                 )
             elif isinstance(geometry, PathGeometry) and len(geometry.points) == 2:
-                candidates.extend(
-                    (
-                        float(
-                            map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot)
-                        ),
-                        float(
-                            map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot)
-                        ),
-                    )
-                    for point in geometry.points
-                )
+                candidates.extend(_path_plot_xy_points(geometry, axes))
         return candidates
 
     def _snap_plot_pos(
@@ -2280,29 +2341,22 @@ class AnnotationOverlayController:
         geometry = annotation.geometry
         if axes is None or not isinstance(geometry, PointGeometry):
             return annotation
-        plot_pos = (
-            float(
-                map_coord_to_plot_value(geometry.values[0], axes.x_coord, axes.x_plot)
-            ),
-            float(
-                map_coord_to_plot_value(geometry.values[1], axes.y_coord, axes.y_plot)
-            ),
-        )
+        plot_pos = _point_plot_xy(geometry, axes)
         snapped = self._snap_plot_pos(plot_pos, exclude_annotation_id=annotation.id)
         if snapped == plot_pos:
             return annotation
         return annotation.model_copy(
             update={
                 "geometry": PointGeometry(
-                    dims=geometry.dims,
-                    values=(
-                        map_plot_value_to_coord(
+                    coords={
+                        **geometry.coords,
+                        axes.x_dim: map_plot_value_to_coord(
                             float(snapped[0]), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(snapped[1]), axes.y_plot, axes.y_coord
                         ),
-                    ),
+                    },
                 )
             }
         )
@@ -2315,13 +2369,7 @@ class AnnotationOverlayController:
         geometry = annotation.geometry
         if not isinstance(geometry, PathGeometry) or len(geometry.points) != 2:
             return None
-        return tuple(
-            (
-                float(map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot)),
-                float(map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot)),
-            )
-            for point in geometry.points
-        )
+        return _path_plot_xy_points(geometry, axes)
 
     @staticmethod
     def _box_plot_corners(
@@ -2339,18 +2387,7 @@ class AnnotationOverlayController:
         geometry = annotation.geometry
         if not isinstance(geometry, BoxGeometry):
             return None
-        xmin = float(
-            map_coord_to_plot_value(geometry.min_corner[0], axes.x_coord, axes.x_plot)
-        )
-        ymin = float(
-            map_coord_to_plot_value(geometry.min_corner[1], axes.y_coord, axes.y_plot)
-        )
-        xmax = float(
-            map_coord_to_plot_value(geometry.max_corner[0], axes.x_coord, axes.x_plot)
-        )
-        ymax = float(
-            map_coord_to_plot_value(geometry.max_corner[1], axes.y_coord, axes.y_plot)
-        )
+        xmin, ymin, xmax, ymax = _box_plot_rect(geometry, axes)
         return ((xmin, ymin), (xmax, ymin), (xmin, ymax), (xmax, ymax))
 
     @staticmethod
@@ -2433,17 +2470,17 @@ class AnnotationOverlayController:
         return updated.model_copy(
             update={
                 "geometry": PathGeometry(
-                    dims=geometry.dims,
                     points=tuple(
-                        (
-                            map_plot_value_to_coord(
+                        {
+                            **geometry.points[index],
+                            axes.x_dim: map_plot_value_to_coord(
                                 float(point[0]), axes.x_plot, axes.x_coord
                             ),
-                            map_plot_value_to_coord(
+                            axes.y_dim: map_plot_value_to_coord(
                                 float(point[1]), axes.y_plot, axes.y_coord
                             ),
-                        )
-                        for point in snapped_points
+                        }
+                        for index, point in enumerate(snapped_points)
                     ),
                 )
             }
@@ -2490,15 +2527,25 @@ class AnnotationOverlayController:
         return updated.model_copy(
             update={
                 "geometry": BoxGeometry(
-                    dims=geometry.dims,
-                    min_corner=(
-                        map_plot_value_to_coord(xmin, axes.x_plot, axes.x_coord),
-                        map_plot_value_to_coord(ymin, axes.y_plot, axes.y_coord),
-                    ),
-                    max_corner=(
-                        map_plot_value_to_coord(xmax, axes.x_plot, axes.x_coord),
-                        map_plot_value_to_coord(ymax, axes.y_plot, axes.y_coord),
-                    ),
+                    bounds={
+                        **geometry.bounds,
+                        axes.x_dim: CoordRange(
+                            min=map_plot_value_to_coord(
+                                xmin, axes.x_plot, axes.x_coord
+                            ),
+                            max=map_plot_value_to_coord(
+                                xmax, axes.x_plot, axes.x_coord
+                            ),
+                        ),
+                        axes.y_dim: CoordRange(
+                            min=map_plot_value_to_coord(
+                                ymin, axes.y_plot, axes.y_coord
+                            ),
+                            max=map_plot_value_to_coord(
+                                ymax, axes.y_plot, axes.y_coord
+                            ),
+                        ),
+                    },
                 )
             }
         )
@@ -2531,23 +2578,14 @@ class AnnotationOverlayController:
         ):
             width = float(item.size().x())
             height = float(item.size().y())
-            plot_x = float(
-                map_coord_to_plot_value(geometry.values[0], axes.x_coord, axes.x_plot)
-            )
-            plot_y = float(
-                map_coord_to_plot_value(geometry.values[1], axes.y_coord, axes.y_plot)
-            )
+            plot_x, plot_y = _point_plot_xy(geometry, axes)
             item.setPos((plot_x - (width / 2.0), plot_y - (height / 2.0)), finish=False)
             return
         if isinstance(item, _AnnotationLineROI) and isinstance(geometry, PathGeometry):
             if len(geometry.points) != 2:
                 return
             plot_points = [
-                QPointF(
-                    float(map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot)),
-                    float(map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot)),
-                )
-                for point in geometry.points
+                QPointF(*point) for point in _path_plot_xy_points(geometry, axes)
             ]
             item.movePoint(
                 item.endpoints[0], plot_points[0], finish=False, coords="parent"
@@ -2557,26 +2595,7 @@ class AnnotationOverlayController:
             )
             return
         if isinstance(item, _AnnotationRectROI) and isinstance(geometry, BoxGeometry):
-            xmin = float(
-                map_coord_to_plot_value(
-                    geometry.min_corner[0], axes.x_coord, axes.x_plot
-                )
-            )
-            ymin = float(
-                map_coord_to_plot_value(
-                    geometry.min_corner[1], axes.y_coord, axes.y_plot
-                )
-            )
-            xmax = float(
-                map_coord_to_plot_value(
-                    geometry.max_corner[0], axes.x_coord, axes.x_plot
-                )
-            )
-            ymax = float(
-                map_coord_to_plot_value(
-                    geometry.max_corner[1], axes.y_coord, axes.y_plot
-                )
-            )
+            xmin, ymin, xmax, ymax = _box_plot_rect(geometry, axes)
             item.setPos((xmin, ymin), finish=False)
             item.setSize(
                 (max(xmax - xmin, 1e-12), max(ymax - ymin, 1e-12)), finish=False
@@ -2587,44 +2606,12 @@ class AnnotationOverlayController:
         """Return one stable plot-space anchor point for a persisted annotation."""
         geometry = annotation.geometry
         if isinstance(geometry, PointGeometry):
-            return (
-                float(
-                    map_coord_to_plot_value(
-                        geometry.values[0], axes.x_coord, axes.x_plot
-                    )
-                ),
-                float(
-                    map_coord_to_plot_value(
-                        geometry.values[1], axes.y_coord, axes.y_plot
-                    )
-                ),
-            )
+            return _point_plot_xy(geometry, axes)
         if isinstance(geometry, BoxGeometry):
-            return (
-                float(
-                    map_coord_to_plot_value(
-                        geometry.min_corner[0], axes.x_coord, axes.x_plot
-                    )
-                ),
-                float(
-                    map_coord_to_plot_value(
-                        geometry.min_corner[1], axes.y_coord, axes.y_plot
-                    )
-                ),
-            )
+            xmin, ymin, _xmax, _ymax = _box_plot_rect(geometry, axes)
+            return (xmin, ymin)
         if isinstance(geometry, PathGeometry) and geometry.points:
-            return (
-                float(
-                    map_coord_to_plot_value(
-                        geometry.points[0][0], axes.x_coord, axes.x_plot
-                    )
-                ),
-                float(
-                    map_coord_to_plot_value(
-                        geometry.points[0][1], axes.y_coord, axes.y_plot
-                    )
-                ),
-            )
+            return _path_plot_xy_points(geometry, axes)[0]
         raise TypeError(f"unsupported annotation geometry {type(geometry)!r}")
 
     def _annotation_translation_delta_plot(
@@ -2643,85 +2630,57 @@ class AnnotationOverlayController:
         properties = dict(annotation.properties or {})
         if isinstance(geometry, PointGeometry):
             translated_geometry = PointGeometry(
-                dims=geometry.dims,
-                values=(
-                    map_plot_value_to_coord(
-                        map_coord_to_plot_value(
-                            geometry.values[0], axes.x_coord, axes.x_plot
-                        )
-                        + delta_x,
+                coords={
+                    **geometry.coords,
+                    axes.x_dim: map_plot_value_to_coord(
+                        _point_plot_xy(geometry, axes)[0] + delta_x,
                         axes.x_plot,
                         axes.x_coord,
                     ),
-                    map_plot_value_to_coord(
-                        map_coord_to_plot_value(
-                            geometry.values[1], axes.y_coord, axes.y_plot
-                        )
-                        + delta_y,
+                    axes.y_dim: map_plot_value_to_coord(
+                        _point_plot_xy(geometry, axes)[1] + delta_y,
                         axes.y_plot,
                         axes.y_coord,
                     ),
-                ),
+                },
             )
         elif isinstance(geometry, BoxGeometry):
+            xmin, ymin, xmax, ymax = _box_plot_rect(geometry, axes)
             translated_geometry = BoxGeometry(
-                dims=geometry.dims,
-                min_corner=(
-                    map_plot_value_to_coord(
-                        map_coord_to_plot_value(
-                            geometry.min_corner[0], axes.x_coord, axes.x_plot
-                        )
-                        + delta_x,
-                        axes.x_plot,
-                        axes.x_coord,
+                bounds={
+                    **geometry.bounds,
+                    axes.x_dim: CoordRange(
+                        min=map_plot_value_to_coord(
+                            xmin + delta_x, axes.x_plot, axes.x_coord
+                        ),
+                        max=map_plot_value_to_coord(
+                            xmax + delta_x, axes.x_plot, axes.x_coord
+                        ),
                     ),
-                    map_plot_value_to_coord(
-                        map_coord_to_plot_value(
-                            geometry.min_corner[1], axes.y_coord, axes.y_plot
-                        )
-                        + delta_y,
-                        axes.y_plot,
-                        axes.y_coord,
+                    axes.y_dim: CoordRange(
+                        min=map_plot_value_to_coord(
+                            ymin + delta_y, axes.y_plot, axes.y_coord
+                        ),
+                        max=map_plot_value_to_coord(
+                            ymax + delta_y, axes.y_plot, axes.y_coord
+                        ),
                     ),
-                ),
-                max_corner=(
-                    map_plot_value_to_coord(
-                        map_coord_to_plot_value(
-                            geometry.max_corner[0], axes.x_coord, axes.x_plot
-                        )
-                        + delta_x,
-                        axes.x_plot,
-                        axes.x_coord,
-                    ),
-                    map_plot_value_to_coord(
-                        map_coord_to_plot_value(
-                            geometry.max_corner[1], axes.y_coord, axes.y_plot
-                        )
-                        + delta_y,
-                        axes.y_plot,
-                        axes.y_coord,
-                    ),
-                ),
+                },
             )
         elif isinstance(geometry, PathGeometry):
+            plot_points = _path_plot_xy_points(geometry, axes)
             translated_geometry = PathGeometry(
-                dims=geometry.dims,
                 points=tuple(
-                    (
-                        map_plot_value_to_coord(
-                            map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot)
-                            + delta_x,
-                            axes.x_plot,
-                            axes.x_coord,
+                    {
+                        **geometry.points[index],
+                        axes.x_dim: map_plot_value_to_coord(
+                            point[0] + delta_x, axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
-                            map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot)
-                            + delta_y,
-                            axes.y_plot,
-                            axes.y_coord,
+                        axes.y_dim: map_plot_value_to_coord(
+                            point[1] + delta_y, axes.y_plot, axes.y_coord
                         ),
-                    )
-                    for point in geometry.points
+                    }
+                    for index, point in enumerate(plot_points)
                 ),
             )
         else:
@@ -2886,20 +2845,25 @@ class AnnotationOverlayController:
         if existing is None:
             raise KeyError(annotation_id)
         properties = dict(existing.properties or {})
-        dims = self.annotation_dims()
-        if dims is None:
-            raise ValueError("missing annotation dimensions")
         if isinstance(item, _AnnotationPointROI):
             pos = item.pos()
             size = item.size()
             center_x = float(pos.x()) + (float(size.x()) / 2)
             center_y = float(pos.y()) + (float(size.y()) / 2)
             geometry = PointGeometry(
-                dims=dims,
-                values=(
-                    map_plot_value_to_coord(center_x, axes.x_plot, axes.x_coord),
-                    map_plot_value_to_coord(center_y, axes.y_plot, axes.y_coord),
-                ),
+                coords={
+                    **{
+                        dim: existing.geometry.coords[dim]
+                        for dim in geometry_dims(existing.geometry)
+                        if dim not in {axes.x_dim, axes.y_dim}
+                    },
+                    axes.x_dim: map_plot_value_to_coord(
+                        center_x, axes.x_plot, axes.x_coord
+                    ),
+                    axes.y_dim: map_plot_value_to_coord(
+                        center_y, axes.y_plot, axes.y_coord
+                    ),
+                },
             )
         elif isinstance(item, _AnnotationRectROI):
             pos = item.pos()
@@ -2911,38 +2875,45 @@ class AnnotationOverlayController:
             xmin, xmax = sorted((x0, x1))
             ymin, ymax = sorted((y0, y1))
             geometry = BoxGeometry(
-                dims=dims,
-                min_corner=(
-                    map_plot_value_to_coord(xmin, axes.x_plot, axes.x_coord),
-                    map_plot_value_to_coord(ymin, axes.y_plot, axes.y_coord),
-                ),
-                max_corner=(
-                    map_plot_value_to_coord(xmax, axes.x_plot, axes.x_coord),
-                    map_plot_value_to_coord(ymax, axes.y_plot, axes.y_coord),
-                ),
+                bounds={
+                    **{
+                        dim: existing.geometry.bounds[dim]
+                        for dim in geometry_dims(existing.geometry)
+                        if dim not in {axes.x_dim, axes.y_dim}
+                    },
+                    axes.x_dim: CoordRange(
+                        min=map_plot_value_to_coord(xmin, axes.x_plot, axes.x_coord),
+                        max=map_plot_value_to_coord(xmax, axes.x_plot, axes.x_coord),
+                    ),
+                    axes.y_dim: CoordRange(
+                        min=map_plot_value_to_coord(ymin, axes.y_plot, axes.y_coord),
+                        max=map_plot_value_to_coord(ymax, axes.y_plot, axes.y_coord),
+                    ),
+                },
             )
             properties["rotation_angle"] = 0.0
         elif isinstance(item, _AnnotationLineROI):
             start, end = item.plot_endpoints()
             geometry = PathGeometry(
-                dims=dims,
                 points=(
-                    (
-                        map_plot_value_to_coord(
+                    {
+                        **existing.geometry.points[0],
+                        axes.x_dim: map_plot_value_to_coord(
                             float(start.x()), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(start.y()), axes.y_plot, axes.y_coord
                         ),
-                    ),
-                    (
-                        map_plot_value_to_coord(
+                    },
+                    {
+                        **existing.geometry.points[1],
+                        axes.x_dim: map_plot_value_to_coord(
                             float(end.x()), axes.x_plot, axes.x_coord
                         ),
-                        map_plot_value_to_coord(
+                        axes.y_dim: map_plot_value_to_coord(
                             float(end.y()), axes.y_plot, axes.y_coord
                         ),
-                    ),
+                    },
                 ),
             )
         elif isinstance(item, _AnnotationPathROI):
@@ -2961,30 +2932,36 @@ class AnnotationOverlayController:
                 }
                 xs, ys = self._sample_ellipse_plot_points(params)
                 geometry = PathGeometry(
-                    dims=dims,
                     points=tuple(
-                        (
-                            map_plot_value_to_coord(
+                        {
+                            **existing.geometry.points[index],
+                            axes.x_dim: map_plot_value_to_coord(
                                 float(plot_x), axes.x_plot, axes.x_coord
                             ),
-                            map_plot_value_to_coord(
+                            axes.y_dim: map_plot_value_to_coord(
                                 float(plot_y), axes.y_plot, axes.y_coord
                             ),
+                        }
+                        for index, (plot_x, plot_y) in enumerate(
+                            zip(xs, ys, strict=True)
                         )
-                        for plot_x, plot_y in zip(xs, ys, strict=True)
                     ),
                 )
                 properties["fit_parameters"] = params
             else:
                 plot_points = item.plot_points()
                 geometry = PathGeometry(
-                    dims=dims,
                     points=tuple(
-                        (
-                            map_plot_value_to_coord(plot_x, axes.x_plot, axes.x_coord),
-                            map_plot_value_to_coord(plot_y, axes.y_plot, axes.y_coord),
-                        )
-                        for plot_x, plot_y in plot_points
+                        {
+                            **existing.geometry.points[index],
+                            axes.x_dim: map_plot_value_to_coord(
+                                plot_x, axes.x_plot, axes.x_coord
+                            ),
+                            axes.y_dim: map_plot_value_to_coord(
+                                plot_y, axes.y_plot, axes.y_coord
+                            ),
+                        }
+                        for index, (plot_x, plot_y) in enumerate(plot_points)
                     ),
                 )
         else:
@@ -3037,12 +3014,7 @@ class AnnotationOverlayController:
             annotation = self.annotation_by_id(annotation_id)
             if annotation is None or not isinstance(annotation.geometry, PointGeometry):
                 continue
-            point_x = map_coord_to_plot_value(
-                annotation.geometry.values[0], axes.x_coord, axes.x_plot
-            )
-            point_y = map_coord_to_plot_value(
-                annotation.geometry.values[1], axes.y_coord, axes.y_plot
-            )
+            point_x, point_y = _point_plot_xy(annotation.geometry, axes)
             if (
                 abs(float(plot_pos[0]) - float(point_x)) <= tolerance_x
                 and abs(float(plot_pos[1]) - float(point_y)) <= tolerance_y
@@ -3061,12 +3033,7 @@ class AnnotationOverlayController:
         pen = _inactive_pen(interactive=True, label=annotation.label)
         hover_pen = _inactive_hover_pen(interactive=True, label=annotation.label)
         if isinstance(geometry, PointGeometry):
-            plot_x = map_coord_to_plot_value(
-                geometry.values[0], axes.x_coord, axes.x_plot
-            )
-            plot_y = map_coord_to_plot_value(
-                geometry.values[1], axes.y_coord, axes.y_plot
-            )
+            plot_x, plot_y = _point_plot_xy(geometry, axes)
             width, height = self._point_plot_size()
             if self._interactive and annotation.id in self.selected_annotation_ids:
                 item = _AnnotationPointROI(
@@ -3088,18 +3055,7 @@ class AnnotationOverlayController:
                     hoverPen=hover_pen,
                 )
         elif isinstance(geometry, BoxGeometry):
-            plot_x0 = map_coord_to_plot_value(
-                geometry.min_corner[0], axes.x_coord, axes.x_plot
-            )
-            plot_y0 = map_coord_to_plot_value(
-                geometry.min_corner[1], axes.y_coord, axes.y_plot
-            )
-            plot_x1 = map_coord_to_plot_value(
-                geometry.max_corner[0], axes.x_coord, axes.x_plot
-            )
-            plot_y1 = map_coord_to_plot_value(
-                geometry.max_corner[1], axes.y_coord, axes.y_plot
-            )
+            plot_x0, plot_y0, plot_x1, plot_y1 = _box_plot_rect(geometry, axes)
             xmin, xmax = sorted((plot_x0, plot_x1))
             ymin, ymax = sorted((plot_y0, plot_y1))
             item = _AnnotationRectROI(
@@ -3124,13 +3080,7 @@ class AnnotationOverlayController:
                 raw_params = annotation.properties.get("fit_parameters") or {}
                 if raw_params:
                     params = dict(raw_params)
-            plot_points = tuple(
-                (
-                    map_coord_to_plot_value(point[0], axes.x_coord, axes.x_plot),
-                    map_coord_to_plot_value(point[1], axes.y_coord, axes.y_plot),
-                )
-                for point in geometry.points
-            )
+            plot_points = _path_plot_xy_points(geometry, axes)
             if len(plot_points) == 2:
                 start = plot_points[0]
                 end = plot_points[1]

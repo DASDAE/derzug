@@ -23,8 +23,7 @@ def _set(ids: tuple[str, ...], dims=("time",)) -> AnnotationSet:
             Annotation(
                 id=annotation_id,
                 geometry=PointGeometry(
-                    dims=dims,
-                    values=tuple(float(i + 1) for i in range(len(dims))),
+                    coords={dim: float(i + 1) for i, dim in enumerate(dims)},
                 ),
             )
             for annotation_id in ids
@@ -136,15 +135,15 @@ class TestAnnotationsWidget:
             annotations=(
                 Annotation(
                     id="a",
-                    geometry=PointGeometry(dims=("time",), values=(9.0,)),
+                    geometry=PointGeometry(coords={"time": 9.0}),
                 ),
             ),
         )
         widget.set_annotation_set(replacement)
-        assert widget._entries[0].annotation_set.annotations[0].geometry.values == (
-            9.0,
-        )
-        assert received[-1].annotations[0].geometry.values == (9.0,)
+        assert widget._entries[0].annotation_set.annotations[0].geometry.coords == {
+            "time": 9.0
+        }
+        assert received[-1].annotations[0].geometry.coords == {"time": 9.0}
 
     def test_selection_drives_output(self, widget, monkeypatch):
         """Changing the table selection re-emits the newly selected annotation set."""
@@ -296,11 +295,7 @@ class TestAnnotationsWidget:
             updated = original.model_copy(
                 update={
                     "geometry": PointGeometry(
-                        dims=original.geometry.dims,
-                        values=tuple(
-                            2.0 if index == 0 else value
-                            for index, value in enumerate(original.geometry.values)
-                        ),
+                        coords={**original.geometry.coords, "time": 2.0},
                     )
                 }
             )
@@ -313,7 +308,7 @@ class TestAnnotationsWidget:
             assert store._entries[0].id == first_entry.id
             assert len(store._entries[0].annotation_set.annotations) == 1
             assert (
-                store._entries[0].annotation_set.annotations[0].geometry.values[0]
+                store._entries[0].annotation_set.annotations[0].geometry.coords["time"]
                 == 2.0
             )
             assert store._table_model.rowCount() == 1

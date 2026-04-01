@@ -17,7 +17,7 @@ def _annotation() -> Annotation:
         group="event-1",
         label="p_pick",
         properties={"confidence": 0.9},
-        geometry=PointGeometry(dims=("distance", "time"), values=(10.0, 2.0)),
+        geometry=PointGeometry(coords={"distance": 10.0, "time": 2.0}),
     )
 
 

@@ -4,8 +4,6 @@ Tests for the Waterfall widget.
 
 from __future__ import annotations
 
-from typing import ClassVar
-
 import dascore as dc
 import numpy as np
 import pyqtgraph as pg
@@ -22,18 +20,14 @@ from derzug.utils.testing import (
     widget_context,
 )
 from derzug.widgets.selection import PatchSelectionBasis
-from derzug.widgets.waterfall import Waterfall
+from derzug.widgets.waterfall import Waterfall, _format_coord_value
 
 
-class _FakePatch3D:
-    """Minimal patch-like object that forces render failure with 3D data."""
-
-    data: ClassVar[list[list[list[float]]]] = [[[0.0]]]
-    dims: ClassVar[tuple[str, str, str]] = ("x", "y", "z")
-
-    @staticmethod
-    def get_array(_):
-        return [0.0]
+def _unrenderable_patch() -> dc.Patch:
+    """Return a real 1D dc.Patch that fails the ndim != 2 render guard."""
+    base = dc.get_example_patch()
+    dist_val = base.get_array("distance")[0]
+    return base.select(distance=np.array([dist_val])).squeeze("distance")
 
 
 class _FakeMouseEvent:
@@ -235,6 +229,26 @@ def _capture_annotation_output(waterfall_widget, monkeypatch) -> list:
     return received
 
 
+def _point_coords(geometry: PointGeometry, dims: tuple[str, ...]) -> tuple[object, ...]:
+    """Return point coordinates ordered by the requested dims."""
+    return tuple(geometry.coords[dim] for dim in dims)
+
+
+def _path_coords(geometry, dims: tuple[str, ...]) -> tuple[tuple[object, ...], ...]:
+    """Return path/polygon points ordered by the requested dims."""
+    return tuple(tuple(point[dim] for dim in dims) for point in geometry.points)
+
+
+def _box_corners(
+    geometry, dims: tuple[str, ...]
+) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    """Return box min/max corners ordered by the requested dims."""
+    return (
+        tuple(geometry.bounds[dim].min for dim in dims),
+        tuple(geometry.bounds[dim].max for dim in dims),
+    )
+
+
 def _with_datetime_coord(patch: dc.Patch, dim: str) -> dc.Patch:
     """Return a patch with the requested dimension replaced by datetimes."""
     count = len(patch.get_array(dim))
@@ -281,11 +295,10 @@ def _build_point_annotation_set(patch: dc.Patch) -> AnnotationSet:
             Annotation(
                 id="input-point",
                 geometry=PointGeometry(
-                    dims=("time", "distance"),
-                    values=(
-                        float(time_values[len(time_values) // 2]),
-                        float(distance_values[len(distance_values) // 2]),
-                    ),
+                    coords={
+                        "time": float(time_values[len(time_values) // 2]),
+                        "distance": float(distance_values[len(distance_values) // 2]),
+                    }
                 ),
                 semantic_type="generic",
             ),
@@ -583,9 +596,9 @@ class TestWaterfall:
 
         annotation = received[-1].annotations[0]
         assert annotation.geometry.type == "point"
-        assert str(annotation.geometry.values[0]).startswith("2024-01-02 03:")
+        assert str(annotation.geometry.coords["time"]).startswith("2024-01-02 03:")
         dumped = received[-1].model_dump(mode="json")
-        assert dumped["annotations"][0]["geometry"]["values"][0].startswith(
+        assert dumped["annotations"][0]["geometry"]["coords"]["time"].startswith(
             "2024-01-02T03:"
         )
 
@@ -1248,7 +1261,10 @@ class TestWaterfall:
         waterfall_widget._annotation_tool = "annotation_select"
 
         active_item = waterfall_widget._annotation_items[first_id]
-        before = waterfall_widget._annotation_set.annotations[0].geometry.values
+        before = _point_coords(
+            waterfall_widget._annotation_set.annotations[0].geometry,
+            ("time", "distance"),
+        )
         active_center_scene = active_item.sceneBoundingRect().center()
         active_center_viewport = waterfall_widget._plot_widget.mapFromScene(
             active_center_scene
@@ -1275,7 +1291,9 @@ class TestWaterfall:
             for annotation in waterfall_widget._annotation_set.annotations
             if annotation.id == first_id
         )
-        assert after_annotation.geometry.values != pytest.approx(before)
+        assert _point_coords(
+            after_annotation.geometry, ("time", "distance")
+        ) != pytest.approx(before)
 
     def test_shift_drag_moves_all_selected_annotations_together(
         self, waterfall_widget, qtbot
@@ -1305,7 +1323,7 @@ class TestWaterfall:
         qtbot.wait(10)
 
         before = {
-            annotation.id: annotation.geometry.values
+            annotation.id: _point_coords(annotation.geometry, ("time", "distance"))
             for annotation in waterfall_widget._annotation_set.annotations
             if annotation.id in {first_id, second_id}
         }
@@ -1343,7 +1361,7 @@ class TestWaterfall:
         qtbot.wait(10)
 
         after = {
-            annotation.id: annotation.geometry.values
+            annotation.id: _point_coords(annotation.geometry, ("time", "distance"))
             for annotation in waterfall_widget._annotation_set.annotations
             if annotation.id in {first_id, second_id}
         }
@@ -1532,9 +1550,9 @@ class TestWaterfall:
 
         annotation = waterfall_widget._annotation_set.annotations[-1]
         assert annotation.semantic_type == "line"
-        assert annotation.geometry.points[1] == pytest.approx(
-            (float(axes.x_plot[170]), float(axes.y_plot[165]))
-        )
+        assert _path_coords(annotation.geometry, ("time", "distance"))[
+            1
+        ] == pytest.approx((float(axes.x_plot[170]), float(axes.y_plot[165])))
 
     def test_escape_cancels_pending_line_anchor_in_waterfall(
         self, waterfall_widget, qtbot
@@ -2664,8 +2682,8 @@ class TestWaterfall:
             assert len(second._annotation_items) == 2
             assert second._annotation_toolbox.title_label.text() == "Annotations"
 
-    def test_mismatched_saved_annotations_are_ignored(self, qtbot):
-        """Saved Waterfall annotations should be skipped when dims do not match."""
+    def test_old_schema_saved_annotations_are_ignored(self, qtbot):
+        """Saved Waterfall annotations with an old schema should be skipped."""
         patch = dc.get_example_patch("example_event_2")
 
         with widget_context(Waterfall) as first:
@@ -4063,11 +4081,11 @@ class TestWaterfall:
     ):
         """Render errors still pass through non-None input object on output."""
         received = _capture_patch_output(waterfall_widget, monkeypatch)
-        fake_patch = _FakePatch3D()
+        patch = _unrenderable_patch()
 
-        waterfall_widget.set_patch(fake_patch)
+        waterfall_widget.set_patch(patch)
 
-        assert received == [fake_patch]
+        assert received == [patch]
         assert waterfall_widget.Error.invalid_patch.is_shown()
 
     def test_render_failure_clears_axes(self, waterfall_widget):
@@ -4075,7 +4093,7 @@ class TestWaterfall:
         waterfall_widget.set_patch(dc.get_example_patch("example_event_2"))
         assert waterfall_widget._axes is not None
 
-        waterfall_widget.set_patch(_FakePatch3D())
+        waterfall_widget.set_patch(_unrenderable_patch())
 
         assert waterfall_widget._axes is None
 
@@ -4196,6 +4214,283 @@ def _shift_waterfall_patch_out_of_range(patch: dc.Patch) -> dc.Patch:
         time=patch.get_array("time") + 10,
         distance=patch.get_array("distance") + 100,
     )
+
+
+def _make_3d_patch(n_shots: int = 3) -> dc.Patch:
+    """Return a 3D (shot, distance, time) patch for slice-dim tests."""
+    base = dc.get_example_patch()
+    data3d = np.stack([base.data * (i + 1) for i in range(n_shots)], axis=0)
+    return dc.Patch(
+        data=data3d,
+        coords={
+            **{k: base.get_array(k) for k in base.dims},
+            "shot": np.arange(n_shots, dtype=float),
+        },
+        dims=("shot", *base.dims),
+        attrs=base.attrs,
+    )
+
+
+class TestWaterfallSliceDims:
+    """Tests for the bottom dim-selector strip on >2D patches."""
+
+    def test_dim_strip_hidden_for_2d_patch(self, waterfall_widget):
+        """Dim strip stays hidden when a 2D patch is loaded."""
+        waterfall_widget.set_patch(dc.get_example_patch())
+        assert not waterfall_widget._dim_strip.isVisible()
+
+    def test_dim_strip_visible_for_3d_patch(self, waterfall_widget):
+        """Dim strip appears when a 3D patch is loaded."""
+        waterfall_widget.set_patch(_make_3d_patch())
+        assert waterfall_widget._dim_strip.isVisible()
+
+    def test_combos_populated_with_all_dims(self, waterfall_widget):
+        """Y and X combos contain every dim from the patch."""
+        patch3d = _make_3d_patch()
+        waterfall_widget.set_patch(patch3d)
+
+        def combo_items(c):
+            return [c.itemText(i) for i in range(c.count())]
+
+        assert combo_items(waterfall_widget._y_dim_combo) == list(patch3d.dims)
+        assert combo_items(waterfall_widget._x_dim_combo) == list(patch3d.dims)
+
+    def test_default_plot_dims_are_distance_and_time(self, waterfall_widget):
+        """Distance defaults to Y, time to X when both are present."""
+        waterfall_widget.set_patch(_make_3d_patch())
+        assert waterfall_widget._plot_y_dim == "distance"
+        assert waterfall_widget._plot_x_dim == "time"
+
+    def test_slice_dims_excludes_plotting_dims(self, waterfall_widget):
+        """Only non-plotting dims appear; time and distance are not sliders."""
+        waterfall_widget.set_patch(_make_3d_patch())
+        assert waterfall_widget._slice_dims == ("shot",)
+        assert "shot" in waterfall_widget._slice_sliders
+        assert "time" not in waterfall_widget._slice_sliders
+        assert "distance" not in waterfall_widget._slice_sliders
+
+    def test_slider_range_matches_dim_size(self, waterfall_widget):
+        """Slider max equals the number of indices in the slice dim minus one."""
+        n_shots = 5
+        waterfall_widget.set_patch(_make_3d_patch(n_shots))
+        slider = waterfall_widget._slice_sliders["shot"]
+        assert slider.minimum() == 0
+        assert slider.maximum() == n_shots - 1
+
+    def test_renders_without_error_for_3d_patch(self, waterfall_widget):
+        """No error message is shown and axes are populated for a 3D patch."""
+        waterfall_widget.set_patch(_make_3d_patch())
+        assert not waterfall_widget.Error.invalid_patch.is_shown()
+        assert waterfall_widget._axes is not None
+
+    def test_rendered_data_matches_current_slice(self, waterfall_widget):
+        """Prepared render data corresponds to the slice at the current index."""
+        patch3d = _make_3d_patch(3)
+        waterfall_widget.set_patch(patch3d)
+        base_data = dc.get_example_patch().data
+        assert np.allclose(waterfall_widget._prepared_render.data, base_data * 1)
+
+    def test_slider_change_updates_rendered_slice(self, waterfall_widget):
+        """Releasing the slider at index 2 re-renders the correct slice."""
+        patch3d = _make_3d_patch(3)
+        waterfall_widget.set_patch(patch3d)
+        slider = waterfall_widget._slice_sliders["shot"]
+        slider.setValue(2)
+        slider.sliderReleased.emit()
+        base_data = dc.get_example_patch().data
+        assert np.allclose(waterfall_widget._prepared_render.data, base_data * 3)
+
+    def test_changing_plot_dim_rerenders(self, waterfall_widget):
+        """Swapping X/Y dims via combo re-renders (axes swap) without error."""
+        waterfall_widget.set_patch(_make_3d_patch())
+        assert waterfall_widget._plot_y_dim == "distance"
+        waterfall_widget._y_dim_combo.setCurrentText("time")
+        assert waterfall_widget._plot_y_dim == "time"
+        assert waterfall_widget._plot_x_dim == "distance"
+        assert not waterfall_widget.Error.invalid_patch.is_shown()
+        assert waterfall_widget._axes is not None
+        assert waterfall_widget._axes.y_dim == "time"
+        assert waterfall_widget._axes.x_dim == "distance"
+
+    def test_slice_index_persists_across_compatible_patches(self, waterfall_widget):
+        """Slider position is preserved when a new patch has the same slice dim."""
+        waterfall_widget.set_patch(_make_3d_patch(3))
+        slider = waterfall_widget._slice_sliders["shot"]
+        slider.setValue(1)
+        slider.sliderReleased.emit()
+        waterfall_widget.set_patch(_make_3d_patch(3))
+        assert waterfall_widget._slice_indices["shot"] == 1
+
+    def test_slice_index_resets_when_out_of_range(self, waterfall_widget):
+        """Index is clamped to the new dim size if the new patch is smaller."""
+        waterfall_widget.set_patch(_make_3d_patch(5))
+        slider = waterfall_widget._slice_sliders["shot"]
+        slider.setValue(4)
+        slider.sliderReleased.emit()
+        waterfall_widget.set_patch(_make_3d_patch(2))
+        assert waterfall_widget._slice_indices["shot"] == 1
+
+    def test_switching_to_2d_hides_dim_strip(self, waterfall_widget):
+        """Dim strip disappears when a 2D patch replaces a 3D patch."""
+        waterfall_widget.set_patch(_make_3d_patch())
+        assert waterfall_widget._dim_strip.isVisible()
+        waterfall_widget.set_patch(dc.get_example_patch())
+        assert not waterfall_widget._dim_strip.isVisible()
+
+    def test_fallback_plotting_dims_when_time_or_distance_absent(
+        self, waterfall_widget
+    ):
+        """First two dims used as plotting dims when time/distance absent."""
+        base = dc.get_example_patch()
+        base_renamed = base.rename_coords(time="freq", distance="channel")
+        data3d = np.stack([base_renamed.data] * 2, axis=-1)
+        patch3d = dc.Patch(
+            data=data3d,
+            coords={
+                **{k: base_renamed.get_array(k) for k in base_renamed.dims},
+                "shot": np.array([0.0, 1.0]),
+            },
+            dims=("channel", "freq", "shot"),
+            attrs=base.attrs,
+        )
+        waterfall_widget.set_patch(patch3d)
+        assert waterfall_widget._plot_y_dim == "channel"
+        assert waterfall_widget._plot_x_dim == "freq"
+        assert waterfall_widget._slice_dims == ("shot",)
+
+    def test_annotation_dims_includes_slice_dims(self, waterfall_widget):
+        """annotation_dims returns (x, y, *slice_dims) for a 3D patch."""
+        waterfall_widget.set_patch(_make_3d_patch())
+        dims = waterfall_widget._annotation_controller.annotation_dims()
+        assert "shot" in dims
+        assert len(dims) == 3
+
+    def test_annotation_set_dims_includes_slice_dims(self, waterfall_widget):
+        """The active AnnotationSet carries all dims including slice dims."""
+        waterfall_widget.set_patch(_make_3d_patch())
+        ann_set = waterfall_widget._annotation_controller.annotation_set
+        assert ann_set is not None
+        assert "shot" in ann_set.dims
+
+    def test_point_annotation_includes_slice_coord(self, waterfall_widget):
+        """A point created on a 3D patch embeds the shot coordinate natively."""
+        patch3d = _make_3d_patch(3)
+        waterfall_widget.set_patch(patch3d)
+        waterfall_widget._annotation_controller.create_point_annotation(0.0, 0.0)
+        ann_set = waterfall_widget._annotation_controller.annotation_set
+        assert ann_set is not None and len(ann_set.annotations) == 1
+        geom = ann_set.annotations[0].geometry
+        assert "shot" in geom.coords
+
+    def test_box_annotation_includes_slice_coord(self, waterfall_widget):
+        """A box created on a 3D patch embeds the shot coordinate in all corners."""
+        waterfall_widget.set_patch(_make_3d_patch(3))
+        waterfall_widget._annotation_controller.create_box_annotation(
+            (-0.5, -0.5), (0.5, 0.5)
+        )
+        ann_set = waterfall_widget._annotation_controller.annotation_set
+        assert ann_set is not None and len(ann_set.annotations) == 1
+        from derzug.models.annotations import BoxGeometry
+
+        geom = ann_set.annotations[0].geometry
+        assert isinstance(geom, BoxGeometry)
+        assert "shot" in geom.bounds
+        assert geom.bounds["shot"].min == geom.bounds["shot"].max
+
+    def test_annotation_hidden_on_wrong_slice(self, waterfall_widget):
+        """An annotation created at shot=0 is not rendered when slider is at shot=1."""
+        patch3d = _make_3d_patch(3)
+        waterfall_widget.set_patch(patch3d)
+        waterfall_widget._annotation_controller.create_point_annotation(0.0, 0.0)
+
+        slider = waterfall_widget._slice_sliders["shot"]
+        slider.setValue(1)
+        slider.sliderReleased.emit()
+
+        assert len(waterfall_widget._annotation_controller.annotation_items) == 0
+
+    def test_annotation_visible_on_correct_slice(self, waterfall_widget):
+        """An annotation created at shot=1 is rendered when slider returns to shot=1."""
+        patch3d = _make_3d_patch(3)
+        waterfall_widget.set_patch(patch3d)
+        slider = waterfall_widget._slice_sliders["shot"]
+        slider.setValue(1)
+        slider.sliderReleased.emit()
+
+        waterfall_widget._annotation_controller.create_point_annotation(0.0, 0.0)
+        assert len(waterfall_widget._annotation_controller.annotation_items) == 1
+
+        slider.setValue(0)
+        slider.sliderReleased.emit()
+        assert len(waterfall_widget._annotation_controller.annotation_items) == 0
+
+        slider.setValue(1)
+        slider.sliderReleased.emit()
+        assert len(waterfall_widget._annotation_controller.annotation_items) == 1
+
+    def test_axis_swap_preserves_existing_3d_annotations(self, waterfall_widget):
+        """Swapping plotted axes on a 3D patch should not orphan annotations."""
+        waterfall_widget.set_patch(_make_3d_patch())
+        controller = waterfall_widget._annotation_controller
+        controller.create_point_annotation(0.0, 0.0)
+
+        ann_set = controller.annotation_set
+        assert ann_set is not None
+        annotation_ids = [annotation.id for annotation in ann_set.annotations]
+        assert list(controller.annotation_items) == annotation_ids
+
+        waterfall_widget._y_dim_combo.setCurrentText("time")
+
+        assert controller.annotation_dims() == ("distance", "time", "shot")
+        assert controller.annotation_set is not None
+        assert controller.annotation_set.dims == controller.annotation_dims()
+        assert [
+            annotation.id for annotation in controller.annotation_set.annotations
+        ] == (annotation_ids)
+        assert list(controller.annotation_items) == annotation_ids
+
+    def test_legacy_2d_annotation_always_visible(self, waterfall_widget):
+        """An annotation with only plot dims (no slice constraint) is always shown."""
+        from derzug.models.annotations import Annotation, PointGeometry
+
+        patch3d = _make_3d_patch(3)
+        waterfall_widget.set_patch(patch3d)
+        controller = waterfall_widget._annotation_controller
+
+        # Simulate a legacy annotation that has only 2 dims (no slice dim)
+        legacy_ann = Annotation(
+            id="legacy-ann",
+            geometry=PointGeometry(coords={"time": 0.0, "distance": 0.0}),
+            annotator="tester",
+            organization="DerZug",
+        )
+        assert controller._annotation_matches_slice(legacy_ann)
+
+
+class TestFormatCoordValue:
+    """Unit tests for the _format_coord_value helper."""
+
+    def test_float_uses_4g_format(self):
+        """Floats are formatted with 4 significant figures."""
+        assert _format_coord_value(np.float64(1234.5678)) == "1235"
+        assert _format_coord_value(np.float64(0.000123456)) == "0.0001235"
+
+    def test_integer_returns_plain_string(self):
+        """Integers are returned as plain decimal strings."""
+        assert _format_coord_value(np.int64(42)) == "42"
+
+    def test_datetime64_strips_trailing_zeros(self):
+        """Datetime64 values strip trailing fractional zeros."""
+        val = np.datetime64("2020-01-03T00:00:01.500000000")
+        result = _format_coord_value(val)
+        assert result == "2020-01-03T00:00:01.5"
+        assert not result.endswith("0")
+
+    def test_datetime64_no_fractional_part(self):
+        """Datetime64 with zero fraction omits the decimal point entirely."""
+        val = np.datetime64("2020-01-03T12:00:00.000000000")
+        result = _format_coord_value(val)
+        assert result == "2020-01-03T12:00:00"
 
 
 class TestWaterfallDefaults(TestPatchInputStateDefaults):

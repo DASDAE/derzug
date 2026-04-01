@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
-from derzug.models.annotations import Annotation, AnnotationSet
+from derzug.models.annotations import Annotation, AnnotationSet, geometry_dims
 from pydantic import ValidationError
 
 
@@ -20,8 +20,7 @@ def test_annotation_set_accepts_mixed_1d_and_2d_geometry():
                 semantic_type="arrival_pick",
                 geometry={
                     "type": "point",
-                    "dims": ("distance", "time"),
-                    "values": (10.0, 2.5),
+                    "coords": {"distance": 10.0, "time": 2.5},
                 },
             ),
             Annotation(
@@ -37,7 +36,7 @@ def test_annotation_set_accepts_mixed_1d_and_2d_geometry():
         ),
     )
 
-    assert annotation_set.schema_version == "2"
+    assert annotation_set.schema_version == "3"
     assert "basis" not in annotation_set.model_dump()
     assert annotation_set.annotations[0].geometry.type == "point"
     assert annotation_set.annotations[1].geometry.type == "span"
@@ -67,6 +66,18 @@ def test_annotation_set_rejects_legacy_index_basis_field():
         )
 
 
+def test_annotation_set_rejects_old_schema_version():
+    """Only schema version 3 should validate."""
+    with pytest.raises(ValidationError):
+        AnnotationSet.model_validate(
+            {
+                "schema_version": "2",
+                "dims": ("distance",),
+                "annotations": (),
+            }
+        )
+
+
 def test_annotation_set_rejects_geometry_dims_outside_set_dims():
     """Annotations should not reference dimensions unknown to the set."""
     with pytest.raises(ValidationError, match="outside the annotation set"):
@@ -86,15 +97,26 @@ def test_annotation_set_rejects_geometry_dims_outside_set_dims():
         )
 
 
-def test_path_geometry_requires_points_to_match_dims():
-    """Path points should have one value per geometry dimension."""
-    with pytest.raises(ValidationError, match="match dims length"):
+def test_annotation_rejects_legacy_point_payload():
+    """Positional point payloads should no longer validate."""
+    with pytest.raises(ValidationError):
+        Annotation(
+            id="bad-point",
+            geometry={"type": "point", "dims": ("time",), "values": (1.0,)},
+        )
+
+
+def test_path_geometry_requires_points_to_share_dims():
+    """Path points should all use the same dimension names."""
+    with pytest.raises(ValidationError, match="same dims"):
         Annotation(
             id="bad-path",
             geometry={
                 "type": "path",
-                "dims": ("distance", "time"),
-                "points": ((0.0,), (1.0, 2.0)),
+                "points": (
+                    {"distance": 0.0, "time": 1.0},
+                    {"distance": 1.0},
+                ),
             },
         )
 
@@ -106,8 +128,10 @@ def test_derived_annotations_use_properties_not_fit_schema():
         semantic_type="arrival_trend",
         geometry={
             "type": "path",
-            "dims": ("distance", "time"),
-            "points": ((0.0, 1.0), (10.0, 3.0)),
+            "points": (
+                {"distance": 0.0, "time": 1.0},
+                {"distance": 10.0, "time": 3.0},
+            ),
         },
         properties={
             "fit_model": "line",
@@ -129,8 +153,11 @@ def test_hyperbola_annotations_round_trip_through_properties():
         semantic_type="hyperbola",
         geometry={
             "type": "path",
-            "dims": ("distance", "time"),
-            "points": ((0.0, 1.0), (0.5, 1.2), (1.5, 2.0)),
+            "points": (
+                {"distance": 0.0, "time": 1.0},
+                {"distance": 0.5, "time": 1.2},
+                {"distance": 1.5, "time": 2.0},
+            ),
         },
         properties={
             "fit_model": "hyperbola",
@@ -163,8 +190,12 @@ def test_ellipse_annotations_round_trip_through_properties():
         semantic_type="ellipse",
         geometry={
             "type": "path",
-            "dims": ("distance", "time"),
-            "points": ((0.0, 1.0), (0.5, 1.2), (1.0, 1.0), (0.5, 0.8)),
+            "points": (
+                {"distance": 0.0, "time": 1.0},
+                {"distance": 0.5, "time": 1.2},
+                {"distance": 1.0, "time": 1.0},
+                {"distance": 0.5, "time": 0.8},
+            ),
         },
         properties={
             "fit_model": "ellipse",
@@ -196,9 +227,7 @@ def test_unknown_geometry_type_is_rejected():
             id="bad-geometry",
             geometry={
                 "type": "line",
-                "dims": ("distance", "time"),
-                "start": (0.0, 0.0),
-                "end": (1.0, 1.0),
+                "coords": {"distance": 0.0, "time": 1.0},
             },
         )
 
@@ -209,14 +238,15 @@ def test_annotation_accepts_datetime_coord_values_and_json_round_trips():
         id="dt-point",
         geometry={
             "type": "point",
-            "dims": ("time",),
-            "values": (np.datetime64("2024-01-02T03:04:05"),),
+            "coords": {"time": np.datetime64("2024-01-02T03:04:05")},
         },
     )
 
-    assert annotation.geometry.values == (datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC),)
+    assert annotation.geometry.coords == {
+        "time": datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
+    }
     dumped = annotation.model_dump(mode="json")
-    assert dumped["geometry"]["values"] == ["2024-01-02T03:04:05Z"]
+    assert dumped["geometry"]["coords"] == {"time": "2024-01-02T03:04:05Z"}
 
 
 def test_annotation_accepts_timedelta_coord_values_and_json_round_trips():
@@ -244,19 +274,18 @@ def test_annotation_accepts_string_coord_values():
         id="str-point",
         geometry={
             "type": "point",
-            "dims": ("channel",),
-            "values": ("channel-12",),
+            "coords": {"channel": "channel-12"},
         },
     )
 
-    assert annotation.geometry.values == ("channel-12",)
+    assert annotation.geometry.coords == {"channel": "channel-12"}
 
 
 def test_annotation_defaults_identity_fields_to_none():
     """Legacy annotations should remain valid without global identity metadata."""
     annotation = Annotation(
         id="basic",
-        geometry={"type": "point", "dims": ("time",), "values": (1.0,)},
+        geometry={"type": "point", "coords": {"time": 1.0}},
     )
 
     assert annotation.annotator is None
@@ -267,7 +296,7 @@ def test_annotation_round_trips_identity_fields():
     """Annotation identity metadata should survive JSON serialization."""
     annotation = Annotation(
         id="pick-1",
-        geometry={"type": "point", "dims": ("distance", "time"), "values": (1.0, 2.0)},
+        geometry={"type": "point", "coords": {"distance": 1.0, "time": 2.0}},
         annotator="alice",
         organization="DASDAE",
     )
@@ -276,3 +305,18 @@ def test_annotation_round_trips_identity_fields():
 
     assert dumped["annotator"] == "alice"
     assert dumped["organization"] == "DASDAE"
+
+
+def test_annotation_set_dim_order_is_not_semantic():
+    """Set dim order should not invalidate keyed geometry."""
+    annotation_set = AnnotationSet(
+        dims=("time", "distance"),
+        annotations=(
+            Annotation(
+                id="p1",
+                geometry={"type": "point", "coords": {"distance": 10.0, "time": 2.0}},
+            ),
+        ),
+    )
+
+    assert geometry_dims(annotation_set.annotations[0].geometry) == ("distance", "time")

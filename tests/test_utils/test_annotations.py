@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.utils.annotations import (
     build_state,
@@ -25,7 +27,7 @@ def _set(ids: tuple[str, ...], dims=("time",)) -> AnnotationSet:
             Annotation(
                 id=annotation_id,
                 geometry=PointGeometry(
-                    dims=dims, values=tuple(float(i + 1) for i in range(len(dims)))
+                    coords={dim: float(i + 1) for i, dim in enumerate(dims)}
                 ),
             )
             for annotation_id in ids
@@ -39,13 +41,13 @@ def test_merge_annotation_sets_replaces_colliding_ids():
     incoming = AnnotationSet(
         dims=("time",),
         annotations=(
-            Annotation(id="b", geometry=PointGeometry(dims=("time",), values=(9.0,))),
-            Annotation(id="c", geometry=PointGeometry(dims=("time",), values=(3.0,))),
+            Annotation(id="b", geometry=PointGeometry(coords={"time": 9.0})),
+            Annotation(id="c", geometry=PointGeometry(coords={"time": 3.0})),
         ),
     )
     merged = merge_annotation_sets(current, incoming)
     assert [item.id for item in merged.annotations] == ["a", "b", "c"]
-    assert merged.annotations[1].geometry.values == (9.0,)
+    assert merged.annotations[1].geometry.coords == {"time": 9.0}
 
 
 def test_import_annotation_set_appends_to_selected_matching_dims():
@@ -103,6 +105,23 @@ def test_persist_and_load_entries_round_trip(tmp_path):
     assert len(loaded) == 1
     assert loaded[0].name == "Custom Name"
     assert loaded[0].annotation_set == entry.annotation_set
+
+
+def test_load_store_skips_old_schema_entries(tmp_path):
+    """Stored entries with old schema versions should be ignored."""
+    payload = {
+        "name": "Legacy",
+        "annotation_set": {
+            "schema_version": "2",
+            "dims": ["time"],
+            "annotations": [],
+        },
+    }
+    (tmp_path / "legacy.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = load_store(directory=str(tmp_path), state_entries=[])
+
+    assert loaded == ()
 
 
 def test_delete_entry_updates_selected():

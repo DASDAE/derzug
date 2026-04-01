@@ -84,38 +84,24 @@ def _annotation_overlap_row(annotation: Annotation, row: pd.Series) -> bool:
     """Return True when one spool-contents row overlaps one annotation."""
     geometry = annotation.geometry
     if isinstance(geometry, PointGeometry):
-        return _row_contains_point(row, geometry.dims, geometry.values)
+        return _row_contains_coord_map(row, geometry.coords)
     if isinstance(geometry, SpanGeometry):
         start, end = _ordered_pair(geometry.start, geometry.end)
         return _row_intersects_span(row, geometry.dim, start, end)
     if isinstance(geometry, BoxGeometry):
         return all(
-            _row_intersects_span(row, dim, start, end)
-            for dim, start, end in zip(
-                geometry.dims,
-                geometry.min_corner,
-                geometry.max_corner,
-                strict=True,
-            )
+            _row_intersects_span(row, dim, bounds.min, bounds.max)
+            for dim, bounds in geometry.bounds.items()
         )
     if isinstance(geometry, PathGeometry):
-        return any(
-            _row_contains_point(row, geometry.dims, point) for point in geometry.points
-        )
+        return any(_row_contains_coord_map(row, point) for point in geometry.points)
     points = getattr(geometry, "points", ())
-    return any(_row_contains_point(row, geometry.dims, point) for point in points)
+    return any(_row_contains_coord_map(row, point) for point in points)
 
 
-def _row_contains_point(
-    row: pd.Series,
-    dims: tuple[str, ...],
-    values: tuple[Any, ...],
-) -> bool:
+def _row_contains_coord_map(row: pd.Series, values: dict[str, Any]) -> bool:
     """Return True when one point lies within row extents on every dim."""
-    return all(
-        _row_contains_value(row, dim, value)
-        for dim, value in zip(dims, values, strict=True)
-    )
+    return all(_row_contains_value(row, dim, value) for dim, value in values.items())
 
 
 def _row_contains_value(row: pd.Series, dim: str, value: Any) -> bool:
