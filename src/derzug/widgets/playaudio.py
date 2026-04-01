@@ -26,6 +26,8 @@ from Orange.widgets.widget import Msg
 from derzug.core.zugwidget import ZugWidget
 from derzug.orange import Setting
 from derzug.utils.display import format_display
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchPassThroughTask
 
 
 def _load_qt_multimedia():
@@ -157,6 +159,10 @@ class PlayAudio(ZugWidget):
         """Output signal definitions."""
 
         patch = Output("Patch", dc.Patch, doc="Patch passed through unchanged")
+
+    def get_task(self) -> Task:
+        """Return the compiled patch semantics for the widget."""
+        return PatchPassThroughTask()
 
     def __init__(self) -> None:
         super().__init__()

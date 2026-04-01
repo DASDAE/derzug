@@ -5,7 +5,11 @@ from __future__ import annotations
 import dascore as dc
 import numpy as np
 import pytest
-from derzug.utils.testing import TestWidgetDefaults, widget_context
+from derzug.utils.testing import (
+    TestWidgetDefaults,
+    wait_for_widget_idle,
+    widget_context,
+)
 from derzug.widgets.ufunc import UFuncOperator
 from orangewidget.utils.signals import PartialSummary
 
@@ -28,9 +32,10 @@ def _capture_output(ufunc_widget, monkeypatch) -> list:
     return received
 
 
-def _wait_for_output(qtbot, received: list, count: int) -> None:
+def _wait_for_output(widget, qtbot, received: list, count: int) -> None:
     """Wait until the patched output sink has received at least `count` values."""
     qtbot.waitUntil(lambda: len(received) >= count, timeout=3000)
+    wait_for_widget_idle(widget)
 
 
 class TestUFuncOperator:
@@ -74,7 +79,7 @@ class TestUFuncOperator:
         received = _capture_output(ufunc_widget, monkeypatch)
 
         ufunc_widget.set_x(2)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 1)
 
         assert received[-1] is None
 
@@ -84,9 +89,9 @@ class TestUFuncOperator:
         """Changing operation with only one input still emits None without errors."""
         received = _capture_output(ufunc_widget, monkeypatch)
         ufunc_widget.set_x(2)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 1)
         ufunc_widget._op_combo.setCurrentText("x-y")
-        _wait_for_output(qtbot, received, 2)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
 
         assert received[-1] is None
         assert not ufunc_widget.Error.operation_failed.is_shown()
@@ -97,7 +102,7 @@ class TestUFuncOperator:
 
         ufunc_widget.set_x(2)
         ufunc_widget.set_y(3)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
 
         assert received[-1] == 5
 
@@ -106,11 +111,11 @@ class TestUFuncOperator:
         received = _capture_output(ufunc_widget, monkeypatch)
         ufunc_widget.set_x(6)
         ufunc_widget.set_y(2)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
         before = len(received)
 
         ufunc_widget._op_combo.setCurrentText("x-y")
-        _wait_for_output(qtbot, received, before + 1)
+        _wait_for_output(ufunc_widget, qtbot, received, before + 1)
 
         assert len(received) > before
         assert received[-1] == 4
@@ -120,10 +125,10 @@ class TestUFuncOperator:
         received = _capture_output(ufunc_widget, monkeypatch)
         ufunc_widget.set_x(np.array([1, 2, 3]))
         ufunc_widget.set_y(np.array([0, 2, 4]))
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
 
         ufunc_widget._op_combo.setCurrentText("x>y")
-        _wait_for_output(qtbot, received, 2)
+        _wait_for_output(ufunc_widget, qtbot, received, 3)
 
         out = received[-1]
         assert out is not None
@@ -134,9 +139,9 @@ class TestUFuncOperator:
         received = _capture_output(ufunc_widget, monkeypatch)
         ufunc_widget.set_x(3)
         ufunc_widget.set_y(1)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
         ufunc_widget._op_combo.setCurrentText("x>y")
-        _wait_for_output(qtbot, received, 2)
+        _wait_for_output(ufunc_widget, qtbot, received, 3)
 
         out = received[-1]
         assert out is not None
@@ -150,7 +155,7 @@ class TestUFuncOperator:
 
         ufunc_widget.set_x(patch_a)
         ufunc_widget.set_y(patch_b)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
 
         out = received[-1]
         assert isinstance(out, dc.Patch)
@@ -163,7 +168,7 @@ class TestUFuncOperator:
 
         ufunc_widget.set_x(dc.spool([patch]))
         ufunc_widget.set_y(patch)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
 
         out = received[-1]
         assert isinstance(out, dc.Patch)
@@ -176,7 +181,7 @@ class TestUFuncOperator:
 
         ufunc_widget.set_x(dc.spool([patch]))
         ufunc_widget.set_y(dc.spool([patch]))
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
 
         out = received[-1]
         assert isinstance(out, dc.Patch)
@@ -192,7 +197,7 @@ class TestUFuncOperator:
 
         ufunc_widget.set_x(multi)
         ufunc_widget.set_y(patch)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
 
         assert received[-1] is None
         assert ufunc_widget.Error.invalid_spool.is_shown()
@@ -205,7 +210,7 @@ class TestUFuncOperator:
 
         ufunc_widget.set_x("abc")
         ufunc_widget.set_y(3)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
 
         assert received[-1] is None
         assert ufunc_widget.Error.operation_failed.is_shown()
@@ -267,11 +272,11 @@ class TestUFuncOperator:
         received = _capture_output(ufunc_widget, monkeypatch)
         ufunc_widget.set_x(2)
         ufunc_widget.set_y(3)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
         assert received[-1] == 5
 
         ufunc_widget.set_x(None)
-        _wait_for_output(qtbot, received, 2)
+        _wait_for_output(ufunc_widget, qtbot, received, 3)
 
         assert received[-1] is None
         assert not ufunc_widget.Error.operation_failed.is_shown()
@@ -281,11 +286,11 @@ class TestUFuncOperator:
         received = _capture_output(ufunc_widget, monkeypatch)
         ufunc_widget.set_x("abc")
         ufunc_widget.set_y(3)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
         assert ufunc_widget.Error.operation_failed.is_shown()
 
         ufunc_widget.set_x(4)
-        _wait_for_output(qtbot, received, 2)
+        _wait_for_output(ufunc_widget, qtbot, received, 3)
 
         assert received[-1] == 7
         assert not ufunc_widget.Error.operation_failed.is_shown()
@@ -297,16 +302,16 @@ class TestUFuncOperator:
         received = _capture_output(ufunc_widget, monkeypatch)
         ufunc_widget.set_x(2)
         ufunc_widget.set_y(3)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
         assert received[-1] == 5
 
         ufunc_widget.set_y(None)
-        _wait_for_output(qtbot, received, 2)
+        _wait_for_output(ufunc_widget, qtbot, received, 3)
         assert received[-1] is None
         assert not ufunc_widget.Error.operation_failed.is_shown()
 
         ufunc_widget.set_y(4)
-        _wait_for_output(qtbot, received, 3)
+        _wait_for_output(ufunc_widget, qtbot, received, 4)
         assert received[-1] == 6
 
     def test_invalid_saved_op_falls_back_to_default(
@@ -317,7 +322,7 @@ class TestUFuncOperator:
         ufunc_widget.selected_op = "not-a-real-op"
         ufunc_widget.set_x(2)
         ufunc_widget.set_y(3)
-        _wait_for_output(qtbot, received, 1)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
 
         assert ufunc_widget.selected_op == "x+y"
         assert ufunc_widget._op_combo.currentText() == "x+y"

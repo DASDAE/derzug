@@ -29,9 +29,10 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
-from derzug.core.zugwidget import ZugWidget
+from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.orange import Setting
 from derzug.utils.parsing import parse_coord_text_value
+from derzug.workflow import Task
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,200 @@ class _CoordsPreviewState:
     input_text: str
     active_text: str
     output_text: str
+
+
+class CoordsTask(Task):
+    """Portable coordinate-operation task for the Coords widget."""
+
+    input_variables: ClassVar[dict[str, object]] = {"patch": object}
+    output_variables: ClassVar[dict[str, object]] = {"patch": object}
+
+    operation: str = "rename_coords"
+    rename_rows: tuple[tuple[str, str], ...] = ()
+    set_dims_rows: tuple[tuple[str, str], ...] = ()
+    set_coords_applied_dim: str = ""
+    set_coords_applied_start: str = ""
+    set_coords_applied_stop: str = ""
+    set_coords_applied_step: str = ""
+    drop_coords_selected: tuple[str, ...] = ()
+    sort_coords_selected: tuple[str, ...] = ()
+    sort_reverse: bool = False
+    snap_coords_selected: tuple[str, ...] = ()
+    snap_reverse: bool = False
+    flip_dims_selected: tuple[str, ...] = ()
+    flip_data: bool = True
+    flip_coords: bool = True
+    transpose_order: tuple[str, ...] = ()
+
+    @staticmethod
+    def _normalize_rows(rows: tuple[tuple[str, str], ...]) -> list[tuple[str, str]]:
+        return [
+            (str(left or "").strip(), str(right or "").strip()) for left, right in rows
+        ]
+
+    @staticmethod
+    def _validate_mapping(
+        rows: tuple[tuple[str, str], ...],
+        *,
+        valid_left: tuple[str, ...],
+        valid_right: tuple[str, ...] | None,
+        reject_duplicate_right: bool,
+    ) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        valid_left_set = set(valid_left)
+        valid_right_set = None if valid_right is None else set(valid_right)
+        used_right: set[str] = set()
+        for left, right in CoordsTask._normalize_rows(rows):
+            if not left and not right:
+                continue
+            if not left or not right:
+                raise ValueError("both columns must be filled")
+            if left not in valid_left_set:
+                raise ValueError(f"'{left}' is not available")
+            if valid_right_set is not None and right not in valid_right_set:
+                raise ValueError(f"'{right}' is not available")
+            if left in mapping:
+                raise ValueError(f"duplicate source '{left}'")
+            if reject_duplicate_right and right in used_right:
+                raise ValueError(f"duplicate target '{right}'")
+            mapping[left] = right
+            used_right.add(right)
+        if not mapping:
+            raise ValueError("at least one mapping is required")
+        return mapping
+
+    @staticmethod
+    def _validate_selection(
+        selected: tuple[str, ...], valid: tuple[str, ...]
+    ) -> list[str]:
+        valid_set = set(valid)
+        out = [str(item) for item in selected]
+        invalid = [name for name in out if name not in valid_set]
+        if invalid:
+            raise ValueError(", ".join(invalid))
+        return out
+
+    @staticmethod
+    def _parse_set_coord_value(text: str, sample: object) -> object:
+        return parse_coord_text_value(str(text), sample, None)
+
+    def _resolved_coord(self, patch):
+        dim = self.set_coords_applied_dim
+        if dim not in patch.dims:
+            raise ValueError(f"'{dim}' is not an available dimension")
+        coord = patch.coords.get_coord(dim)
+        parsed: dict[str, object] = {}
+        for label, raw in (
+            ("start", self.set_coords_applied_start),
+            ("stop", self.set_coords_applied_stop),
+            ("step", self.set_coords_applied_step),
+        ):
+            text = str(raw).strip()
+            if not text:
+                continue
+            parsed[label] = self._parse_set_coord_value(text, getattr(coord, label))
+        if not parsed:
+            raise ValueError("at least one of start, stop, and step is required")
+        if set(parsed) == {"start"}:
+            parsed["step"] = coord.step
+        elif set(parsed) == {"stop"}:
+            parsed["step"] = coord.step
+        elif set(parsed) == {"step"}:
+            parsed["start"] = coord.start
+        kwargs = {
+            "shape": patch.shape[patch.dims.index(dim)],
+            "units": coord.units,
+            "dtype": coord.dtype,
+            **parsed,
+        }
+        return get_coord(**kwargs)
+
+    def run(self, patch):
+        """Apply the selected coordinate operation to one patch."""
+        operation = str(self.operation or "rename_coords")
+        available_dims = tuple(patch.dims)
+        available_coords = tuple(patch.coords.coord_map)
+        non_dim_coords = tuple(
+            name for name in available_coords if name not in available_dims
+        )
+
+        if operation == "rename_coords":
+            mapping = self._validate_mapping(
+                self.rename_rows,
+                valid_left=available_coords,
+                valid_right=None,
+                reject_duplicate_right=True,
+            )
+            return patch.rename_coords(**mapping)
+        if operation == "drop_coords":
+            selected = self._validate_selection(
+                self.drop_coords_selected,
+                non_dim_coords,
+            )
+            return patch if not selected else patch.drop_coords(*selected)
+        if operation == "sort_coords":
+            selected = self._validate_selection(
+                self.sort_coords_selected,
+                available_coords,
+            )
+            return (
+                patch
+                if not selected
+                else patch.sort_coords(*selected, reverse=bool(self.sort_reverse))
+            )
+        if operation == "snap_coords":
+            selected = self._validate_selection(
+                self.snap_coords_selected,
+                available_coords,
+            )
+            return (
+                patch
+                if not selected
+                else patch.snap_coords(*selected, reverse=bool(self.snap_reverse))
+            )
+        if operation == "set_coords":
+            if not self.set_coords_applied_dim:
+                return patch
+            return patch.update_coords(
+                **{self.set_coords_applied_dim: self._resolved_coord(patch)}
+            )
+        if operation == "set_dims":
+            mapping = self._validate_mapping(
+                self.set_dims_rows,
+                valid_left=available_dims,
+                valid_right=available_coords,
+                reject_duplicate_right=True,
+            )
+            return patch.set_dims(**mapping)
+        if operation == "flip":
+            selected = self._validate_selection(
+                self.flip_dims_selected,
+                available_coords,
+            )
+            if not selected or (not self.flip_data and not self.flip_coords):
+                return patch
+            dim_names = tuple(name for name in selected if name in available_dims)
+            if self.flip_data and len(dim_names) != len(selected):
+                invalid = [name for name in selected if name not in available_dims]
+                raise ValueError(
+                    "data flip requires dimension coordinates; "
+                    f"non-dim coords selected: {', '.join(invalid)}"
+                )
+            out = patch
+            if self.flip_data and dim_names:
+                out = out.flip(*dim_names, flip_coords=False)
+            if self.flip_coords:
+                out = out.update(coords=out.coords.flip(*tuple(selected)))
+            return out
+        if operation == "transpose":
+            order = list(self.transpose_order)
+            dims = list(available_dims)
+            if not order:
+                return patch
+            if sorted(order) != sorted(dims):
+                raise ValueError("dimension order does not match the input patch")
+            return patch.transpose(*order)
+        raise ValueError(f"Unknown coords operation '{operation}'")
 
 
 class Coords(ZugWidget):
@@ -789,113 +984,170 @@ class Coords(ZugWidget):
             for index in range(self._transpose_list.count())
         ]
 
+    def _supports_async_execution(self) -> bool:
+        """Run coordinate operations off-thread by default."""
+        return True
+
+    def _build_execution_request(self) -> WidgetExecutionRequest | None:
+        """Build one coordinate-operation execution request."""
+        patch = self._patch
+        if patch is None:
+            return None
+        return self._build_task_execution_request(
+            self._validated_task(),
+            input_values={"patch": patch},
+            output_names=("patch",),
+        )
+
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the coordinate-operation banner."""
+        self._show_exception(
+            "operation_failed",
+            exc,
+            self._operation_label(self._coerce_operation()),
+        )
+
     def _run(self) -> dc.Patch | None:
         """Apply the active coordinate operation to the current patch."""
+        patch = self._patch
+        if patch is None:
+            return None
+        return self._execute_workflow_object(
+            self._validated_task(),
+            input_values={"patch": patch},
+            output_names=("patch",),
+        )
+
+    def _validated_task(self) -> CoordsTask | None:
+        """Return the current validated coordinate task, or None on invalid state."""
         operation = self._coerce_operation()
         self._set_current_operation_ui(operation)
-        if self._patch is None:
-            return None
-
-        try:
-            if operation == "rename_coords":
-                mapping = self._validated_mapping(
-                    self.rename_rows,
-                    label="rename",
-                    valid_left=self._available_coords,
-                    valid_right=None,
-                    reject_duplicate_right=True,
-                )
-                if mapping is None:
-                    return None
-                return self._patch.rename_coords(**mapping)
-
-            if operation == "drop_coords":
-                selected = self._validated_selection(
-                    self.drop_coords_selected,
-                    self._available_non_dim_coords,
-                    label="drop",
-                )
-                if selected is None:
-                    return None
-                if not selected:
-                    return self._patch
-                return self._patch.drop_coords(*selected)
-
-            if operation == "sort_coords":
-                selected = self._validated_selection(
-                    self.sort_coords_selected,
-                    self._available_coords,
-                    label="sort",
-                )
-                if selected is None:
-                    return None
-                if not selected:
-                    return self._patch
-                return self._patch.sort_coords(
-                    *selected,
-                    reverse=bool(self.sort_reverse),
-                )
-
-            if operation == "snap_coords":
-                selected = self._validated_selection(
-                    self.snap_coords_selected,
-                    self._available_coords,
-                    label="snap",
-                )
-                if selected is None:
-                    return None
-                if not selected:
-                    return self._patch
-                return self._patch.snap_coords(
-                    *selected,
-                    reverse=bool(self.snap_reverse),
-                )
-
-            if operation == "set_coords":
-                if not self.set_coords_applied_dim:
-                    return self._patch
-                coord = self._validated_set_coords_coord()
-                if coord is None:
-                    return None
-                return self._patch.update_coords(**{self.set_coords_applied_dim: coord})
-
-            if operation == "set_dims":
-                mapping = self._validated_mapping(
-                    self.set_dims_rows,
-                    label="set_dims",
-                    valid_left=self._available_dims,
-                    valid_right=self._available_coords,
-                    reject_duplicate_right=True,
-                )
-                if mapping is None:
-                    return None
-                return self._patch.set_dims(**mapping)
-
-            if operation == "flip":
-                selected = self._validated_selection(
-                    self.flip_dims_selected,
-                    self._available_coords,
-                    label="flip",
-                )
-                if selected is None:
-                    return None
-                if not selected or (not self.flip_data and not self.flip_coords):
-                    return self._patch
-                return self._apply_flip(selected)
-
-            order = self._validated_transpose_order()
-            if order is None:
-                return None
-            if not order:
-                return self._patch
-            return self._patch.transpose(*order)
-        except Exception as exc:
-            self._show_exception(
-                "operation_failed",
-                exc,
-                self._operation_label(operation),
+        if operation == "rename_coords":
+            mapping = self._validated_mapping(
+                self.rename_rows,
+                label="rename",
+                valid_left=self._available_coords,
+                valid_right=None,
+                reject_duplicate_right=True,
             )
+            if mapping is None:
+                return None
+            rename_rows = tuple(mapping.items())
+            return CoordsTask(operation=operation, rename_rows=rename_rows)
+        if operation == "drop_coords":
+            selected = self._validated_selection(
+                self.drop_coords_selected,
+                self._available_non_dim_coords,
+                label="drop",
+            )
+            if selected is None:
+                return None
+            return CoordsTask(
+                operation=operation,
+                drop_coords_selected=tuple(selected),
+            )
+        if operation == "sort_coords":
+            selected = self._validated_selection(
+                self.sort_coords_selected,
+                self._available_coords,
+                label="sort",
+            )
+            if selected is None:
+                return None
+            return CoordsTask(
+                operation=operation,
+                sort_coords_selected=tuple(selected),
+                sort_reverse=bool(self.sort_reverse),
+            )
+        if operation == "snap_coords":
+            selected = self._validated_selection(
+                self.snap_coords_selected,
+                self._available_coords,
+                label="snap",
+            )
+            if selected is None:
+                return None
+            return CoordsTask(
+                operation=operation,
+                snap_coords_selected=tuple(selected),
+                snap_reverse=bool(self.snap_reverse),
+            )
+        if operation == "set_coords":
+            if not self.set_coords_applied_dim:
+                return CoordsTask(operation=operation)
+            coord = self._validated_set_coords_coord()
+            if coord is None:
+                return None
+            return CoordsTask(
+                operation=operation,
+                set_coords_applied_dim=str(self.set_coords_applied_dim or ""),
+                set_coords_applied_start=str(self.set_coords_applied_start or ""),
+                set_coords_applied_stop=str(self.set_coords_applied_stop or ""),
+                set_coords_applied_step=str(self.set_coords_applied_step or ""),
+            )
+        if operation == "set_dims":
+            mapping = self._validated_mapping(
+                self.set_dims_rows,
+                label="set_dims",
+                valid_left=self._available_dims,
+                valid_right=self._available_coords,
+                reject_duplicate_right=True,
+            )
+            if mapping is None:
+                return None
+            return CoordsTask(
+                operation=operation,
+                set_dims_rows=tuple(mapping.items()),
+            )
+        if operation == "flip":
+            selected = self._validated_selection(
+                self.flip_dims_selected,
+                self._available_coords,
+                label="flip",
+            )
+            if selected is None:
+                return None
+            return CoordsTask(
+                operation=operation,
+                flip_dims_selected=tuple(selected),
+                flip_data=bool(self.flip_data),
+                flip_coords=bool(self.flip_coords),
+            )
+        order = self._validated_transpose_order()
+        if order is None:
             return None
+        return CoordsTask(
+            operation=operation,
+            transpose_order=tuple(order),
+        )
+
+    def _task_snapshot(self) -> CoordsTask:
+        """Return the stored coordinate-operation state without patch validation."""
+        operation = self._coerce_operation()
+        return CoordsTask(
+            operation=operation,
+            rename_rows=tuple(
+                (str(left), str(right))
+                for left, right in self._normalize_rows(self.rename_rows)
+            ),
+            set_dims_rows=tuple(
+                (str(left), str(right))
+                for left, right in self._normalize_rows(self.set_dims_rows)
+            ),
+            set_coords_applied_dim=str(self.set_coords_applied_dim or ""),
+            set_coords_applied_start=str(self.set_coords_applied_start or ""),
+            set_coords_applied_stop=str(self.set_coords_applied_stop or ""),
+            set_coords_applied_step=str(self.set_coords_applied_step or ""),
+            drop_coords_selected=tuple(self.drop_coords_selected or ()),
+            sort_coords_selected=tuple(self.sort_coords_selected or ()),
+            sort_reverse=bool(self.sort_reverse),
+            snap_coords_selected=tuple(self.snap_coords_selected or ()),
+            snap_reverse=bool(self.snap_reverse),
+            flip_dims_selected=tuple(self.flip_dims_selected or ()),
+            flip_data=bool(self.flip_data),
+            flip_coords=bool(self.flip_coords),
+            transpose_order=tuple(self.transpose_order or ()),
+        )
 
     def _validated_mapping(
         self,
@@ -1219,6 +1471,10 @@ class Coords(ZugWidget):
             return f"Flip: {selected} ({suffix})"
         order = ", ".join(self.transpose_order) or "none"
         return f"Transpose: {order}"
+
+    def get_task(self) -> Task:
+        """Return the current coordinate-operation semantics as a workflow task."""
+        return self._task_snapshot()
 
     @classmethod
     def _operation_label(cls, operation: str) -> str:

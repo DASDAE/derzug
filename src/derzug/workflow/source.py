@@ -9,18 +9,36 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from functools import lru_cache
 from pathlib import Path
-from typing import ClassVar, Generic, Literal, Self, TypeVar
+from typing import ClassVar, Literal, Self, TypeVar
 
 import pandas as pd
 from pydantic import Field
 
-from ..core import DerzugModel
+from .model import WorkflowModel
 from .provenance import Provenance
 
 DataType = TypeVar("DataType")
 
 
-class Source(DerzugModel, ABC, Generic[DataType]):
+def get_provmap_and_fingerprints_from_path(path, fmt_str=".yaml"):
+    """
+    Get the provenance map and managed fingerprints from a source path.
+    """
+    destination_path = Path(path)
+    assert destination_path.is_dir(), "A directory is required."
+    if fmt_str and not fmt_str.startswith("."):
+        fmt_str = f".{fmt_str}"
+    provenance_map = {}
+    fingerprints = []
+    for prov_path in destination_path.glob(f"*{fmt_str}"):
+        fingerprint = prov_path.name[: -len(fmt_str)]
+        fingerprint = fingerprint.rstrip(".")
+        provenance_map[fingerprint] = Provenance.load(prov_path)
+        fingerprints.append(fingerprint)
+    return provenance_map, fingerprints
+
+
+class Source[DataType](WorkflowModel, ABC):
     """
     A Source of pipe inputs.
 
@@ -68,7 +86,7 @@ class Source(DerzugModel, ABC, Generic[DataType]):
         raise NotImplementedError("Not implemented")
 
 
-class FileSystemSource(Source, ABC, Generic[DataType]):
+class FileSystemSource[DataType](Source[DataType], ABC):
     """
     Base class for sources that read from the filesystem.
     """
@@ -85,8 +103,6 @@ class FileSystemSource(Source, ABC, Generic[DataType]):
         """
         Load a source from a provenance or data path.
         """
-        from derzug.workflow.sink import get_provmap_and_fingerprints_from_path
-
         path = Path(path)
         if provenance is not None:
             normalized = cls._normalize_provenance(provenance)

@@ -13,6 +13,8 @@ from Orange.widgets.widget import Msg
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
 from derzug.utils.parsing import parse_patch_text_value, parse_text_value
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
 class Resample(PatchDimWidget):
@@ -196,53 +198,71 @@ class Resample(PatchDimWidget):
             return parsed
         return parse_patch_text_value(self.resample_target, required=True)
 
-    def _run_decimate(self, dim: str) -> dc.Patch | None:
-        """Execute DASCore decimation with current settings."""
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the resample-specific banner."""
+        self._show_exception("resample_failed", exc)
+
+    def _validated_task(self) -> Task | None:
+        """Return the current operation task after widget-side validation."""
+        dim = self._get_dim()
+        if dim is None:
+            return None
+        if self.mode == "resample":
+            try:
+                target = self._parse_resample_target()
+            except Exception as exc:
+                self._show_exception("invalid_target", exc, self.resample_target)
+                return None
+            return PatchConfiguredMethodTask(
+                method_name="resample",
+                call_style="keyword_dim",
+                dim=dim,
+                dim_value=target,
+                method_kwargs={
+                    "samples": bool(self.resample_samples),
+                    "interp_kind": self.resample_interp_kind,
+                },
+            )
         try:
             factor = self._parse_decimate_factor()
         except Exception as exc:
             self._show_exception("invalid_factor", exc, self.decimate_factor)
             return None
-
         filter_type = (
             None if self.decimate_filter_type == "none" else self.decimate_filter_type
         )
-        try:
-            return self._patch.decimate(**{dim: factor}, filter_type=filter_type)
-        except Exception as exc:
-            self._show_exception("resample_failed", exc)
-            return None
+        return PatchConfiguredMethodTask(
+            method_name="decimate",
+            call_style="keyword_dim",
+            dim=dim,
+            dim_value=factor,
+            method_kwargs={"filter_type": filter_type},
+        )
 
-    def _run_resample(self, dim: str) -> dc.Patch | None:
-        """Execute DASCore resampling with current settings."""
-        try:
-            target = self._parse_resample_target()
-        except Exception as exc:
-            self._show_exception("invalid_target", exc, self.resample_target)
-            return None
-
-        try:
-            return self._patch.resample(
-                **{dim: target},
-                samples=self.resample_samples,
-                interp_kind=self.resample_interp_kind,
-            )
-        except Exception as exc:
-            self._show_exception("resample_failed", exc)
-            return None
-
-    def _run(self) -> dc.Patch | None:
-        """Apply the configured resampling operation to the current patch."""
-        if self._patch is None:
-            return None
-
-        dim = self._get_dim()
-        if dim is None:
-            return None
-
+    def get_task(self) -> Task:
+        """Return the current decimate/resample operation as a workflow task."""
+        dim = self._get_dim() or self.selected_dim
         if self.mode == "resample":
-            return self._run_resample(dim)
-        return self._run_decimate(dim)
+            return PatchConfiguredMethodTask(
+                method_name="resample",
+                call_style="keyword_dim",
+                dim=dim,
+                dim_value=self._parse_resample_target(),
+                method_kwargs={
+                    "samples": bool(self.resample_samples),
+                    "interp_kind": self.resample_interp_kind,
+                },
+            )
+        filter_type = (
+            None if self.decimate_filter_type == "none" else self.decimate_filter_type
+        )
+        return PatchConfiguredMethodTask(
+            method_name="decimate",
+            call_style="keyword_dim",
+            dim=dim,
+            dim_value=self._parse_decimate_factor(),
+            method_kwargs={"filter_type": filter_type},
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -15,6 +15,8 @@ from Orange.widgets.widget import Msg
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
 from derzug.utils.parsing import parse_patch_text_value
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
 class Stft(PatchDimWidget):
@@ -153,44 +155,57 @@ class Stft(PatchDimWidget):
             return parsed
         raise ValueError("expected a string name or tuple specification")
 
-    def _run(self) -> dc.Patch | None:
-        """Apply STFT with current settings and return the transformed patch."""
-        if self._patch is None:
-            return None
-
+    def _validated_task(self) -> Task | None:
+        """Return the current STFT task after widget-side validation."""
         dim = self._get_dim()
         if dim is None:
             return None
-
         try:
             window_length = self._parse_window_length()
         except Exception as exc:
             self._show_exception("invalid_window_length", exc, self.window_length)
             return None
-
         try:
             overlap = self._parse_overlap()
         except Exception as exc:
             self._show_exception("invalid_overlap", exc, self.overlap)
             return None
-
         try:
             taper_window = self._parse_taper_window()
         except Exception as exc:
             self._show_exception("invalid_taper_window", exc, self.taper_window)
             return None
+        return PatchConfiguredMethodTask(
+            method_name="stft",
+            call_style="keyword_dim",
+            dim=dim,
+            dim_value=window_length,
+            method_kwargs={
+                "overlap": overlap,
+                "taper_window": taper_window,
+                "samples": bool(self.samples),
+                "detrend": bool(self.detrend),
+            },
+        )
 
-        try:
-            return self._patch.stft(
-                overlap=overlap,
-                taper_window=taper_window,
-                samples=self.samples,
-                detrend=self.detrend,
-                **{dim: window_length},
-            )
-        except Exception as exc:
-            self._show_exception("transform_failed", exc)
-            return None
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the transform-specific banner."""
+        self._show_exception("transform_failed", exc)
+
+    def get_task(self) -> Task:
+        """Return the current STFT operation as a workflow task."""
+        return PatchConfiguredMethodTask(
+            method_name="stft",
+            call_style="keyword_dim",
+            dim=self._get_dim() or self.selected_dim,
+            dim_value=self._parse_window_length(),
+            method_kwargs={
+                "overlap": self._parse_overlap(),
+                "taper_window": self._parse_taper_window(),
+                "samples": bool(self.samples),
+                "detrend": bool(self.detrend),
+            },
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

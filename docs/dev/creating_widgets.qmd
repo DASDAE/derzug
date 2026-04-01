@@ -1,0 +1,274 @@
+# Creating Widgets From Tasks Or Callables
+
+This guide covers the current developer-facing helpers for generating simple DerZug widgets from Python callables, and it records the proposed direction for grouped multi-task widgets.
+
+The important split is:
+
+- Implemented today:
+  - `derzug.utils.task_from_callable`
+  - `derzug.utils.widget_class_from_callable`
+  - `derzug.utils.function_to_widget`
+- Not implemented today:
+  - declarative class sugar such as `AutoTaskWidget`
+  - grouped widgets that switch among multiple tasks or callables
+
+Use these helpers for simple, stateless processing widgets. If the widget needs rich UI state, viewer behavior, source semantics, or specialized interaction, write a normal `ZugWidget` subclass instead.
+
+## Current Status
+
+DerZug can already derive a workflow task and a simple widget shell from one callable. The current helpers focus on:
+
+- inferring normalized input signal names from function parameters
+- inferring one or more output signals from the return annotation
+- honoring Python defaults for optional scalar parameters
+- waiting to run until all required inputs are present
+- generating a portable workflow task that can round-trip through workflow serialization
+
+These helpers do not define a new declarative widget class protocol. In particular, examples like `class MyWidget(...): _task = some_callable` are still aspirational and should not be documented as working API.
+
+## Recommended Entry Point
+
+For the common case, use `function_to_widget(...)`.
+
+```python
+import dascore as dc
+
+from derzug.utils import function_to_widget
+
+
+def shift_distance(patch: dc.Patch, offset: float = 1.0) -> dc.Patch:
+    """Shift patch distance coordinates by a constant offset."""
+    return patch.update_coords(distance=patch.coords.get_array("distance") + offset)
+
+
+ShiftDistanceWidget = function_to_widget(
+    shift_distance,
+    name="Shift Distance",
+    description="Shift distance coordinates by a constant offset",
+    icon="icons/Coords.svg",
+    category="Processing",
+    priority=10,
+    keywords=("coords", "shift", "distance"),
+)
+```
+
+This creates a `ZugWidget` subclass with:
+
+- one input signal for each callable parameter
+- one output signal inferred from the return annotation
+- automatic required-input gating
+- automatic use of Python defaults for optional parameters
+
+## Building A Portable Task First
+
+Use `task_from_callable(...)` when you want a workflow `Task` type first, and optionally a widget later.
+
+```python
+import dascore as dc
+
+from derzug.utils import task_from_callable
+
+
+def normalize_patch(patch: dc.Patch, scale: float = 1.0) -> dc.Patch:
+    """Scale a patch by a constant."""
+    return patch * scale
+
+
+NormalizeTask = task_from_callable(normalize_patch)
+task = NormalizeTask(scale=2.0)
+```
+
+This is useful when:
+
+- the callable should participate in compiled workflow serialization
+- the callable logic is reused outside the widget layer
+- you want a task abstraction without committing to a widget immediately
+
+## Lower-Level Widget Generation
+
+Use `widget_class_from_callable(...)` when `function_to_widget(...)` is too compact and you want to be explicit about the generated widget class.
+
+```python
+import dascore as dc
+
+from derzug.utils import widget_class_from_callable
+
+
+def square_value(value: int) -> int:
+    """Square one integer."""
+    return value * value
+
+
+SquareWidget = widget_class_from_callable(
+    fn=square_value,
+    name="Square",
+    description="Square one integer",
+    icon="icons/PythonScript.svg",
+    category="Processing",
+    priority=20,
+)
+```
+
+`function_to_widget(...)` is just the convenience wrapper around this helper.
+
+## Dict Outputs
+
+If the callable returns a dict-like object, output names must be supplied explicitly so the generated widget has a stable output contract.
+
+```python
+import dascore as dc
+
+from derzug.utils import function_to_widget
+
+
+def split_patch(patch: dc.Patch) -> dict[str, dc.Patch]:
+    """Return two named patch variants."""
+    return {
+        "first": patch,
+        "second": patch,
+    }
+
+
+SplitWidget = function_to_widget(
+    split_patch,
+    name="Split Patch",
+    description="Return two named patch variants",
+    icon="icons/PythonScript.svg",
+    category="Processing",
+    priority=30,
+    output_names=("first", "second"),
+)
+```
+
+Without `output_names`, widget generation should fail.
+
+## Constraints And Limits
+
+These helpers are intentionally narrow.
+
+- Best fit:
+  - simple processing widgets
+  - scalar parameters plus one main object input
+  - one output or a fixed set of named outputs
+- Supported:
+  - required and optional parameters
+  - Python defaults for optional parameters
+  - dict-like returns when `output_names` is provided
+- Unsupported:
+  - `*args`
+  - `**kwargs`
+  - dynamic output shape
+  - rich interactive UIs
+  - source widgets and viewers
+
+Type resolution is also intentionally conservative. Unknown or unresolved annotations degrade to `object` ports rather than trying to invent stronger signal typing.
+
+## Testing Status
+
+The current callable-to-task and callable-to-widget helpers are tested, but only within the scope of the implemented API.
+
+Covered by tests today:
+
+- single-input and multi-input callable wrapping
+- required-input gating
+- optional defaults
+- explicit `None` overriding a Python default
+- dict outputs with explicit `output_names`
+- generated widget signal emission
+- callable-backed workflow serialization round-trips
+- compiled workflow round-trips involving generated pass-through tasks
+
+Relevant tests:
+
+- `tests/test_utils/test_code2widget.py`
+- `tests/test_workflow_engine.py`
+- `tests/test_workflow_compiler.py`
+
+Not implemented, and therefore not tested:
+
+- declarative class sugar such as `AutoTaskWidget`
+- grouped widgets that switch among multiple tasks or callables
+- compatibility validation for grouped widget families
+
+So the answer to "are these fully tested?" is:
+
+- yes, for the current helper functions and their documented behavior
+- no, for the proposed grouped-widget design below, because that API does not exist yet
+
+## Proposed Design: Declarative Class Sugar
+
+One likely future addition is a thin declarative base class that wraps the current helpers.
+
+Example shape:
+
+```python
+class ShiftDistanceWidget(AutoTaskWidget):
+    task = shift_distance
+    name = "Shift Distance"
+    description = "Shift distance coordinates by a constant offset"
+    icon = "icons/Coords.svg"
+    category = "Processing"
+    priority = 10
+```
+
+This would be sugar over the existing callable-driven generation path, not a different widget model.
+
+Important constraint for this future API:
+
+- it should be a dedicated helper or base class
+- it should not overload ordinary `ZugWidget` subclasses with hidden `_task` conventions
+
+## Proposed Design: Grouped Multi-Task Widgets
+
+The grouped-widget idea is reasonable, but only with a strict compatibility rule. A single Orange widget must expose one stable input/output contract.
+
+Because of that, a grouped widget should only accept tasks or callables whose normalized interfaces are compatible.
+
+Default compatibility rule for v1:
+
+- same normalized input signal names
+- same normalized input signal types
+- same required-vs-optional input status
+- same normalized output signal names
+- same output signal types
+
+If those contracts differ, grouping should be rejected rather than adapted.
+
+That rule matters because a grouped widget with changing ports would be hard to reason about and awkward to wire in the canvas.
+
+### Why Strict Compatibility Is The Right Default
+
+- the widget catalog should show one stable contract
+- existing downstream links should remain valid when the selected task changes
+- widget settings should not have to encode multiple incompatible port layouts
+- generated controls stay simple because they map to one shared parameter set
+
+### Minimal Proposed UX
+
+A future grouped widget should stay simple.
+
+- one selector chooses the active task or callable
+- the widget exposes one shared input/output contract
+- only compatible task families may be grouped
+- no dynamic port switching in v1
+
+Examples that make sense to group:
+
+- several smoothing implementations with the same patch input and patch output
+- several unary transforms that all accept `patch` and emit `patch`
+
+Examples that should not be grouped:
+
+- one callable that emits `patch` and another that emits `dataframe`
+- one callable that requires `left, right` and another that requires only `patch`
+- one callable with outputs `first, second` and another with output `result`
+
+## Relationship To README
+
+The current README sketch about `_task = ...` is a design direction, not the supported API surface.
+
+When updating README material, prefer one of these approaches:
+
+- replace the custom-widget example with `function_to_widget(...)`
+- keep the grouped-widget idea, but mark it clearly as proposed future design
+- link to this guide for the detailed current behavior

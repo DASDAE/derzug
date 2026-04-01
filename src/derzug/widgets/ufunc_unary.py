@@ -11,8 +11,10 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
-from derzug.core.zugwidget import ZugWidget
+from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
 class UFunc(ZugWidget):
@@ -92,20 +94,50 @@ class UFunc(ZugWidget):
         self._op_combo.blockSignals(False)
         return default
 
+    def _supports_async_execution(self) -> bool:
+        """Run unary ufunc transforms off-thread by default."""
+        return True
+
+    def _build_execution_request(self) -> WidgetExecutionRequest | None:
+        """Build one unary-ufunc execution request."""
+        patch = self._patch
+        if patch is None:
+            return None
+        return self._build_task_execution_request(
+            self._validated_task(),
+            input_values={"patch": patch},
+            output_names=("patch",),
+        )
+
+    def _validated_task(self) -> Task | None:
+        """Return the current unary patch operation after UI normalization."""
+        return PatchConfiguredMethodTask(method_name=self._coerce_op())
+
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the selected-operation banner."""
+        self._show_exception("operation_failed", exc, self._coerce_op())
+
     def _run(self) -> dc.Patch | None:
         """Apply the selected unary transform and return the output patch."""
-        if self._patch is None:
+        patch = self._patch
+        if patch is None:
             return None
-        op = self._coerce_op()
-        try:
-            return self._OPS[op](self._patch)
-        except Exception as exc:
-            self._show_exception("operation_failed", exc, op)
-            return None
+        return self._execute_workflow_object(
+            self._validated_task(),
+            input_values={"patch": patch},
+            output_names=("patch",),
+        )
 
     def _on_result(self, result: dc.Patch | None) -> None:
         """Send the output patch."""
         self.Outputs.patch.send(result)
+
+    def get_task(self) -> Task:
+        """Return the current unary patch operation as a workflow task."""
+        workflow_obj = self._validated_task()
+        if workflow_obj is None:
+            raise ValueError("current UFunc state is not valid")
+        return workflow_obj
 
 
 if __name__ == "__main__":  # pragma: no cover

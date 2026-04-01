@@ -23,10 +23,12 @@ pre-commit install -f
 
 ## Linting and formatting
 
+- Always run `prek run --all-files` before considering a job complete.
 - Run pre-commit hooks before finalizing changes.
 - Project lint/format is driven by pre-commit and Ruff config in `pyproject.toml`.
 
 ```bash
+prek run --all-files
 pre-commit run --all
 ```
 
@@ -71,6 +73,7 @@ pytest dascore --doctest-modules
 - Use NumPy-style docstrings for public APIs.
 - Keep comments meaningful; do not restate obvious code.
 - All functions must have a docstring; proper numpy docstrings for public functions and a few liners for private.
+- Do not manually hard-wrap Markdown or Quarto prose. In `.md` and `.qmd` files, keep paragraphs on single logical lines and let the editor soft-wrap them.
 
 
 ## Quality bar for agent changes

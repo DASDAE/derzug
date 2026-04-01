@@ -8,6 +8,7 @@ from derzug.utils.testing import (
     TestPatchInputStateDefaults,
     capture_output,
     wait_for_output,
+    wait_for_widget_idle,
     widget_context,
 )
 from derzug.widgets.aggregate import Aggregate
@@ -48,7 +49,7 @@ class TestAggregate:
         aggregate_widget.dim_reduce = "empty"
 
         aggregate_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         out = received[-1]
         assert out is not None
@@ -66,7 +67,7 @@ class TestAggregate:
         aggregate_widget.selected_dim = ""
 
         aggregate_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         out = received[-1]
         assert out is not None
@@ -77,11 +78,11 @@ class TestAggregate:
         received = capture_output(aggregate_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         aggregate_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
         start_count = len(received)
 
         aggregate_widget._method_combo.setCurrentText("max")
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         assert len(received) > start_count
         assert aggregate_widget.method == "max"
@@ -98,7 +99,7 @@ class TestAggregate:
         aggregate_widget.dim_reduce = "empty"
 
         aggregate_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         out = received[-1]
         expected = patch.phase_weighted_stack("distance", dim_reduce="empty")
@@ -112,7 +113,7 @@ class TestAggregate:
         received = capture_output(aggregate_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         aggregate_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         # Find a non-"All" dim to switch to
         combo = aggregate_widget._dim_combo
@@ -126,7 +127,7 @@ class TestAggregate:
 
         first_count = len(received)
         aggregate_widget._dim_combo.setCurrentText(dims[0])
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         assert len(received) > first_count
         assert received[-1] is not None
@@ -141,11 +142,11 @@ class TestAggregate:
         aggregate_widget.selected_dim = "time"
 
         aggregate_widget.set_patch(first)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
         aggregate_widget.set_patch(None)
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(aggregate_widget)
         aggregate_widget.set_patch(second)
-        wait_for_output(qtbot, received, 3)
+        wait_for_widget_idle(aggregate_widget)
 
         assert received[-2] is None
         assert aggregate_widget.selected_dim == "time"
@@ -161,11 +162,11 @@ class TestAggregate:
         aggregate_widget.selected_dim = "time"
 
         aggregate_widget.set_patch(first)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
         aggregate_widget.set_patch(None)
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(aggregate_widget)
         aggregate_widget.set_patch(incompatible)
-        wait_for_output(qtbot, received, 3)
+        wait_for_widget_idle(aggregate_widget)
 
         assert received[-2] is None
         assert aggregate_widget.selected_dim == ""
@@ -181,11 +182,11 @@ class TestAggregate:
         # Use a specific dim so dim_reduce options are well-defined
         aggregate_widget.selected_dim = "time"
         aggregate_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
         start_count = len(received)
 
         aggregate_widget._dim_reduce_combo.setCurrentText("squeeze")
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         assert len(received) > start_count
         assert aggregate_widget.dim_reduce == "squeeze"
@@ -198,7 +199,7 @@ class TestAggregate:
         aggregate_widget.method = "not-a-real-method"
 
         aggregate_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         assert aggregate_widget.method == Aggregate._METHODS[0]
         assert aggregate_widget._method_combo.currentText() == Aggregate._METHODS[0]
@@ -211,7 +212,7 @@ class TestAggregate:
         aggregate_widget.dim_reduce = "not-a-real-reduce"
 
         aggregate_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         assert aggregate_widget.dim_reduce == Aggregate._DIM_REDUCES[0]
         assert (
@@ -231,7 +232,7 @@ class TestAggregate:
         monkeypatch.setattr(patch, "aggregate", _raise)
         aggregate_widget._patch = patch
         aggregate_widget.run()
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(aggregate_widget)
 
         assert received[-1] is None
         assert aggregate_widget.Error.aggregate_failed.is_shown()

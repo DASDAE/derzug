@@ -9,6 +9,7 @@ from derzug.utils.testing import (
     TestWidgetDefaults,
     capture_output,
     wait_for_output,
+    wait_for_widget_idle,
     widget_context,
 )
 from derzug.widgets.coords import Coords
@@ -122,6 +123,21 @@ class TestCoords:
 
         assert received[-1] is patch
         assert captured == {"distance": "channel"}
+
+    def test_get_task_matches_widget_output(self, coords_widget, monkeypatch, qtbot):
+        """The canonical task path should match the widget's emitted result."""
+        received = capture_output(coords_widget.Outputs.patch, monkeypatch)
+        patch = _patch_with_non_dim_coord()
+        coords_widget.operation = "sort_coords"
+        coords_widget.sort_coords_selected = ["channel", "time"]
+        coords_widget.sort_reverse = True
+
+        coords_widget.set_patch(patch)
+        wait_for_widget_idle(coords_widget)
+
+        task_result = coords_widget.get_task().run(patch)
+        assert received[-1] is not None
+        assert task_result.equals(received[-1])
 
     def test_invalid_rename_reference_shows_error(
         self, coords_widget, monkeypatch, qtbot

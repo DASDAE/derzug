@@ -8,7 +8,7 @@ import pytest
 from derzug.utils.testing import (
     TestPatchDimWidgetDefaults,
     capture_output,
-    wait_for_output,
+    wait_for_widget_idle,
     widget_context,
 )
 from derzug.widgets.filter import _FILTER_NAMES, Filter
@@ -50,7 +50,7 @@ class TestFilter:
         """set_patch(None) emits None."""
         received = capture_output(filter_widget.Outputs.patch, monkeypatch)
         filter_widget.set_patch(None)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         assert received[-1] is None
 
     def test_pass_filter_no_bounds_passes_through(
@@ -63,7 +63,7 @@ class TestFilter:
         filter_widget.high_bound = ""
         filter_widget.taper_window = ""
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         assert received[-1] is patch
 
     def test_blank_taper_skips_taper(self, filter_widget, monkeypatch, qtbot):
@@ -74,7 +74,7 @@ class TestFilter:
         filter_widget.high_bound = "10"
         filter_widget.taper_window = ""
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         out = received[-1]
         expected = patch.pass_filter(corners=4, zerophase=True, time=(1.0, 10.0))
         assert out is not None
@@ -90,7 +90,7 @@ class TestFilter:
         filter_widget.high_bound = "10"
         filter_widget.taper_window = "0.01"
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         out = received[-1]
         expected = patch.taper(time=0.01).pass_filter(
             corners=4, zerophase=True, time=(1.0, 10.0)
@@ -104,7 +104,7 @@ class TestFilter:
         patch = dc.get_example_patch("example_event_2")
         filter_widget.taper_window = "not-a-window"
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         assert received[-1] is None
         assert filter_widget.Error.general.is_shown()
 
@@ -117,11 +117,26 @@ class TestFilter:
         filter_widget.low_bound = "1"
         filter_widget.high_bound = "10"
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         out = received[-1]
         assert out is not None
         assert out.shape == patch.shape
         assert not np.array_equal(out.data, patch.data)
+
+    def test_get_task_matches_widget_output(self, filter_widget, monkeypatch, qtbot):
+        """The canonical filter task should match the widget output."""
+        received = capture_output(filter_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        filter_widget.low_bound = "1"
+        filter_widget.high_bound = "10"
+        filter_widget.taper_window = ""
+
+        filter_widget.set_patch(patch)
+        wait_for_widget_idle(filter_widget)
+
+        task_result = filter_widget.get_task().run(patch)
+        assert received[-1] is not None
+        assert task_result.equals(received[-1])
 
     def test_gaussian_filter_applies(self, filter_widget, monkeypatch, qtbot):
         """gaussian_filter produces a different patch of the same shape."""
@@ -130,7 +145,7 @@ class TestFilter:
         filter_widget._filter_combo.setCurrentText("gaussian_filter")
         _set_gaussian_rows(filter_widget, [{"dim": "time", "window": "0.01"}])
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         out = received[-1]
         assert out is not None
         assert out.shape == patch.shape
@@ -154,7 +169,7 @@ class TestFilter:
         _set_gaussian_rows(filter_widget, [{"dim": "time", "window": "2"}])
 
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
 
         assert received[-1] is patch
         assert captured["samples"] is True
@@ -181,7 +196,7 @@ class TestFilter:
         _set_gaussian_rows(filter_widget, [{"dim": "time", "window": "2.0"}])
 
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
 
         assert received[-1] is patch
         assert captured["time"] == 2.0
@@ -197,7 +212,7 @@ class TestFilter:
         _set_gaussian_rows(filter_widget, [{"dim": "time", "window": "0.01"}])
         filter_widget.taper_window = "0.01"
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         out = received[-1]
         expected = patch.taper(time=0.01).gaussian_filter(
             samples=False, mode="reflect", cval=0.0, truncate=4.0, time=0.01
@@ -213,7 +228,7 @@ class TestFilter:
         filter_widget.filter_window = "10"
         filter_widget.q = 35.0
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         out = received[-1]
         assert out is not None
         assert out.shape == patch.shape
@@ -224,7 +239,7 @@ class TestFilter:
         patch = dc.get_example_patch("example_event_2")
         filter_widget._filter_combo.setCurrentText("sobel_filter")
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         out = received[-1]
         assert out is not None
         assert out.shape == patch.shape
@@ -239,7 +254,7 @@ class TestFilter:
         filter_widget.slope_filt = "2000.0,2200.0,8000.0,20000.0"
         filter_widget.selected_dim = "time"
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         out = received[-1]
         expected = patch.taper(time=0.01).slope_filter(
             filt=[2000.0, 2200.0, 8000.0, 20000.0],
@@ -304,7 +319,7 @@ class TestFilter:
         )
 
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
 
         assert received[-1] is patch
         assert captured["time"] == 0.01
@@ -327,7 +342,7 @@ class TestFilter:
         )
 
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
 
         assert received[-1] is None
         assert filter_widget.Error.general.is_shown()
@@ -344,11 +359,11 @@ class TestFilter:
         _set_gaussian_rows(filter_widget, [{"dim": "time", "window": "0.01"}])
 
         filter_widget.set_patch(first)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         filter_widget.set_patch(None)
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(filter_widget)
         filter_widget.set_patch(second)
-        wait_for_output(qtbot, received, 3)
+        wait_for_widget_idle(filter_widget)
 
         assert filter_widget.gaussian_dim_windows == [{"dim": "time", "window": "0.01"}]
         assert received[-1] is not None
@@ -365,11 +380,11 @@ class TestFilter:
         _set_gaussian_rows(filter_widget, [{"dim": "time", "window": "0.01"}])
 
         filter_widget.set_patch(first)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         filter_widget.set_patch(None)
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(filter_widget)
         filter_widget.set_patch(incompatible)
-        wait_for_output(qtbot, received, 3)
+        wait_for_widget_idle(filter_widget)
 
         assert filter_widget.gaussian_dim_windows == [{"dim": "", "window": ""}]
         assert received[-1] is None
@@ -416,7 +431,7 @@ class TestFilter:
         filter_widget.filter_window = ""
         _set_gaussian_rows(filter_widget, [{"dim": "", "window": ""}])
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
         assert received[-1] is None
         assert filter_widget.Error.general.is_shown()
 
@@ -573,7 +588,7 @@ class TestFilterMatchesDASCore:
             setattr(filter_widget, attr, val)
 
         filter_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(filter_widget)
 
         assert (
             not filter_widget.Error.general.is_shown()

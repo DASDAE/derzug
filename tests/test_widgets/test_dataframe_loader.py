@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
-from derzug.utils.testing import widget_context
+from derzug.utils.testing import capture_output, wait_for_widget_idle, widget_context
 from derzug.widgets.dataframe_loader import DataFrameLoader
 
 
@@ -28,3 +29,21 @@ def test_controls_are_below_table_in_main_area(widget):
 
     assert container_layout.indexOf(widget._table) == 0
     assert container_layout.indexOf(widget._controls_panel) == 1
+
+
+def test_get_task_matches_loaded_output(widget, tmp_path, monkeypatch):
+    """The canonical loader task should match the widget's emitted dataframe."""
+    path = tmp_path / "data.csv"
+    df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+    df.to_csv(path, index=False)
+    received = capture_output(widget.Outputs.data, monkeypatch)
+
+    widget.file_path = str(path)
+    widget.file_path_edit.setText(str(path))
+    widget.format_name = "CSV"
+    widget._load()
+    wait_for_widget_idle(widget, timeout=5.0)
+
+    task_result = widget.get_task().run()
+
+    assert received[-1].equals(task_result)

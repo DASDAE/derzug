@@ -9,25 +9,29 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = (
-    "ExecutionContext",
-    "FileSystemSink",
+    "CompiledWorkflow",
+    "compile_workflow",
     "FileSystemSource",
     "Pipe",
+    "PipeBuilder",
     "Provenance",
-    "Sink",
+    "Results",
     "Source",
+    "STREAM_END",
     "Task",
     "task",
 )
 
 _EXPORTS = {
-    "ExecutionContext": (".context", "ExecutionContext"),
-    "FileSystemSink": (".sink", "FileSystemSink"),
+    "CompiledWorkflow": (".compiler", "CompiledWorkflow"),
+    "compile_workflow": (".compiler", "compile_workflow"),
     "FileSystemSource": (".source", "FileSystemSource"),
     "Pipe": (".pipe", "Pipe"),
+    "PipeBuilder": (".graph", "PipeBuilder"),
     "Provenance": (".provenance", "Provenance"),
-    "Sink": (".sink", "Sink"),
+    "Results": (".results", "Results"),
     "Source": (".source", "Source"),
+    "STREAM_END": (".executor", "STREAM_END"),
     "Task": (".task", "Task"),
     "task": (".task", "task"),
 }

@@ -11,6 +11,7 @@ from derzug.utils.testing import (
     TestPatchInputStateDefaults,
     TestWidgetDefaults,
     capture_output,
+    wait_for_widget_idle,
     widget_context,
 )
 from derzug.widgets.select import Select
@@ -180,6 +181,163 @@ class TestSelect:
         status = select_widget._build_status_text(selected=patch)
 
         assert status == "absolute basis, 0 active range filter(s)"
+
+    def test_first_patch_input_primes_delayed_saved_relative_selection(
+        self, select_widget
+    ):
+        """Saved relative patch settings should apply even if restored after init."""
+        patch = dc.get_example_patch("example_event_2")
+        payload = {
+            "basis": "relative",
+            "rows": [
+                {
+                    "dim": "distance",
+                    "enabled": True,
+                    "low": {"kind": "float", "value": 100.0},
+                    "high": {"kind": "float", "value": 200.0},
+                }
+            ],
+        }
+        select_widget.saved_selection_basis = payload["basis"]
+        select_widget.saved_selection_ranges = payload["rows"]
+        select_widget._selection_state = type(select_widget._selection_state)()
+
+        select_widget.set_patch(patch)
+
+        assert select_widget._selection_patch_basis == "relative"
+        assert select_widget._selection_current_patch_range("distance") == (
+            100.0,
+            200.0,
+        )
+
+    def test_deferred_saved_relative_selection_reconciles_after_patch_input(
+        self, select_widget
+    ):
+        """Saved relative settings should restore even if they arrive late."""
+        patch = dc.get_example_patch("example_event_2")
+        payload = {
+            "basis": "relative",
+            "rows": [
+                {
+                    "dim": "distance",
+                    "enabled": True,
+                    "low": {"kind": "float", "value": 100.0},
+                    "high": {"kind": "float", "value": 200.0},
+                }
+            ],
+        }
+
+        select_widget.set_patch(patch)
+        select_widget.saved_selection_basis = payload["basis"]
+        select_widget.saved_selection_ranges = payload["rows"]
+
+        changed = select_widget._reconcile_saved_patch_selection_state()
+
+        assert changed is True
+        assert select_widget._selection_patch_basis == "relative"
+        assert select_widget._selection_current_patch_range("distance") == (
+            100.0,
+            200.0,
+        )
+
+    def test_deferred_saved_selection_reruns_selected_patch(
+        self, select_widget, monkeypatch
+    ):
+        """Late saved selection restoration should rerun the narrowed patch."""
+        patch = dc.get_example_patch("example_event_2")
+        payload = {
+            "basis": "relative",
+            "rows": [
+                {
+                    "dim": "distance",
+                    "enabled": True,
+                    "low": {"kind": "float", "value": 100.0},
+                    "high": {"kind": "float", "value": 200.0},
+                }
+            ],
+        }
+        received = capture_output(select_widget.Outputs.patch, monkeypatch)
+
+        select_widget.set_patch(patch)
+        select_widget.saved_selection_basis = payload["basis"]
+        select_widget.saved_selection_ranges = payload["rows"]
+
+        select_widget._apply_deferred_saved_patch_selection_reconcile(
+            select_widget._saved_patch_restore_generation
+        )
+
+        assert len(received) >= 2
+        expected = select_widget.get_task().run(
+            patch=patch,
+            spool=None,
+            annotation_set=None,
+        )["patch"]
+        assert received[-1] == expected
+
+    def test_deferred_saved_selection_reconcile_is_noop_when_already_applied(
+        self, select_widget, monkeypatch
+    ):
+        """The deferred restore pass should not rerun once state is live."""
+        patch = dc.get_example_patch("example_event_2")
+        payload = {
+            "basis": "relative",
+            "rows": [
+                {
+                    "dim": "distance",
+                    "enabled": True,
+                    "low": {"kind": "float", "value": 100.0},
+                    "high": {"kind": "float", "value": 200.0},
+                }
+            ],
+        }
+        emitted = []
+        monkeypatch.setattr(
+            select_widget,
+            "_emit_selected_output",
+            lambda: emitted.append(True),
+        )
+        select_widget.saved_selection_basis = payload["basis"]
+        select_widget.saved_selection_ranges = payload["rows"]
+        select_widget.set_patch(patch)
+        emitted.clear()
+
+        select_widget._apply_deferred_saved_patch_selection_reconcile(
+            select_widget._saved_patch_restore_generation
+        )
+
+        assert not emitted
+
+    def test_get_task_matches_patch_output(self, select_widget, monkeypatch):
+        """Patch-mode output should match executing the canonical selection task."""
+        received = capture_output(select_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+
+        select_widget.set_patch(patch)
+        wait_for_widget_idle(select_widget, timeout=5.0)
+
+        task_result = select_widget.get_task().run(
+            patch=patch,
+            spool=None,
+            annotation_set=None,
+        )
+
+        assert received[-1] == task_result["patch"]
+
+    def test_get_task_matches_spool_output(self, select_widget, monkeypatch):
+        """Spool-mode output should match executing the canonical selection task."""
+        received = capture_output(select_widget.Outputs.spool, monkeypatch)
+        spool = _multi_select_spool()
+
+        select_widget.set_spool(spool)
+        wait_for_widget_idle(select_widget, timeout=5.0)
+
+        task_result = select_widget.get_task().run(
+            patch=None,
+            spool=spool,
+            annotation_set=None,
+        )
+
+        assert list(received[-1]) == list(task_result["spool"])
 
     def test_hidden_patch_input_defers_control_refresh_until_show(
         self, monkeypatch, qtbot
@@ -701,6 +859,63 @@ class TestSelect:
         min_w = panel.hint_label.minimumSizeHint().width()
         preferred_w = panel.hint_label.sizeHint().width()
         assert min_w < preferred_w
+
+
+class TestOnResult:
+    """Tests for Select._on_result output routing."""
+
+    def test_none_result_clears_both_outputs(self, select_widget, monkeypatch):
+        """None result sends None on both channels and clears preview."""
+        spool_received = capture_output(select_widget.Outputs.spool, monkeypatch)
+        patch_received = capture_output(select_widget.Outputs.patch, monkeypatch)
+
+        select_widget._on_result(None)
+
+        assert spool_received[-1] is None
+        assert patch_received[-1] is None
+        assert select_widget._preview_selected is None
+
+    def test_dict_result_sends_patch_and_spool(self, select_widget, monkeypatch):
+        """Dict result routes patch and spool to their respective channels."""
+        spool_received = capture_output(select_widget.Outputs.spool, monkeypatch)
+        patch_received = capture_output(select_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch()
+        spool = dc.spool([patch])
+
+        select_widget._on_result({"patch": patch, "spool": spool})
+
+        assert patch_received[-1] is patch
+        assert list(spool_received[-1]) == list(spool)
+
+    def test_spool_input_kind_sets_preview_to_spool(self, select_widget):
+        """In spool mode _preview_selected should be the spool, not the patch."""
+        patch = dc.get_example_patch()
+        spool = dc.spool([patch])
+        select_widget._input_kind = "spool"
+
+        select_widget._on_result({"patch": patch, "spool": spool})
+
+        assert select_widget._preview_selected is spool
+
+    def test_patch_input_kind_sets_preview_to_patch(self, select_widget):
+        """In patch mode _preview_selected should be the patch."""
+        patch = dc.get_example_patch()
+        select_widget._input_kind = "patch"
+
+        select_widget._on_result({"patch": patch, "spool": None})
+
+        assert select_widget._preview_selected is patch
+
+    def test_on_result_triggers_ui_refresh(self, select_widget, monkeypatch):
+        """_on_result should schedule a UI refresh."""
+        refreshed = []
+        monkeypatch.setattr(
+            select_widget, "_request_ui_refresh", lambda: refreshed.append(True)
+        )
+
+        select_widget._on_result(None)
+
+        assert refreshed
 
 
 if __name__ == "__main__":  # pragma: no cover

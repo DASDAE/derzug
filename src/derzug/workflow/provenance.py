@@ -12,15 +12,15 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from pydantic import computed_field, field_validator
 
-from derzug.constants import yaml_extensions
+from .model import WorkflowModel
 
-from ..core import DerzugModel
+yaml_extensions = ("yaml", "yml")
 
 if TYPE_CHECKING:
     from .pipe import Pipe
 
 
-class Provenance(DerzugModel):
+class Provenance(WorkflowModel):
     """Structured record of pipeline provenance and run metadata."""
 
     pipe: Pipe
@@ -117,13 +117,13 @@ class Provenance(DerzugModel):
         return cls.model_validate(data)
 
 
-class ProvenanceMap(DerzugModel):
+class ProvenanceMap(WorkflowModel):
     """A serializable provenance map."""
 
     data: dict[str, Provenance]
 
 
-class FingerPrintTuple(DerzugModel):
+class FingerPrintTuple(WorkflowModel):
     """Serializable tuple for provenance fingerprints."""
 
     data: tuple[str, ...]

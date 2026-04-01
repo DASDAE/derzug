@@ -9,6 +9,7 @@ from derzug.utils.testing import (
     TestWidgetDefaults,
     capture_output,
     wait_for_output,
+    wait_for_widget_idle,
     widget_context,
 )
 from derzug.widgets.ufunc_unary import UFunc
@@ -65,7 +66,7 @@ class TestUFunc:
         patch = dc.get_example_patch("example_event_1")
 
         ufunc_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(ufunc_widget)
 
         out = received[-1]
         assert isinstance(out, dc.Patch)
@@ -78,11 +79,11 @@ class TestUFunc:
         patch = dc.get_example_patch("example_event_1")
 
         ufunc_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(ufunc_widget)
         before = len(received)
 
         ufunc_widget._op_combo.setCurrentText("exp")
-        wait_for_output(qtbot, received, before + 1)
+        wait_for_widget_idle(ufunc_widget)
 
         assert ufunc_widget.selected_op == "exp"
         assert len(received) > before
@@ -95,7 +96,7 @@ class TestUFunc:
         ufunc_widget.selected_op = "not-a-real-op"
 
         ufunc_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(ufunc_widget)
 
         assert ufunc_widget.selected_op == "abs"
         assert ufunc_widget._op_combo.currentText() == "abs"
@@ -115,7 +116,7 @@ class TestUFunc:
         ufunc_widget._patch = patch
         ufunc_widget.selected_op = "abs"
         ufunc_widget.run()
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(ufunc_widget)
 
         assert received[-1] is None
         assert ufunc_widget.Error.operation_failed.is_shown()
@@ -132,12 +133,12 @@ class TestUFunc:
         ufunc_widget._patch = patch
         ufunc_widget.selected_op = "abs"
         ufunc_widget.run()
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(ufunc_widget)
         assert ufunc_widget.Error.operation_failed.is_shown()
 
         good_patch = dc.get_example_patch("example_event_1")
         ufunc_widget.set_patch(good_patch)
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(ufunc_widget)
 
         assert received[-1] is not None
         assert not ufunc_widget.Error.operation_failed.is_shown()
@@ -150,11 +151,11 @@ class TestUFunc:
         patch = dc.get_example_patch("example_event_1")
 
         ufunc_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(ufunc_widget)
         assert received[-1] is not None
 
         ufunc_widget.set_patch(None)
-        wait_for_output(qtbot, received, 2)
+        wait_for_widget_idle(ufunc_widget)
 
         assert received[-1] is None
         assert not ufunc_widget.Error.operation_failed.is_shown()
@@ -166,7 +167,7 @@ class TestUFunc:
         ufunc_widget._op_combo.setCurrentText("log")
 
         ufunc_widget.set_patch(patch)
-        wait_for_output(qtbot, received)
+        wait_for_widget_idle(ufunc_widget)
 
         out = received[-1]
         assert out is not None

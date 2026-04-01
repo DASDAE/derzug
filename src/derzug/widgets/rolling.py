@@ -13,6 +13,8 @@ from Orange.widgets.widget import Msg
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
 from derzug.utils.parsing import parse_patch_text_value
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchRollingTask
 
 
 class Rolling(PatchDimWidget):
@@ -134,11 +136,12 @@ class Rolling(PatchDimWidget):
             required=not allow_none,
         )
 
-    def _run(self) -> dc.Patch | None:
-        """Apply rolling aggregation with current settings and return output patch."""
-        if self._patch is None:
-            return None
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the rolling-specific banner."""
+        self._show_exception("rolling_failed", exc)
 
+    def _validated_task(self) -> Task | None:
+        """Return the current rolling task after widget-side validation."""
         dim = self._get_dim()
         if dim is None:
             return None
@@ -165,21 +168,29 @@ class Rolling(PatchDimWidget):
             self._agg_combo.blockSignals(True)
             self._agg_combo.setCurrentText(aggregation)
             self._agg_combo.blockSignals(False)
+        return PatchRollingTask(
+            dim=dim,
+            window=window,
+            step=step,
+            center=bool(self.center),
+            dropna=bool(self.dropna),
+            aggregation=aggregation,
+        )
 
-        try:
-            rolling = self._patch.rolling(
-                step=step,
-                center=bool(self.center),
-                **{dim: window},
-            )
-            out = getattr(rolling, aggregation)()
-            if self.dropna:
-                out = out.dropna(dim)
-        except Exception as exc:
-            self._show_exception("rolling_failed", exc)
-            return None
-
-        return out
+    def get_task(self) -> Task:
+        """Return the current rolling aggregation as a workflow task."""
+        return PatchRollingTask(
+            dim=self._get_dim() or self.selected_dim,
+            window=self._parse_window_value(self.rolling_window, allow_none=False),
+            step=self._parse_window_value(self.step, allow_none=True),
+            center=bool(self.center),
+            dropna=bool(self.dropna),
+            aggregation=(
+                self.aggregation
+                if self.aggregation in self._AGGREGATIONS
+                else self._AGGREGATIONS[0]
+            ),
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

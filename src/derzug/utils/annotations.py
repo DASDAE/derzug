@@ -557,12 +557,12 @@ def _entry_with_directory_path(
 
 
 __all__ = (
-    "annotation_id_map",
-    "annotation_type_counts",
     "AnnotationImportResult",
     "AnnotationStoreEntry",
     "AnnotationStoreState",
     "AnnotationStoreSummary",
+    "annotation_id_map",
+    "annotation_type_counts",
     "build_state",
     "delete_annotation_by_id",
     "delete_entry",
@@ -575,8 +575,8 @@ __all__ = (
     "normalize_selected_id",
     "persist_entries_with_metadata",
     "rename_entry",
-    "replace_entry",
     "replace_annotation_sequence",
+    "replace_entry",
     "selected_annotation_set",
     "state_to_dict",
     "summarize_entries",

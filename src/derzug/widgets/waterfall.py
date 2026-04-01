@@ -53,6 +53,8 @@ from derzug.widgets.annotation_overlay import AnnotationOverlayController
 from derzug.widgets.selection import (
     SelectionControlsMixin,
 )
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchPassThroughTask, PatchSelectionTask
 
 _ANNOTATION_ICON_DIR = Path(__file__).resolve().parent / "icons" / "annotations"
 
@@ -282,6 +284,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
         patch = Output("Patch", dc.Patch)
         annotation_set = Output("Annotations", AnnotationSet)
+
+    def get_task(self) -> Task:
+        """Return the compiled patch-only semantics for the current widget state."""
+        payload = self._load_saved_selection_state()
+        if payload is None:
+            return PatchPassThroughTask()
+        return PatchSelectionTask(selection_payload=payload)
 
     def widget_shortcuts(self) -> list[tuple[str, str]]:
         """Return Waterfall-specific keyboard and pointer shortcuts."""
@@ -1228,7 +1237,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         if self._annotation_toolbox_hidden:
             self._annotation_controller.clear_active_tool(notify=False)
         else:
-            self._annotation_controller.clear_active_tool(notify=False)
+            self._annotation_controller.enter_annotation_selection_mode(notify=False)
         self._sync_overlay_mode_from_annotation_tool()
 
     def _sync_overlay_mode_from_annotation_tool(self) -> None:

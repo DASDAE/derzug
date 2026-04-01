@@ -3,13 +3,15 @@
 def __getattr__(name: str):
     """Provide lazy access to workflow symbols expected at package top level."""
     if name in {
-        "ExecutionContext",
-        "FileSystemSink",
+        "CompiledWorkflow",
+        "compile_workflow",
         "FileSystemSource",
         "Pipe",
+        "PipeBuilder",
         "Provenance",
-        "Sink",
+        "Results",
         "Source",
+        "STREAM_END",
         "Task",
         "task",
     }:

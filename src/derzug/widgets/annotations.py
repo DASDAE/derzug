@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 from AnyQt.QtCore import QAbstractTableModel, QModelIndex, Qt
 from AnyQt.QtGui import QKeySequence, QShortcut
@@ -36,6 +37,7 @@ from derzug.utils.annotations import (
     summarize_entries,
     sync_directory_state,
 )
+from derzug.workflow import Task
 
 _TABLE_COLUMNS = (
     ("name", "Name"),
@@ -47,6 +49,25 @@ _TABLE_COLUMNS = (
     ("polygon_count", "Polygons"),
     ("size_text", "Size"),
 )
+
+
+class AnnotationsTask(Task):
+    """Return the selected annotation set from persisted store state."""
+
+    output_variables: ClassVar[dict[str, object]] = {"annotation_set": object}
+
+    store_directory: str = ""
+    stored_entries: tuple[dict, ...] = ()
+    selected_entry_id: str = ""
+
+    def run(self):
+        """Load persisted entries and return the selected annotation set."""
+        directory = self.store_directory.strip()
+        entries = load_store(
+            directory=directory,
+            state_entries=list(self.stored_entries),
+        )
+        return selected_annotation_set(entries, self.selected_entry_id.strip() or None)
 
 
 class _AnnotationsTableModel(QAbstractTableModel):
@@ -432,3 +453,11 @@ class Annotations(ZugWidget):
         self._update_status_label()
         self._request_ui_refresh()
         return True
+
+    def get_task(self) -> Task:
+        """Return the current bound-source workflow semantics."""
+        return AnnotationsTask(
+            store_directory=str(self.store_directory or ""),
+            stored_entries=tuple(self.stored_entries or ()),
+            selected_entry_id=str(self.selected_entry_id or ""),
+        )

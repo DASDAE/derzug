@@ -22,6 +22,8 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.orange import Setting
+from derzug.workflow import Task
+from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 _TRANSFORMS: tuple[str, ...] = ("dft", "idft")
 _REAL_OPTIONS: tuple[tuple[str, str | bool | None], ...] = (
@@ -234,37 +236,30 @@ class Fourier(PatchDimWidget):
                 selected.append(item.text())
         return selected
 
-    def _run(self) -> dc.Patch | None:
-        """Apply the selected Fourier transform and return the output patch."""
-        if self._patch is None:
-            return None
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Route worker failures to the transform-specific banner."""
+        self._show_exception("transform_failed", exc)
 
+    def get_task(self) -> Task:
+        """Return the current Fourier operation as a workflow task."""
         transform = self._coerce_transform()
-        try:
-            if transform == "dft":
-                dims = self._get_dims()
-                if dims is None:
-                    return None
-                real_mode = (
-                    self.real_mode if self.real_mode in _REAL_OPTION_MAP else "Auto"
-                )
-                if real_mode != self.real_mode:
-                    self.real_mode = real_mode
-                    self._real_combo.blockSignals(True)
-                    self._real_combo.setCurrentText(real_mode)
-                    self._real_combo.blockSignals(False)
-                return self._patch.dft(
-                    dims,
-                    real=_REAL_OPTION_MAP[real_mode],
-                    pad=bool(self.pad),
-                )
-            dim = self._get_dim()
-            if dim is None:
-                return None
-            return self._patch.idft(dim)
-        except Exception as exc:
-            self._show_exception("transform_failed", exc)
-            return None
+        if transform == "dft":
+            dims = self._get_dims() or tuple(self.selected_dims)
+            real_mode = self.real_mode if self.real_mode in _REAL_OPTION_MAP else "Auto"
+            return PatchConfiguredMethodTask(
+                method_name="dft",
+                method_args=(dims,),
+                method_kwargs={
+                    "real": _REAL_OPTION_MAP[real_mode],
+                    "pad": bool(self.pad),
+                },
+            )
+        return PatchConfiguredMethodTask(
+            method_name="idft",
+            call_style="positional_dim",
+            dim=self._get_dim()
+            or (self.selected_dims[0] if self.selected_dims else None),
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
