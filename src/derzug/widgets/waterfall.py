@@ -12,8 +12,8 @@ from typing import Any, ClassVar
 import dascore as dc
 import numpy as np
 import pyqtgraph as pg
-from AnyQt.QtCore import QRectF, Qt, QTimer
-from AnyQt.QtGui import QIcon, QKeySequence
+from AnyQt.QtCore import QRectF, Qt, QTimer, Signal
+from AnyQt.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPalette
 from AnyQt.QtWidgets import (
     QAction,
     QComboBox,
@@ -24,6 +24,7 @@ from AnyQt.QtWidgets import (
     QMenuBar,
     QPushButton,
     QShortcut,
+    QSlider,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -78,6 +79,95 @@ class _PreparedPatchRender:
     data: np.ndarray
     display_data: np.ndarray
     axes: _AxisState
+
+
+def _format_coord_value(val) -> str:
+    """Format a single coordinate value for display inside a slider."""
+    if isinstance(val, np.datetime64):
+        s = str(val)
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s
+    if isinstance(val, np.floating | float):
+        return f"{float(val):.4g}"
+    if isinstance(val, np.integer | int):
+        return str(int(val))
+    return str(val)[:20]
+
+
+class _CoordSlider(QSlider):
+    """QSlider that draws the current coordinate value as subtle centred text."""
+
+    def __init__(self, coord_values: np.ndarray, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._coord_values = coord_values
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        idx = self.value()
+        if 0 <= idx < len(self._coord_values):
+            text = _format_coord_value(self._coord_values[idx])
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            font = QFont(painter.font())
+            font.setBold(True)
+            font.setPointSize(font.pointSize() + 1)
+            painter.setFont(font)
+
+            fm = painter.fontMetrics()
+            text_rect = fm.boundingRect(text)
+            pad_x, pad_y = 6, 2
+            box = text_rect.adjusted(-pad_x, -pad_y, pad_x, pad_y)
+            box.moveCenter(self.rect().center())
+
+            bg = QColor(self.palette().color(QPalette.ColorRole.Window))
+            bg.setAlpha(180)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(bg)
+            painter.drawRoundedRect(box, 3, 3)
+
+            fg = QColor(self.palette().color(QPalette.ColorRole.WindowText))
+            fg.setAlpha(220)
+            painter.setPen(fg)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+            painter.end()
+
+
+class _StepButton(QToolButton):
+    """QToolButton whose commit_step signal fires only on physical mouse release.
+
+    Qt's autoRepeat fires released() on every repeat interval, making it
+    unsuitable for "render once on button-up". Overriding mouseReleaseEvent
+    gives the physical-only event needed to commit a single render.
+    """
+
+    commit_step = Signal()
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.commit_step.emit()
+
+
+@contextmanager
+def _block_signals(*widgets):
+    """Temporarily block Qt signals on one or more widgets."""
+    for w in widgets:
+        w.blockSignals(True)
+    try:
+        yield
+    finally:
+        for w in widgets:
+            w.blockSignals(False)
+
+
+def _default_plot_dims(dims: tuple[str, ...]) -> tuple[str, str]:
+    """Return (y_dim, x_dim) defaults: distance x time if present, else first two."""
+    if "distance" in dims and "time" in dims:
+        return "distance", "time"
+    return dims[0], dims[1]
 
 
 class _SelectionROI(pg.ROI):
@@ -314,6 +404,10 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._pending_saved_annotation_set = self._load_saved_annotation_state()
         self._pending_saved_view_range = self._load_saved_view_range()
         self._patch: dc.Patch | None = None
+        self._slice_dims: tuple[str, ...] = ()
+        self._slice_indices: dict[str, int] = {}
+        self._plot_y_dim: str | None = None
+        self._plot_x_dim: str | None = None
         self._prepared_render: _PreparedPatchRender | None = None
         self._pending_view_range: (
             tuple[tuple[float, float], tuple[float, float]] | None
@@ -377,6 +471,8 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._open_annotations_button.setChecked(False)
         ann_box.layout().addWidget(self._open_annotations_button)
 
+        self._slice_sliders: dict[str, _CoordSlider] = {}
+
         self._plot_widget = pg.PlotWidget(
             self.mainArea,
             viewBox=_WaterfallViewBox(),
@@ -396,8 +492,13 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._cursor_label = QLabel("Cursor: --", self.mainArea)
         self._cursor_label.setAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # Keep the plot and interactive colorbar together in the main panel.
-        plot_panel = QWidget(self.mainArea)
+        # Main container: plot panel on top, dim-selector strip on bottom.
+        main_container = QWidget(self.mainArea)
+        main_layout = QVBoxLayout(main_container)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        plot_panel = QWidget(main_container)
         panel_layout = QVBoxLayout(plot_panel)
         panel_layout.setContentsMargins(0, 0, 0, 0)
         panel_layout.setSpacing(4)
@@ -409,7 +510,33 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         row_layout.addWidget(self._hist_lut, 0)
         panel_layout.addWidget(plot_row)
         panel_layout.addWidget(self._cursor_label)
-        self.mainArea.layout().addWidget(plot_panel)
+        main_layout.addWidget(plot_panel, 1)
+
+        # Dim-selector / slice strip — hidden until a >2D patch arrives.
+        self._dim_strip = QWidget(main_container)
+        self._dim_strip.setVisible(False)
+        strip_layout = QVBoxLayout(self._dim_strip)
+        strip_layout.setContentsMargins(4, 2, 4, 2)
+        strip_layout.setSpacing(4)
+        # Axis-selector row (always present inside the strip)
+        axis_row = QWidget(self._dim_strip)
+        axis_row_layout = QHBoxLayout(axis_row)
+        axis_row_layout.setContentsMargins(0, 0, 0, 0)
+        axis_row_layout.setSpacing(8)
+        axis_row_layout.addStretch()
+        axis_row_layout.addWidget(QLabel("Y:"))
+        self._y_dim_combo = QComboBox(axis_row)
+        self._y_dim_combo.setMinimumWidth(80)
+        axis_row_layout.addWidget(self._y_dim_combo)
+        axis_row_layout.addWidget(QLabel("X:"))
+        self._x_dim_combo = QComboBox(axis_row)
+        self._x_dim_combo.setMinimumWidth(80)
+        axis_row_layout.addWidget(self._x_dim_combo)
+        axis_row_layout.addStretch()
+        strip_layout.addWidget(axis_row)
+        main_layout.addWidget(self._dim_strip, 0)
+
+        self.mainArea.layout().addWidget(main_container)
 
         self._annotation_controller = AnnotationOverlayController(
             self,
@@ -428,6 +555,8 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._annotation_controller._editor_class = _AnnotationEditorDialog
 
         self._cmap_combo.currentTextChanged.connect(self._on_colormap_changed)
+        self._y_dim_combo.currentTextChanged.connect(self._on_y_dim_changed)
+        self._x_dim_combo.currentTextChanged.connect(self._on_x_dim_changed)
         self._add_selection_button.clicked.connect(self._add_selection_from_view)
         self._open_annotations_button.toggled.connect(self._toggle_annotation_toolbox)
         self._plot_widget.scene().sigMouseClicked.connect(self._on_plot_mouse_clicked)
@@ -573,6 +702,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             for dim in tuple(self._selection_state.patch.ranges)
         }
         self._patch = patch
+        self._rebuild_slice_panel(patch)
         self._update_axis_state_from_patch(patch)
         prepared = self._prepared_render
         if prepared is not None:
@@ -606,7 +736,8 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         if (
             annotation_set is not None
             and self._axes is not None
-            and annotation_set.dims != self._annotation_controller.annotation_dims()
+            and set(annotation_set.dims)
+            != set(self._annotation_controller.annotation_dims() or ())
         ):
             self._annotation_set = None
             self._rebuild_annotation_items()
@@ -618,6 +749,176 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._clear_output_dirty("annotation_set")
         self._persist_annotation_settings()
 
+    def _rebuild_slice_panel(self, patch: dc.Patch | None) -> None:
+        """Rebuild dim-axis combos and slice sliders in the bottom strip."""
+        for slider in self._slice_sliders.values():
+            slider.parentWidget().deleteLater()
+        self._slice_sliders.clear()
+
+        if patch is None or patch.ndim <= 2:
+            self._dim_strip.setVisible(False)
+            self._slice_dims = ()
+            self._slice_indices = {}
+            self._plot_y_dim = None
+            self._plot_x_dim = None
+            self._update_annotation_slice_coords()
+            return
+
+        with _block_signals(self._y_dim_combo, self._x_dim_combo):
+            self._y_dim_combo.clear()
+            self._x_dim_combo.clear()
+            for dim in patch.dims:
+                self._y_dim_combo.addItem(dim)
+                self._x_dim_combo.addItem(dim)
+
+        default_y, default_x = _default_plot_dims(patch.dims)
+        y_dim = self._plot_y_dim if self._plot_y_dim in patch.dims else default_y
+        x_dim = self._plot_x_dim if self._plot_x_dim in patch.dims else default_x
+        if y_dim == x_dim:
+            x_dim = next(d for d in patch.dims if d != y_dim)
+
+        with _block_signals(self._y_dim_combo, self._x_dim_combo):
+            self._y_dim_combo.setCurrentText(y_dim)
+            self._x_dim_combo.setCurrentText(x_dim)
+        self._plot_y_dim = y_dim
+        self._plot_x_dim = x_dim
+
+        slice_dims = tuple(d for d in patch.dims if d not in {y_dim, x_dim})
+        self._slice_dims = slice_dims
+
+        strip_layout = self._dim_strip.layout()
+        for dim in slice_dims:
+            n = patch.shape[patch.dims.index(dim)]
+            idx = min(self._slice_indices.get(dim, 0), n - 1)
+            self._slice_indices[dim] = idx
+
+            row = QWidget(self._dim_strip)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+            coord_values = np.asarray(patch.get_array(dim))
+            label = QLabel(f"{dim}:", row)
+            slider = _CoordSlider(coord_values, Qt.Orientation.Horizontal, row)
+            slider.setRange(0, n - 1)
+            slider.setValue(idx)
+
+            _btn_style = "border: none; background: transparent;"
+            btn_prev = _StepButton(row)
+            btn_prev.setText("◀")
+            btn_prev.setStyleSheet(_btn_style)
+            btn_prev.setAutoRepeat(True)
+            btn_prev.setAutoRepeatDelay(400)
+            btn_prev.setAutoRepeatInterval(80)
+            btn_prev.setToolTip(f"Step {dim} back one index (hold to advance)")
+
+            btn_next = _StepButton(row)
+            btn_next.setText("▶")
+            btn_next.setStyleSheet(_btn_style)
+            btn_next.setAutoRepeat(True)
+            btn_next.setAutoRepeatDelay(400)
+            btn_next.setAutoRepeatInterval(80)
+            btn_next.setToolTip(f"Step {dim} forward one index (hold to advance)")
+
+            slider.setToolTip(
+                f"Drag to select a {dim} index\n"
+                f"Scroll wheel or arrow keys also work"
+            )
+
+            row_layout.addWidget(label)
+            row_layout.addWidget(btn_prev)
+            row_layout.addWidget(slider, 1)
+            row_layout.addWidget(btn_next)
+            strip_layout.addWidget(row)
+
+            def _on_drag(value, d=dim, s=slider):
+                s.update()
+                if not s.isSliderDown():
+                    # Keyboard navigation: render immediately since no release fires
+                    self._slice_indices[d] = value
+                    self._update_annotation_slice_coords()
+                    self._update_axis_state_from_patch(self._patch)
+                    self._pending_view_range = self._get_view_range()
+                    self._request_ui_refresh()
+
+            def _on_release(d=dim, s=slider):
+                self._slice_indices[d] = s.value()
+                self._update_annotation_slice_coords()
+                self._update_axis_state_from_patch(self._patch)
+                self._pending_view_range = self._get_view_range()
+                self._request_ui_refresh()
+
+            # clicked fires on every auto-repeat tick — only update slider position,
+            # suppress signals so _on_drag does not trigger a render mid-hold
+            def _btn_step(delta, s=slider):
+                s.blockSignals(True)
+                s.setValue(s.value() + delta)
+                s.blockSignals(False)
+                s.update()
+
+            btn_prev.clicked.connect(lambda checked=False: _btn_step(-1))
+            btn_next.clicked.connect(lambda checked=False: _btn_step(1))
+            # commit_step fires only on physical mouse release, not auto-repeat ticks
+            btn_prev.commit_step.connect(_on_release)
+            btn_next.commit_step.connect(_on_release)
+
+            slider.valueChanged.connect(_on_drag)
+            slider.sliderReleased.connect(_on_release)
+            self._slice_sliders[dim] = slider
+
+        self._dim_strip.setVisible(True)
+        self._update_annotation_slice_coords()
+
+    def _on_y_dim_changed(self, dim: str) -> None:
+        """Handle Y-axis dim combo change; auto-swap X if collision."""
+        if self._patch is None or not dim:
+            return
+        self._annotation_controller.active_annotation_id = None
+        self._annotation_controller.selected_annotation_ids.clear()
+        if dim == self._plot_x_dim:
+            with _block_signals(self._x_dim_combo):
+                self._x_dim_combo.setCurrentText(self._plot_y_dim)
+            self._plot_x_dim = self._plot_y_dim
+        self._plot_y_dim = dim
+        self._rebuild_slice_panel(self._patch)
+        self._update_axis_state_from_patch(self._patch)
+        self._request_ui_refresh()
+
+    def _on_x_dim_changed(self, dim: str) -> None:
+        """Handle X-axis dim combo change; auto-swap Y if collision."""
+        if self._patch is None or not dim:
+            return
+        self._annotation_controller.active_annotation_id = None
+        self._annotation_controller.selected_annotation_ids.clear()
+        if dim == self._plot_y_dim:
+            with _block_signals(self._y_dim_combo):
+                self._y_dim_combo.setCurrentText(self._plot_x_dim)
+            self._plot_y_dim = self._plot_x_dim
+        self._plot_x_dim = dim
+        self._rebuild_slice_panel(self._patch)
+        self._update_axis_state_from_patch(self._patch)
+        self._request_ui_refresh()
+
+    def _update_annotation_slice_coords(self) -> None:
+        """Push current slice position into the annotation controller."""
+        if self._patch is None or not self._slice_dims:
+            self._annotation_controller.slice_coords = {}
+            return
+        coords = {}
+        for dim in self._slice_dims:
+            idx = self._slice_indices.get(dim, 0)
+            coords[dim] = self._patch.get_array(dim)[idx]
+        self._annotation_controller.slice_coords = coords
+
+    def _apply_slice_dims(self, patch: dc.Patch) -> dc.Patch:
+        """Select a single index along each slice dimension to produce a 2D patch."""
+        for dim in self._slice_dims:
+            if dim not in patch.dims:
+                continue
+            coord_values = patch.get_array(dim)
+            idx = min(self._slice_indices.get(dim, 0), len(coord_values) - 1)
+            patch = patch.select(**{dim: np.array([coord_values[idx]])}).squeeze(dim)
+        return patch
+
     def _update_axis_state_from_patch(self, patch: dc.Patch | None) -> None:
         """Precompute axis metadata without forcing an immediate render."""
         if patch is None:
@@ -627,6 +928,14 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             return
 
         try:
+            if patch.ndim > 2:
+                patch = self._apply_slice_dims(patch)
+            if (
+                self._plot_y_dim
+                and self._plot_x_dim
+                and patch.dims != (self._plot_y_dim, self._plot_x_dim)
+            ):
+                patch = patch.transpose(self._plot_y_dim, self._plot_x_dim)
             data = np.asarray(patch.data)
             if data.ndim != 2:
                 raise ValueError(f"expected 2D data, got shape {data.shape}")
@@ -1111,8 +1420,9 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         for shape in ("line", "ellipse", "square", "hyperbola"):
             action = fit_menu.addAction(shape.capitalize())
             action.triggered.connect(
-                lambda _checked=False,
-                fit_shape=shape: self._on_annotation_fit_requested(fit_shape)
+                lambda _checked=False, fit_shape=shape: (
+                    self._on_annotation_fit_requested(fit_shape)
+                )
             )
         return menu
 
@@ -1642,7 +1952,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             self.saved_annotation_set = None
             return
         dims = self._annotation_controller.annotation_dims()
-        if dims is None or annotation_set.dims != dims:
+        if dims is None or set(annotation_set.dims) != set(dims):
             self.saved_annotation_set = None
             return
         self._annotation_set = annotation_set

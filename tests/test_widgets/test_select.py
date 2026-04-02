@@ -70,7 +70,7 @@ def _annotation_set_for_distance(value: float) -> AnnotationSet:
         annotations=(
             Annotation(
                 id="ann-1",
-                geometry=PointGeometry(dims=("distance",), values=(value,)),
+                geometry=PointGeometry(coords={"distance": value}),
             ),
         ),
     )

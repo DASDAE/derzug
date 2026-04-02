@@ -194,6 +194,23 @@ class _FakeHost(QWidget):
         self.cursor_fields = fields
 
 
+def _point_coords(geometry) -> tuple[float, ...]:
+    return tuple(float(value) for value in geometry.coords.values())
+
+
+def _path_coords(geometry) -> tuple[tuple[float, ...], ...]:
+    return tuple(
+        tuple(float(value) for value in point.values()) for point in geometry.points
+    )
+
+
+def _box_corners(geometry) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    return (
+        tuple(float(bounds.min) for bounds in geometry.bounds.values()),
+        tuple(float(bounds.max) for bounds in geometry.bounds.values()),
+    )
+
+
 @pytest.fixture
 def overlay_host(qtbot):
     """Return a fake annotation host and live controller."""
@@ -628,7 +645,7 @@ def test_create_point_annotation_snaps_to_existing_annotation(overlay_host):
 
     created = controller.annotation_by_id(controller.active_annotation_id)
     assert created is not None
-    assert created.geometry.values == pytest.approx((2.0, 12.0))
+    assert _point_coords(created.geometry) == pytest.approx((2.0, 12.0))
 
 
 def test_handle_scene_event_ignores_non_left_button(overlay_host):
@@ -722,7 +739,7 @@ def test_user_places_a_point_on_an_existing_line_endpoint(overlay_host):
 
     annotation = controller.annotation_by_id(controller.active_annotation_id)
     assert annotation is not None
-    assert annotation.geometry.values == pytest.approx((2.0, 12.0))
+    assert _point_coords(annotation.geometry) == pytest.approx((2.0, 12.0))
 
 
 def test_user_moves_a_point_onto_an_existing_box_corner(overlay_host):
@@ -743,7 +760,7 @@ def test_user_moves_a_point_onto_an_existing_box_corner(overlay_host):
 
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
-    assert annotation.geometry.values == pytest.approx((2.0, 12.0))
+    assert _point_coords(annotation.geometry) == pytest.approx((2.0, 12.0))
 
 
 def test_user_draws_a_line_to_an_existing_point_pick(overlay_host):
@@ -765,8 +782,8 @@ def test_user_draws_a_line_to_an_existing_point_pick(overlay_host):
 
     annotation = controller.annotation_by_id(controller.active_annotation_id)
     assert annotation is not None
-    assert annotation.geometry.points[0] == pytest.approx((0.0, 10.0))
-    assert annotation.geometry.points[1] == pytest.approx((2.0, 12.0))
+    assert _path_coords(annotation.geometry)[0] == pytest.approx((0.0, 10.0))
+    assert _path_coords(annotation.geometry)[1] == pytest.approx((2.0, 12.0))
 
 
 def test_user_adjusts_a_line_endpoint_to_a_box_corner(overlay_host):
@@ -786,8 +803,8 @@ def test_user_adjusts_a_line_endpoint_to_a_box_corner(overlay_host):
 
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
-    assert annotation.geometry.points[0] == pytest.approx((0.0, 11.0))
-    assert annotation.geometry.points[1] == pytest.approx((2.0, 12.0))
+    assert _path_coords(annotation.geometry)[0] == pytest.approx((0.0, 11.0))
+    assert _path_coords(annotation.geometry)[1] == pytest.approx((2.0, 12.0))
 
 
 def test_user_draws_a_box_to_a_line_endpoint(overlay_host):
@@ -814,8 +831,8 @@ def test_user_draws_a_box_to_a_line_endpoint(overlay_host):
     annotation = controller.annotation_by_id(controller.active_annotation_id)
     assert annotation is not None
     assert isinstance(annotation.geometry, BoxGeometry)
-    assert annotation.geometry.min_corner == pytest.approx((0.0, 10.0))
-    assert annotation.geometry.max_corner == pytest.approx((2.0, 12.0))
+    assert _box_corners(annotation.geometry)[0] == pytest.approx((0.0, 10.0))
+    assert _box_corners(annotation.geometry)[1] == pytest.approx((2.0, 12.0))
 
 
 def test_user_resizes_a_box_corner_to_an_existing_point_pick(overlay_host):
@@ -837,8 +854,8 @@ def test_user_resizes_a_box_corner_to_an_existing_point_pick(overlay_host):
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
     assert isinstance(annotation.geometry, BoxGeometry)
-    assert annotation.geometry.min_corner == pytest.approx((0.0, 10.0))
-    assert annotation.geometry.max_corner == pytest.approx((2.0, 12.0))
+    assert _box_corners(annotation.geometry)[0] == pytest.approx((0.0, 10.0))
+    assert _box_corners(annotation.geometry)[1] == pytest.approx((2.0, 12.0))
 
 
 def test_line_tool_double_click_anchors_then_single_click_creates_annotation(
@@ -911,8 +928,8 @@ def test_line_tool_anchor_preview_and_commit_snap_to_existing_point(overlay_host
 
     annotation = controller.annotation_by_id(controller.active_annotation_id)
     assert annotation is not None
-    assert annotation.geometry.points[0] == pytest.approx((1.0, 11.0))
-    assert annotation.geometry.points[1] == pytest.approx((2.0, 12.0))
+    assert _path_coords(annotation.geometry)[0] == pytest.approx((1.0, 11.0))
+    assert _path_coords(annotation.geometry)[1] == pytest.approx((2.0, 12.0))
 
 
 def test_line_tool_single_click_without_anchor_does_not_create_annotation(overlay_host):
@@ -1022,7 +1039,7 @@ def test_hyperbola_tool_requires_double_click_to_create_annotation(overlay_host)
     assert "u = " in annotation.properties["hyperbola_equation"]
     assert "sqrt(1 + (v/" in annotation.properties["hyperbola_equation"]
     assert double_click.accepted is True
-    ys = [float(point[1]) for point in annotation.geometry.points]
+    ys = [float(point["time"]) for point in annotation.geometry.points]
     vertex_y = float(annotation.properties["fit_parameters"]["vertex_y"])
     assert min(ys) < vertex_y < max(ys)
 
@@ -1089,8 +1106,12 @@ def test_multi_point_paths_render_as_display_items(overlay_host):
                 Annotation(
                     id="curve-1",
                     geometry=PathGeometry(
-                        dims=("distance", "time"),
-                        points=((0.5, 10.5), (1.0, 11.0), (1.5, 11.5), (2.0, 12.0)),
+                        points=(
+                            {"distance": 0.5, "time": 10.5},
+                            {"distance": 1.0, "time": 11.0},
+                            {"distance": 1.5, "time": 11.5},
+                            {"distance": 2.0, "time": 12.0},
+                        ),
                     ),
                     semantic_type="hyperbola",
                 ),
@@ -1176,8 +1197,9 @@ def test_fit_shape_from_selection_creates_square_from_selected_points(overlay_ho
     assert square.properties["fit_model"] == "square"
     assert square.properties["square_source"] == "fit"
     assert set(square.properties["derived_from"]) == source_ids
-    width = float(square.geometry.max_corner[0]) - float(square.geometry.min_corner[0])
-    height = float(square.geometry.max_corner[1]) - float(square.geometry.min_corner[1])
+    min_corner, max_corner = _box_corners(square.geometry)
+    width = float(max_corner[0]) - float(min_corner[0])
+    height = float(max_corner[1]) - float(min_corner[1])
     assert width == pytest.approx(height)
 
 
@@ -1369,8 +1391,11 @@ def test_rebuild_items_renders_multi_point_path_geometry(overlay_host):
                 Annotation(
                     id="path-3",
                     geometry=PathGeometry(
-                        dims=("distance", "time"),
-                        points=((0.0, 10.0), (1.0, 11.0), (2.0, 12.0)),
+                        points=(
+                            {"distance": 0.0, "time": 10.0},
+                            {"distance": 1.0, "time": 11.0},
+                            {"distance": 2.0, "time": 12.0},
+                        ),
                     ),
                 ),
             )
@@ -1759,8 +1784,8 @@ def test_active_box_persists_axis_aligned_geometry_after_edit(overlay_host):
 
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation.geometry.type == "box"
-    assert annotation.geometry.min_corner == pytest.approx((1.5, 11.5))
-    assert annotation.geometry.max_corner == pytest.approx((3.5, 12.0))
+    assert _box_corners(annotation.geometry)[0] == pytest.approx((1.5, 11.5))
+    assert _box_corners(annotation.geometry)[1] == pytest.approx((3.5, 12.0))
     assert annotation.properties["rotation_angle"] == pytest.approx(0.0)
 
 
@@ -1810,8 +1835,8 @@ def test_ctrl_drag_translates_box_roi_in_both_axes(overlay_host):
 
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
-    assert annotation.geometry.min_corner[0] > before[0]
-    assert annotation.geometry.min_corner[1] > before[1]
+    assert _box_corners(annotation.geometry)[0][0] > before[0]
+    assert _box_corners(annotation.geometry)[0][1] > before[1]
 
 
 def test_moving_point_snaps_to_existing_annotation_anchor(overlay_host):
@@ -1831,7 +1856,7 @@ def test_moving_point_snaps_to_existing_annotation_anchor(overlay_host):
 
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
-    assert annotation.geometry.values == pytest.approx((2.0, 12.0))
+    assert _point_coords(annotation.geometry) == pytest.approx((2.0, 12.0))
 
 
 def test_moving_point_previews_snap_live_and_unsnaps_when_moved_away(overlay_host):
@@ -1879,7 +1904,7 @@ def test_moving_point_does_not_snap_to_itself(overlay_host):
 
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
-    assert annotation.geometry.values == pytest.approx((1.04, 11.04))
+    assert _point_coords(annotation.geometry) == pytest.approx((1.04, 11.04))
 
 
 def test_line_endpoint_edit_snaps_to_existing_annotation_anchor(overlay_host):
@@ -1898,8 +1923,8 @@ def test_line_endpoint_edit_snaps_to_existing_annotation_anchor(overlay_host):
 
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
-    assert annotation.geometry.points[0] == pytest.approx((0.0, 10.0))
-    assert annotation.geometry.points[1] == pytest.approx((2.0, 12.0))
+    assert _path_coords(annotation.geometry)[0] == pytest.approx((0.0, 10.0))
+    assert _path_coords(annotation.geometry)[1] == pytest.approx((2.0, 12.0))
 
 
 def test_line_endpoint_previews_snap_live_and_unsnaps_when_moved_away(overlay_host):
@@ -1941,8 +1966,8 @@ def test_translating_line_body_persists_translated_endpoints(overlay_host):
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
     assert annotation.geometry.type == "path"
-    assert annotation.geometry.points[0] == pytest.approx((1.5, 10.5))
-    assert annotation.geometry.points[1] == pytest.approx((2.5, 11.5))
+    assert _path_coords(annotation.geometry)[0] == pytest.approx((1.5, 10.5))
+    assert _path_coords(annotation.geometry)[1] == pytest.approx((2.5, 11.5))
 
     controller.rebuild_items()
 
@@ -1969,8 +1994,8 @@ def test_translating_line_body_does_not_snap_when_enabled(overlay_host):
 
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
-    assert annotation.geometry.points[0] == pytest.approx((2.03, 12.03))
-    assert annotation.geometry.points[1] == pytest.approx((3.03, 13.03))
+    assert _path_coords(annotation.geometry)[0] == pytest.approx((2.03, 12.03))
+    assert _path_coords(annotation.geometry)[1] == pytest.approx((3.03, 13.03))
 
 
 def test_box_corner_edit_snaps_to_existing_annotation_anchor(overlay_host):
@@ -1991,8 +2016,8 @@ def test_box_corner_edit_snaps_to_existing_annotation_anchor(overlay_host):
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
     assert isinstance(annotation.geometry, BoxGeometry)
-    assert annotation.geometry.min_corner == pytest.approx((0.0, 10.0))
-    assert annotation.geometry.max_corner == pytest.approx((2.0, 12.0))
+    assert _box_corners(annotation.geometry)[0] == pytest.approx((0.0, 10.0))
+    assert _box_corners(annotation.geometry)[1] == pytest.approx((2.0, 12.0))
 
 
 def test_box_corner_previews_snap_live_and_unsnaps_when_moved_away(overlay_host):
@@ -2040,8 +2065,8 @@ def test_translating_box_body_does_not_snap_when_enabled(overlay_host):
     annotation = controller.annotation_by_id(annotation_id)
     assert annotation is not None
     assert isinstance(annotation.geometry, BoxGeometry)
-    assert annotation.geometry.min_corner == pytest.approx((2.04, 12.04))
-    assert annotation.geometry.max_corner == pytest.approx((3.04, 13.04))
+    assert _box_corners(annotation.geometry)[0] == pytest.approx((2.04, 12.04))
+    assert _box_corners(annotation.geometry)[1] == pytest.approx((3.04, 13.04))
 
 
 def test_passive_point_item_uses_larger_hit_area_than_visible_dot():

@@ -27,6 +27,7 @@ htmlcov/
 
 # Agents
 .claude
+.codex
 
 # Local CI helpers
 .tools/

@@ -34,7 +34,7 @@ def _point_set() -> AnnotationSet:
         annotations=(
             Annotation(
                 id="p1",
-                geometry=PointGeometry(dims=("time", "distance"), values=(1.0, 10.0)),
+                geometry=PointGeometry(coords={"time": 1.0, "distance": 10.0}),
                 semantic_type="arrival",
                 notes="first",
                 tags=("manual",),
@@ -44,12 +44,12 @@ def _point_set() -> AnnotationSet:
             ),
             Annotation(
                 id="p2",
-                geometry=PointGeometry(dims=("time",), values=(2.0,)),
+                geometry=PointGeometry(coords={"time": 2.0}),
                 tags=("arrival", "auto"),
             ),
             Annotation(
                 id="p3",
-                geometry=PointGeometry(dims=("time", "distance"), values=(3.0, 30.0)),
+                geometry=PointGeometry(coords={"time": 3.0, "distance": 30.0}),
             ),
             Annotation(
                 id="s1",

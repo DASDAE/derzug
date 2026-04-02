@@ -13,7 +13,7 @@ from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.models.annotations import AnnotationSet
+from derzug.models.annotations import AnnotationSet, PointGeometry
 from derzug.orange import Setting
 from derzug.utils.annotation_metadata import annotation_metadata_row
 from derzug.workflow import Task
@@ -34,10 +34,12 @@ class AnnotationSetToDataFrameTask(Task):
             if ann.geometry.type != "point":
                 continue
             geom = ann.geometry
+            if not isinstance(geom, PointGeometry):
+                continue
             dim_vals = {d: None for d in set_dims}
-            for d, v in zip(geom.dims, geom.values):
-                if d in dim_vals:
-                    dim_vals[d] = v
+            for dim, value in geom.coords.items():
+                if dim in dim_vals:
+                    dim_vals[dim] = value
             row = {
                 **dim_vals,
                 "id": ann.id,

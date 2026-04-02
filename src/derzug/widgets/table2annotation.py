@@ -62,14 +62,14 @@ def _make_table_geometry(
 ):
     """Return one geometry for a DataFrame row."""
     if geometry_type == _GEOM_DOT:
-        values = []
+        coords = {}
         for dim in dims:
             col = col_map[dim]
             val = row[col]
             if _is_missing(val):
                 raise ValueError(f"NaN in column '{col}'")
-            values.append(val)
-        return PointGeometry(dims=dims, values=tuple(values))
+            coords[dim] = val
+        return PointGeometry(coords=coords)
 
     dim = line_axis_dim
     col = col_map[dim]
