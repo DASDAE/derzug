@@ -6,13 +6,21 @@ name: Interactive Demo (noVNC)
 # Cancel the workflow run to end the session early.
 on:
   pull_request:
-    types: [labeled]
+    types: [labeled, synchronize]
   workflow_dispatch:
     inputs:
       timeout_minutes:
         description: "Session timeout in minutes (max 350)"
         default: "30"
         required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: manual-demo-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   demo:
@@ -21,7 +29,10 @@ jobs:
     timeout-minutes: 355
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.label.name == 'demo')
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'demo')
+      )
 
     env:
       DISPLAY: ":99"
@@ -89,6 +100,7 @@ jobs:
             exit 1
           fi
           echo "CF_BASE_URL=$BASE_URL" >> "$GITHUB_ENV"
+          echo "DEMO_URL=$BASE_URL/vnc.html?autoconnect=true" >> "$GITHUB_ENV"
 
       - name: Launch DerZug
         shell: bash -el {0}
@@ -98,14 +110,14 @@ jobs:
 
       - name: Print session URL
         run: |
-          echo "Session URL: $CF_BASE_URL/vnc.html?autoconnect=true"
+          echo "Session URL: $DEMO_URL"
           echo ""
           echo "╔══════════════════════════════════════════════════════════════╗"
           echo "║            DerZug Interactive Demo Session                  ║"
           echo "╠══════════════════════════════════════════════════════════════╣"
           echo "║  Open this URL in your browser:                              ║"
           echo "║                                                              ║"
-          echo "║  $CF_BASE_URL/vnc.html?autoconnect=true"
+          echo "║  $DEMO_URL"
           echo "║                                                              ║"
           echo "║  Resolution : 1920 × 1080                                   ║"
           echo "║  Password   : use the MANUAL_DEMO_PASSWORD repo secret      ║"
@@ -113,6 +125,31 @@ jobs:
           echo "║  Ends in    : ${TIMEOUT_MINS:-30} minutes (or cancel this run)               ║"
           echo "╚══════════════════════════════════════════════════════════════╝"
           echo ""
+
+      - name: Find PR demo comment
+        if: github.event_name == 'pull_request'
+        id: find_demo_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: "<!-- derzug-interactive-demo -->"
+
+      - name: Create or update PR demo comment
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_demo_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body: |
+            <!-- derzug-interactive-demo -->
+            ✅ Interactive demo ready
+
+            👉 [Open demo](${{ env.DEMO_URL }})
+
+            Password: use the `MANUAL_DEMO_PASSWORD` repository secret.
+            Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Keep session alive
         run: |
