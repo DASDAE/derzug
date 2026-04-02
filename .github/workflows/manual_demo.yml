@@ -78,7 +78,7 @@ jobs:
         run: |
           ./cloudflared tunnel --url http://localhost:6080 > /tmp/cf.log 2>&1 &
           # Wait up to 30 s for the public URL to appear
-          for i in $(seq 1 15); do
+          for _ in $(seq 1 15); do
             BASE_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cf.log | head -1)
             [ -n "$BASE_URL" ] && break
             sleep 2
@@ -119,7 +119,7 @@ jobs:
           TIMEOUT_MINS="${{ github.event.inputs.timeout_minutes }}"
           TIMEOUT_SECS=$(( ${TIMEOUT_MINS:-30} * 60 ))
           END=$(( $(date +%s) + TIMEOUT_SECS ))
-          while [ $(date +%s) -lt $END ]; do
+          while [ "$(date +%s)" -lt "$END" ]; do
             REMAINING=$(( (END - $(date +%s)) / 60 ))
             echo "Session active — ${REMAINING} minute(s) remaining. Cancel workflow to end early."
             sleep 60

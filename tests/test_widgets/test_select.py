@@ -210,10 +210,10 @@ class TestSelect:
             200.0,
         )
 
-    def test_deferred_saved_relative_selection_reconciles_after_patch_input(
+    def test_reconcile_saved_relative_selection_is_noop_after_setting_assignment(
         self, select_widget
     ):
-        """Saved relative settings should restore even if they arrive late."""
+        """Explicit reconcile is a noop after setting assignment applied state."""
         patch = dc.get_example_patch("example_event_2")
         payload = {
             "basis": "relative",
@@ -233,14 +233,14 @@ class TestSelect:
 
         changed = select_widget._reconcile_saved_patch_selection_state()
 
-        assert changed is True
+        assert changed is False
         assert select_widget._selection_patch_basis == "relative"
         assert select_widget._selection_current_patch_range("distance") == (
             100.0,
             200.0,
         )
 
-    def test_deferred_saved_selection_reruns_selected_patch(
+    def test_saved_setting_assignment_reruns_selected_patch(
         self, select_widget, monkeypatch
     ):
         """Late saved selection restoration should rerun the narrowed patch."""
@@ -262,10 +262,6 @@ class TestSelect:
         select_widget.saved_selection_basis = payload["basis"]
         select_widget.saved_selection_ranges = payload["rows"]
 
-        select_widget._apply_deferred_saved_patch_selection_reconcile(
-            select_widget._saved_patch_restore_generation
-        )
-
         assert len(received) >= 2
         expected = select_widget.get_task().run(
             patch=patch,
@@ -274,10 +270,10 @@ class TestSelect:
         )["patch"]
         assert received[-1] == expected
 
-    def test_deferred_saved_selection_reconcile_is_noop_when_already_applied(
+    def test_reapplying_identical_saved_settings_is_noop_once_state_is_live(
         self, select_widget, monkeypatch
     ):
-        """The deferred restore pass should not rerun once state is live."""
+        """Identical restored settings should not rerun once state is already live."""
         patch = dc.get_example_patch("example_event_2")
         payload = {
             "basis": "relative",
@@ -301,11 +297,41 @@ class TestSelect:
         select_widget.set_patch(patch)
         emitted.clear()
 
-        select_widget._apply_deferred_saved_patch_selection_reconcile(
-            select_widget._saved_patch_restore_generation
-        )
+        select_widget.saved_selection_basis = payload["basis"]
+        select_widget.saved_selection_ranges = payload["rows"]
 
         assert not emitted
+
+    def test_saved_setting_assignment_recovers_late_relative_selection(
+        self, select_widget, monkeypatch, qtbot
+    ):
+        """Restored setting assignment should immediately reapply staged patch state."""
+        patch = dc.get_example_patch("example_event_2")
+        payload = {
+            "basis": "relative",
+            "rows": [
+                {
+                    "dim": "distance",
+                    "enabled": True,
+                    "low": {"kind": "float", "value": 100.0},
+                    "high": {"kind": "float", "value": 200.0},
+                }
+            ],
+        }
+        received = capture_output(select_widget.Outputs.patch, monkeypatch)
+
+        select_widget.set_patch(patch)
+        received_before = len(received)
+
+        select_widget.saved_selection_basis = payload["basis"]
+        select_widget.saved_selection_ranges = payload["rows"]
+        qtbot.waitUntil(lambda: len(received) > received_before, timeout=1000)
+
+        assert select_widget._selection_patch_basis == "relative"
+        assert select_widget._selection_current_patch_range("distance") == (
+            100.0,
+            200.0,
+        )
 
     def test_get_task_matches_patch_output(self, select_widget, monkeypatch):
         """Patch-mode output should match executing the canonical selection task."""
