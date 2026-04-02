@@ -9,6 +9,7 @@ In practice this means:
 
 - A widget directly holds its state as instance attributes.
 - Input handlers receive data, update state, and trigger a re-render.
+
 - Output signals are sent directly from wherever the selection changes.
 - Error/warning reporting uses Orange's built-in `Error` and `Warning` message classes.
 
