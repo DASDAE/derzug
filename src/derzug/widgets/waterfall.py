@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 import dascore as dc
 import numpy as np
 import pyqtgraph as pg
-from AnyQt.QtCore import QRectF, Qt, QTimer
+from AnyQt.QtCore import QRectF, Qt, QTimer, Signal
 from AnyQt.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPalette
 from AnyQt.QtWidgets import (
     QAction,
@@ -133,6 +133,22 @@ class _CoordSlider(QSlider):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
             painter.end()
+
+
+class _StepButton(QToolButton):
+    """QToolButton whose commit_step signal fires only on physical mouse release.
+
+    Qt's autoRepeat fires released() on every repeat interval, making it
+    unsuitable for "render once on button-up". Overriding mouseReleaseEvent
+    gives the physical-only event needed to commit a single render.
+    """
+
+    commit_step = Signal()
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.commit_step.emit()
 
 
 @contextmanager
@@ -785,8 +801,33 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             slider = _CoordSlider(coord_values, Qt.Orientation.Horizontal, row)
             slider.setRange(0, n - 1)
             slider.setValue(idx)
+
+            _btn_style = "border: none; background: transparent;"
+            btn_prev = _StepButton(row)
+            btn_prev.setText("◀")
+            btn_prev.setStyleSheet(_btn_style)
+            btn_prev.setAutoRepeat(True)
+            btn_prev.setAutoRepeatDelay(400)
+            btn_prev.setAutoRepeatInterval(80)
+            btn_prev.setToolTip(f"Step {dim} back one index (hold to advance)")
+
+            btn_next = _StepButton(row)
+            btn_next.setText("▶")
+            btn_next.setStyleSheet(_btn_style)
+            btn_next.setAutoRepeat(True)
+            btn_next.setAutoRepeatDelay(400)
+            btn_next.setAutoRepeatInterval(80)
+            btn_next.setToolTip(f"Step {dim} forward one index (hold to advance)")
+
+            slider.setToolTip(
+                f"Drag to select a {dim} index\n"
+                f"Scroll wheel or arrow keys also work"
+            )
+
             row_layout.addWidget(label)
+            row_layout.addWidget(btn_prev)
             row_layout.addWidget(slider, 1)
+            row_layout.addWidget(btn_next)
             strip_layout.addWidget(row)
 
             def _on_drag(value, d=dim, s=slider):
@@ -805,6 +846,20 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
                 self._update_axis_state_from_patch(self._patch)
                 self._pending_view_range = self._get_view_range()
                 self._request_ui_refresh()
+
+            # clicked fires on every auto-repeat tick — only update slider position,
+            # suppress signals so _on_drag does not trigger a render mid-hold
+            def _btn_step(delta, s=slider):
+                s.blockSignals(True)
+                s.setValue(s.value() + delta)
+                s.blockSignals(False)
+                s.update()
+
+            btn_prev.clicked.connect(lambda checked=False: _btn_step(-1))
+            btn_next.clicked.connect(lambda checked=False: _btn_step(1))
+            # commit_step fires only on physical mouse release, not auto-repeat ticks
+            btn_prev.commit_step.connect(_on_release)
+            btn_next.commit_step.connect(_on_release)
 
             slider.valueChanged.connect(_on_drag)
             slider.sliderReleased.connect(_on_release)

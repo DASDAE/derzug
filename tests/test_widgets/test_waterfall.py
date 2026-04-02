@@ -4466,6 +4466,43 @@ class TestWaterfallSliceDims:
         )
         assert controller._annotation_matches_slice(legacy_ann)
 
+    def test_step_button_renders_only_on_mouse_release(
+        self, waterfall_widget, monkeypatch
+    ):
+        """Step buttons must not trigger a render on each auto-repeat tick.
+
+        Qt's autoRepeat fires released() at every interval, making it wrong
+        to connect _on_release to released(). Only mouseReleaseEvent (physical
+        mouse-up) should trigger the render.
+        """
+        from AnyQt.QtWidgets import QToolButton
+
+        waterfall_widget.set_patch(_make_3d_patch(5))
+
+        render_calls: list = []
+        monkeypatch.setattr(
+            waterfall_widget, "_request_ui_refresh", lambda: render_calls.append(1)
+        )
+
+        slider = waterfall_widget._slice_sliders["shot"]
+        btns = slider.parentWidget().findChildren(QToolButton)
+        assert len(btns) == 2, "expected ◀ and ▶ step buttons flanking the slider"
+        btn_next = btns[1]
+
+        # Simulate auto-repeat: Qt fires clicked+released on every interval while held
+        for _ in range(3):
+            btn_next.clicked.emit(False)
+            btn_next.released.emit()
+
+        assert (
+            len(render_calls) == 0
+        ), "render fired during auto-repeat; should only fire on mouse release"
+
+        # Physical mouse release → exactly one render
+        QTest.mousePress(btn_next, Qt.MouseButton.LeftButton)
+        QTest.mouseRelease(btn_next, Qt.MouseButton.LeftButton)
+        assert len(render_calls) == 1
+
 
 class TestFormatCoordValue:
     """Unit tests for the _format_coord_value helper."""
