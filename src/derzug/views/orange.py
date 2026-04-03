@@ -5,6 +5,7 @@ Custom modifications to Orange for DerZug.
 from __future__ import annotations
 
 import io
+import math
 import os
 import re
 import shutil
@@ -25,16 +26,32 @@ from xml.sax.saxutils import escape
 # Must run before AnyQt imports on macOS.
 import derzug._anyqt_patch  # noqa: F401
 from AnyQt import _api as anyqt_api
-from AnyQt.QtCore import QDir, QEvent, QObject, QPointF, Qt, QTimer, QUrl
+from AnyQt.QtCore import (
+    QDir,
+    QEvent,
+    QLineF,
+    QObject,
+    QPointF,
+    QSignalBlocker,
+    Qt,
+    QTimer,
+    QUrl,
+)
 from AnyQt.QtGui import (
     QBrush,
     QColor,
+    QCursor,
     QDesktopServices,
     QIcon,
+    QFont,
+    QKeySequence,
     QOffscreenSurface,
     QOpenGLContext,
     QPen,
     QPixmap,
+    QTextCharFormat,
+    QTextCursor,
+    QTextBlockFormat,
 )
 from AnyQt.QtWidgets import (
     QAbstractItemView,
@@ -45,8 +62,10 @@ from AnyQt.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QGraphicsItem,
     QGraphicsRectItem,
     QGraphicsView,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
@@ -63,9 +82,18 @@ from Orange.canvas.__main__ import OMain
 from Orange.canvas.config import Config as OrangeConfig
 from Orange.canvas.mainwindow import MainWindow as OrangeMainWindow
 from orangecanvas.application.outputview import ExceptHook
+from orangecanvas.canvas import scene as orange_canvas_scene
+from orangecanvas.canvas.items import controlpoints as orange_controlpoints
 from orangecanvas.canvas.items.nodeitem import NodeItem
+from orangecanvas.document import commands as orange_commands
+from orangecanvas.document import interactions as orange_interactions
+from orangecanvas.document import schemeedit as orange_schemeedit
 from orangecanvas.gui.windowlistmanager import WindowListManager
-from orangecanvas.scheme import readwrite
+from orangecanvas.scheme import (
+    SchemeArrowAnnotation,
+    SchemeTextAnnotation,
+    readwrite,
+)
 from orangecanvas.utils.settings import QSettings
 from orangewidget.workflow.errorreporting import (
     handle_exception as orange_handle_exception,
@@ -120,6 +148,1505 @@ _APP_ACTIVE_SOURCE_MANAGER = None
 _APP_ACTIVE_SOURCE_MAIN_WINDOW = None
 _EXPERIMENTAL_WARNING_GROUP = "startup"
 _EXPERIMENTAL_WARNING_HIDE_KEY = "hide-experimental-warning"
+_CODE_WARNING_GROUP = "load"
+_CODE_WARNING_HIDE_KEY = "hide-code-widget-warning"
+_CODE_WIDGET_QUALIFIED_NAME = "derzug.widgets.code.Code"
+_CANVAS_ARROW_COLORS = ("#000", "#C1272D", "#662D91", "#1F9CDF", "#39B54A")
+_CANVAS_TEXT_SIZES = ("10", "11", "12", "14", "16", "18", "20", "22", "24", "28", "32")
+_CANVAS_TEXT_FONTS = (
+    "Arial",
+    "Helvetica",
+    "Times New Roman",
+    "Georgia",
+    "Courier New",
+    "Verdana",
+)
+_ORIGINAL_CANVAS_FONT_FROM_DICT = orange_canvas_scene.font_from_dict
+_CANVAS_TEXT_ALIGNMENTS = ("Left", "Center", "Right")
+
+
+def _copy_scheme_annotation(annotation):
+    """Return a detached copy of one canvas annotation."""
+    if isinstance(annotation, SchemeTextAnnotation):
+        return SchemeTextAnnotation(
+            annotation.rect,
+            annotation.content,
+            annotation.content_type,
+            font=deepcopy(annotation.font),
+        )
+    if isinstance(annotation, SchemeArrowAnnotation):
+        return SchemeArrowAnnotation(
+            annotation.start_pos,
+            annotation.end_pos,
+            color=annotation.color,
+        )
+    raise TypeError(f"unsupported annotation type {type(annotation)!r}")
+
+
+def _font_to_style_dict(font: QFont) -> dict[str, object]:
+    """Serialize one QFont into the canvas text annotation font payload."""
+    return {
+        "family": font.family(),
+        "size": font.pixelSize(),
+        "weight": int(font.weight()),
+        "italic": bool(font.italic()),
+        "underline": bool(font.underline()),
+    }
+
+
+def _alignment_name_to_flag(name: str | None) -> Qt.AlignmentFlag:
+    """Convert one persisted alignment name into a Qt alignment flag."""
+    return {
+        "center": Qt.AlignmentFlag.AlignHCenter,
+        "right": Qt.AlignmentFlag.AlignRight,
+    }.get(str(name or "left").lower(), Qt.AlignmentFlag.AlignLeft)
+
+
+def _alignment_flag_to_name(flag: Qt.AlignmentFlag) -> str:
+    """Convert one Qt alignment flag into the persisted alignment name."""
+    if flag & Qt.AlignmentFlag.AlignRight:
+        return "right"
+    if flag & Qt.AlignmentFlag.AlignHCenter:
+        return "center"
+    return "left"
+
+
+def _font_from_style_dict(
+    font_dict: dict[str, object], font: QFont | None = None
+) -> QFont:
+    """Build a QFont from the canvas text annotation font payload."""
+    base = _ORIGINAL_CANVAS_FONT_FROM_DICT({}, font)
+    if "family" in font_dict:
+        base.setFamily(str(font_dict["family"]))
+    if "size" in font_dict:
+        base.setPixelSize(int(font_dict["size"]))
+    if "weight" in font_dict:
+        base.setWeight(int(font_dict["weight"]))
+    if "italic" in font_dict:
+        base.setItalic(bool(font_dict["italic"]))
+    if "underline" in font_dict:
+        base.setUnderline(bool(font_dict["underline"]))
+    return base
+
+
+def _merge_font_property(
+    font_dict: dict[str, object], name: str, value: object
+) -> dict[str, object]:
+    """Return one updated annotation font dict while preserving unspecified fields."""
+    merged = dict(font_dict)
+    merged[name] = value
+    return merged
+
+
+def _annotation_top_left(annotation) -> QPointF:
+    """Return the top-left anchor used for annotation paste offsets."""
+    if isinstance(annotation, SchemeTextAnnotation):
+        x, y, _, _ = annotation.rect
+        return QPointF(x, y)
+    if isinstance(annotation, SchemeArrowAnnotation):
+        (x1, y1), (x2, y2) = annotation.geometry
+        return QPointF(min(x1, x2), min(y1, y2))
+    raise TypeError(f"unsupported annotation type {type(annotation)!r}")
+
+
+def _translate_annotation(annotation, delta: QPointF):
+    """Translate one detached annotation copy by the requested scene delta."""
+    dx = delta.x()
+    dy = delta.y()
+    if isinstance(annotation, SchemeTextAnnotation):
+        x, y, width, height = annotation.rect
+        annotation.set_rect((x + dx, y + dy, width, height))
+        return
+    if isinstance(annotation, SchemeArrowAnnotation):
+        (x1, y1), (x2, y2) = annotation.geometry
+        annotation.set_line((x1 + dx, y1 + dy), (x2 + dx, y2 + dy))
+        return
+    raise TypeError(f"unsupported annotation type {type(annotation)!r}")
+
+
+def _snap_arrow_endpoint_to_octilinear(moving: QPointF, fixed: QPointF) -> QPointF:
+    """Snap one arrow endpoint to the nearest 45-degree direction."""
+    dx = moving.x() - fixed.x()
+    dy = moving.y() - fixed.y()
+    if dx == 0 and dy == 0:
+        return QPointF(moving)
+    angle = math.atan2(dy, dx)
+    snapped_angle = round(angle / (math.pi / 4.0)) * (math.pi / 4.0)
+    length = math.hypot(dx, dy)
+    return QPointF(
+        fixed.x() + (math.cos(snapped_angle) * length),
+        fixed.y() + (math.sin(snapped_angle) * length),
+    )
+
+
+def _snap_arrow_line_to_octilinear(start: QPointF, end: QPointF) -> QLineF:
+    """Return one snapped arrow line preserving the dragged length."""
+    return QLineF(start, _snap_arrow_endpoint_to_octilinear(end, start))
+
+
+def _axis_locked_position(item, value):
+    """Return one item position constrained to a single axis while Shift is held."""
+    if QApplication.keyboardModifiers() != Qt.ShiftModifier:
+        setattr(item, "_derzug_axis_lock_origin", None)
+        setattr(item, "_derzug_axis_lock_axis", None)
+        return value
+
+    pos = QPointF(value)
+    origin = getattr(item, "_derzug_axis_lock_origin", None)
+    axis = getattr(item, "_derzug_axis_lock_axis", None)
+    if origin is None:
+        origin = QPointF(item.pos())
+        setattr(item, "_derzug_axis_lock_origin", origin)
+    if axis is None:
+        delta = pos - origin
+        axis = "x" if abs(delta.x()) >= abs(delta.y()) else "y"
+        setattr(item, "_derzug_axis_lock_axis", axis)
+
+    if axis == "x":
+        return QPointF(pos.x(), origin.y())
+    return QPointF(origin.x(), pos.y())
+
+
+def _selection_top_left(nodes, annotations) -> QPointF:
+    """Return one top-left anchor for a mixed node/annotation selection."""
+    points = [orange_schemeedit.nodes_top_left(nodes)] if nodes else []
+    points.extend(_annotation_top_left(annotation) for annotation in annotations)
+    if not points:
+        return QPointF(0, 0)
+    return QPointF(
+        min(point.x() for point in points), min(point.y() for point in points)
+    )
+
+
+def _cursor_scene_paste_target(document) -> QPointF | None:
+    """Return a cursor-relative paste target over the canvas viewport."""
+    view = document.view()
+    viewport = view.viewport()
+    viewport_pos = viewport.mapFromGlobal(QCursor.pos())
+    if not viewport.rect().contains(viewport_pos):
+        return None
+    return view.mapToScene(viewport_pos)
+
+
+def _install_canvas_annotation_clipboard_support() -> None:
+    """Extend Orange canvas clipboard actions to include text and arrow annotations."""
+
+    def __copySelected(self):
+        """Return deep-copied selected nodes, links, and annotations."""
+        scheme = self.scheme()
+        if scheme is None:
+            return [], [], []
+
+        scheme.sync_node_properties()
+        nodes = self.selectedNodes()
+        links = [
+            link
+            for link in scheme.links
+            if link.source_node in nodes and link.sink_node in nodes
+        ]
+        annotations = self.selectedAnnotations()
+
+        nodedups = [orange_schemeedit.copy_node(node) for node in nodes]
+        node_to_dup = dict(zip(nodes, nodedups))
+        linkdups = [
+            orange_schemeedit.copy_link(
+                link,
+                source=node_to_dup[link.source_node],
+                sink=node_to_dup[link.sink_node],
+            )
+            for link in links
+        ]
+        annotationdups = [
+            _copy_scheme_annotation(annotation) for annotation in annotations
+        ]
+        return nodedups, linkdups, annotationdups
+
+    def __duplicateSelected(self):
+        """Duplicate currently selected nodes and annotations."""
+        nodedups, linkdups, annotationdups = self._SchemeEditWidget__copySelected()
+        if not nodedups and not annotationdups:
+            return
+
+        pos = _selection_top_left(nodedups, annotationdups)
+        self._SchemeEditWidget__paste(
+            nodedups,
+            linkdups,
+            annotationdups,
+            pos + orange_schemeedit.DuplicateOffset,
+            commandname=self.tr("Duplicate"),
+        )
+
+    def __copyToClipboard(self):
+        """Copy currently selected nodes and annotations to the system clipboard."""
+        cb = QApplication.clipboard()
+        nodedups, linkdups, annotationdups = self._SchemeEditWidget__copySelected()
+        if not nodedups and not annotationdups:
+            return
+        scheme = Scheme()
+        for node in nodedups:
+            scheme.add_node(node)
+        for link in linkdups:
+            scheme.add_link(link)
+        for annotation in annotationdups:
+            scheme.add_annotation(annotation)
+        buff = io.BytesIO()
+        try:
+            scheme.save_to(buff, pickle_fallback=True)
+        except Exception:
+            orange_schemeedit.log.error("copyToClipboard:", exc_info=True)
+            QApplication.beep()
+            return
+        mime = orange_schemeedit.QMimeData()
+        mime.setData(orange_schemeedit.MimeTypeWorkflowFragment, buff.getvalue())
+        cb.setMimeData(mime)
+        self._SchemeEditWidget__pasteOrigin = (
+            _selection_top_left(nodedups, annotationdups)
+            + orange_schemeedit.DuplicateOffset
+        )
+
+    def __pasteFromClipboard(self):
+        """Paste a workflow fragment, including annotations, from the clipboard."""
+        buff = orange_schemeedit.clipboard_data(
+            orange_schemeedit.MimeTypeWorkflowFragment
+        )
+        if buff is None:
+            return
+        scheme = Scheme()
+        try:
+            scheme.load_from(
+                io.BytesIO(buff), registry=self._SchemeEditWidget__registry
+            )
+        except Exception:
+            orange_schemeedit.log.error("pasteFromClipboard:", exc_info=True)
+            QApplication.beep()
+            return
+        paste_target = _cursor_scene_paste_target(self)
+        if paste_target is None:
+            paste_target = self._SchemeEditWidget__pasteOrigin
+        self._SchemeEditWidget__paste(
+            scheme.nodes,
+            scheme.links,
+            scheme.annotations,
+            paste_target,
+        )
+        self._SchemeEditWidget__pasteOrigin = (
+            paste_target + orange_schemeedit.DuplicateOffset
+        )
+
+    def __paste(
+        self, nodedups, linkdups, annotationdups=None, pos=None, commandname=None
+    ):
+        """Paste duplicated nodes, links, and annotations into the canvas."""
+        scheme = self.scheme()
+        if scheme is None:
+            return
+
+        annotationdups = list(annotationdups or [])
+        allnames = {node.title for node in scheme.nodes}
+
+        for nodedup in nodedups:
+            nodedup.title = orange_schemeedit.uniquify(
+                orange_schemeedit.remove_copy_number(nodedup.title),
+                allnames,
+                pattern="{item} ({_})",
+                start=1,
+            )
+            allnames.add(nodedup.title)
+
+        if pos is not None:
+            origin = _selection_top_left(nodedups, annotationdups)
+            delta = pos - origin
+            for nodedup in nodedups:
+                nodedup.position = (
+                    nodedup.position[0] + delta.x(),
+                    nodedup.position[1] + delta.y(),
+                )
+            for annotationdup in annotationdups:
+                _translate_annotation(annotationdup, delta)
+
+        if commandname is None:
+            commandname = self.tr("Paste")
+
+        command = orange_schemeedit.UndoCommand(commandname)
+        for nodedup in nodedups:
+            orange_commands.AddNodeCommand(scheme, nodedup, parent=command)
+        for linkdup in linkdups:
+            orange_commands.AddLinkCommand(scheme, linkdup, parent=command)
+        for annotationdup in annotationdups:
+            orange_commands.AddAnnotationCommand(scheme, annotationdup, parent=command)
+
+        statistics = self.usageStatistics()
+        statistics.begin_action(orange_schemeedit.UsageStatistics.Duplicate)
+        self._SchemeEditWidget__undoStack.push(command)
+        scene = self._SchemeEditWidget__scene
+
+        for item in self.scene().selectedItems():
+            item.setSelected(False)
+
+        for node in nodedups:
+            scene.item_for_node(node).setSelected(True)
+        for annotation in annotationdups:
+            scene.item_for_annotation(annotation).setSelected(True)
+
+    def __onSelectionChanged(self):
+        """Enable canvas actions for selected annotations as well as nodes."""
+        nodes = self.selectedNodes()
+        annotations = self.selectedAnnotations()
+        links = self.selectedLinks()
+
+        self._SchemeEditWidget__renameAction.setEnabled(len(nodes) == 1)
+        self._SchemeEditWidget__openSelectedAction.setEnabled(bool(nodes))
+        self._SchemeEditWidget__removeSelectedAction.setEnabled(
+            bool(nodes or annotations or links)
+        )
+
+        self._SchemeEditWidget__helpAction.setEnabled(len(nodes) == 1)
+        self._SchemeEditWidget__renameAction.setEnabled(len(nodes) == 1)
+        self._SchemeEditWidget__duplicateSelectedAction.setEnabled(
+            bool(nodes or annotations)
+        )
+        self._SchemeEditWidget__copySelectedAction.setEnabled(
+            bool(nodes or annotations)
+        )
+        cut_action = _action_by_object_name(self, "cut-action")
+        if cut_action is not None:
+            cut_action.setEnabled(bool(nodes or annotations))
+
+        if len(nodes) > 1:
+            self._SchemeEditWidget__openSelectedAction.setText(self.tr("Open All"))
+        else:
+            self._SchemeEditWidget__openSelectedAction.setText(self.tr("Open"))
+
+        if len(nodes) + len(annotations) + len(links) > 1:
+            self._SchemeEditWidget__removeSelectedAction.setText(self.tr("Remove All"))
+        else:
+            self._SchemeEditWidget__removeSelectedAction.setText(self.tr("Remove"))
+
+    orange_schemeedit.SchemeEditWidget._SchemeEditWidget__copySelected = __copySelected
+    orange_schemeedit.SchemeEditWidget._SchemeEditWidget__duplicateSelected = (
+        __duplicateSelected
+    )
+    orange_schemeedit.SchemeEditWidget._SchemeEditWidget__copyToClipboard = (
+        __copyToClipboard
+    )
+    orange_schemeedit.SchemeEditWidget._SchemeEditWidget__pasteFromClipboard = (
+        __pasteFromClipboard
+    )
+    orange_schemeedit.SchemeEditWidget._SchemeEditWidget__paste = __paste
+    orange_schemeedit.SchemeEditWidget._SchemeEditWidget__onSelectionChanged = (
+        __onSelectionChanged
+    )
+
+
+_install_canvas_annotation_clipboard_support()
+
+
+def _action_by_object_name(widget: QWidget, name: str) -> QAction | None:
+    """Return one direct action on a widget by object name."""
+    return next(
+        (action for action in widget.actions() if action.objectName() == name), None
+    )
+
+
+def _checked_arrow_color_action(document) -> QAction | None:
+    """Return the currently selected preferred new-arrow color action."""
+    if _qt_object_is_deleted(document):
+        return None
+    group = getattr(document, "_SchemeEditWidget__arrowColorActionGroup", None)
+    if group is None or _qt_object_is_deleted(group):
+        return None
+    with suppress(RuntimeError):
+        return group.checkedAction()
+    return None
+
+
+def _set_document_arrow_color(document, color: str) -> None:
+    """Set the preferred arrow color and update any active new-arrow interaction."""
+    group = getattr(document, "_SchemeEditWidget__arrowColorActionGroup", None)
+    if group is None:
+        return
+    target = next(
+        (
+            action
+            for action in group.actions()
+            if str(action.data()).lower() == color.lower()
+        ),
+        None,
+    )
+    if target is None:
+        return
+    target.setChecked(True)
+    handler = getattr(document.scene(), "user_interaction_handler", None)
+    if isinstance(handler, orange_interactions.NewArrowAnnotation):
+        handler.setColor(target.data())
+
+
+def _selected_arrow_annotations(document) -> list[SchemeArrowAnnotation]:
+    """Return selected canvas annotations filtered down to arrows."""
+    return [
+        annotation
+        for annotation in document.selectedAnnotations()
+        if isinstance(annotation, SchemeArrowAnnotation)
+    ]
+
+
+def _recolor_selected_arrows(document, color: str) -> None:
+    """Apply one color to all selected arrow annotations using the undo stack."""
+    arrows = [
+        annotation
+        for annotation in _selected_arrow_annotations(document)
+        if str(annotation.color).lower() != color.lower()
+    ]
+    if not arrows:
+        return
+    command = orange_schemeedit.UndoCommand(document.tr("Set arrow color"))
+    for arrow in arrows:
+        orange_commands.SetAttrCommand(
+            arrow,
+            "color",
+            color,
+            name=document.tr("Set arrow color"),
+            parent=command,
+        )
+    document.undoStack().push(command)
+
+
+def _selected_text_annotations(document) -> list[SchemeTextAnnotation]:
+    """Return selected canvas annotations filtered down to text."""
+    return [
+        annotation
+        for annotation in document.selectedAnnotations()
+        if isinstance(annotation, SchemeTextAnnotation)
+    ]
+
+
+def _selected_text_annotation_items(document) -> list[object]:
+    """Return selected scene items corresponding to selected text annotations."""
+    scene = document.scene()
+    return [
+        scene.item_for_annotation(annotation)
+        for annotation in _selected_text_annotations(document)
+    ]
+
+
+def _focused_text_annotation_item(document):
+    """Return the focused canvas text annotation item, if any."""
+    if _qt_object_is_deleted(document):
+        return None
+    with suppress(RuntimeError):
+        scene = document.scene()
+        if _qt_object_is_deleted(scene):
+            return None
+        item = scene.focusItem()
+    if "item" not in locals():
+        return None
+    text_item_type = orange_canvas_scene.items.TextAnnotation
+    while item is not None:
+        if isinstance(item, text_item_type):
+            return item
+        item = item.parentItem()
+    return None
+
+
+def _active_text_editor_item(document):
+    """Return the actively edited canvas text annotation item, if any."""
+    focused = _focused_text_annotation_item(document)
+    if focused is not None:
+        text_item = getattr(focused, "_TextAnnotation__textItem", None)
+        if text_item is not None and getattr(text_item, "isEditing", lambda: False)():
+            return focused
+    for item in _selected_text_annotation_items(document):
+        text_item = getattr(item, "_TextAnnotation__textItem", None)
+        if text_item is not None and getattr(text_item, "isEditing", lambda: False)():
+            return item
+    return None
+
+
+def _scene_has_selected_text_item(document) -> bool:
+    """Return True when the live scene selection contains one text annotation item."""
+    text_item_type = orange_canvas_scene.items.TextAnnotation
+    return any(
+        isinstance(item, text_item_type) for item in document.scene().selectedItems()
+    )
+
+
+def _preferred_text_font(document) -> QFont:
+    """Return the preferred font for newly created text annotations."""
+    current = getattr(document, "_derzug_preferred_text_font", None)
+    if isinstance(current, QFont):
+        return QFont(current)
+    checked = getattr(document, "_SchemeEditWidget__fontActionGroup", None)
+    checked_action = None if checked is None else checked.checkedAction()
+    if checked_action is not None:
+        font = QFont(checked_action.font())
+    else:
+        font = QFont(document.font())
+    setattr(document, "_derzug_preferred_text_font", QFont(font))
+    return font
+
+
+def _set_preferred_text_font(document, font: QFont) -> None:
+    """Persist the preferred new-text font and keep Orange's size action in sync."""
+    normalized = QFont(font)
+    setattr(document, "_derzug_preferred_text_font", normalized)
+    group = getattr(document, "_SchemeEditWidget__fontActionGroup", None)
+    if group is not None:
+        matched = next(
+            (
+                action
+                for action in group.actions()
+                if action.font().pixelSize() == normalized.pixelSize()
+            ),
+            None,
+        )
+        if matched is not None:
+            blocker = QSignalBlocker(group)
+            matched.setChecked(True)
+            del blocker
+    handler = getattr(document.scene(), "user_interaction_handler", None)
+    if isinstance(handler, orange_interactions.NewTextAnnotation):
+        handler.setFont(normalized)
+
+
+def _set_selected_text_font_property(document, name: str, value: object) -> None:
+    """Apply one text-style property to all selected text annotations via undo."""
+    selected = _selected_text_annotations(document)
+    updated = []
+    for annotation in selected:
+        new_font = _merge_font_property(annotation.font, name, value)
+        if new_font != annotation.font:
+            updated.append((annotation, new_font))
+    if not updated:
+        return
+    command = orange_schemeedit.UndoCommand(document.tr("Set text style"))
+    for annotation, new_font in updated:
+        orange_commands.SetAttrCommand(
+            annotation,
+            "font",
+            new_font,
+            name=document.tr("Set text style"),
+            parent=command,
+        )
+    document.undoStack().push(command)
+
+
+def _preferred_text_alignment(document) -> str:
+    """Return the preferred horizontal alignment for new text annotations."""
+    return str(getattr(document, "_derzug_preferred_text_alignment", "left"))
+
+
+def _set_preferred_text_alignment(document, alignment: str) -> None:
+    """Persist the preferred horizontal alignment for new text annotations."""
+    setattr(document, "_derzug_preferred_text_alignment", alignment)
+
+
+def _apply_text_item_alignment(item, alignment: str) -> None:
+    """Apply one horizontal alignment to the full text item document."""
+    setattr(item, "_derzug_alignment", alignment)
+    cursor = item.textCursor()
+    cursor.select(QTextCursor.SelectionType.Document)
+    block = QTextBlockFormat()
+    block.setAlignment(_alignment_name_to_flag(alignment))
+    cursor.mergeBlockFormat(block)
+    cursor.clearSelection()
+    item.setTextCursor(cursor)
+
+
+class _CanvasArrowColorPalette(QWidget):
+    """Tiny floating palette for canvas arrow colors."""
+
+    _BASE_SWATCH = 18
+    _ACTIVE_SWATCH = 24
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("canvas-arrow-color-palette")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setStyleSheet(
+            """
+            QWidget#canvas-arrow-color-palette {
+                background: rgba(255, 255, 255, 235);
+                border: 1px solid rgba(50, 60, 70, 60);
+                border-radius: 8px;
+            }
+            QPushButton[arrowColorSwatch="true"] {
+                border: 1px solid rgba(30, 30, 30, 80);
+                border-radius: 3px;
+                padding: 0;
+            }
+            QPushButton[arrowColorSwatch="true"][selectedColor="true"] {
+                border: 2px solid rgb(35, 97, 173);
+            }
+            """
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(0)
+        swatches = QHBoxLayout()
+        swatches.setContentsMargins(0, 0, 0, 0)
+        swatches.setSpacing(4)
+        layout.addLayout(swatches)
+        self._buttons: dict[str, QPushButton] = {}
+        for color in _CANVAS_ARROW_COLORS:
+            button = QPushButton(self)
+            button.setObjectName(f"canvas-arrow-color-{color.lstrip('#').lower()}")
+            button.setProperty("arrowColorSwatch", True)
+            button.setProperty("selectedColor", False)
+            button.setFixedSize(self._BASE_SWATCH, self._BASE_SWATCH)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setToolTip(color)
+            button.setStyleSheet(f"background-color: {color};")
+            swatches.addWidget(button)
+            self._buttons[color.lower()] = button
+        self.hide()
+
+    def buttons(self) -> dict[str, QPushButton]:
+        """Return swatch buttons keyed by lowercase color."""
+        return dict(self._buttons)
+
+    def set_active_color(self, color: str | None) -> None:
+        """Highlight the currently active swatch, or clear highlight on mixed state."""
+        normalized = None if color is None else color.lower()
+        for key, button in self._buttons.items():
+            selected = key == normalized
+            button.setProperty("selectedColor", selected)
+            size = self._ACTIVE_SWATCH if selected else self._BASE_SWATCH
+            button.setFixedSize(size, size)
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.update()
+        self.adjustSize()
+
+
+class _CanvasArrowColorPaletteController(QObject):
+    """Manage the floating arrow color palette for one canvas document."""
+
+    _MARGIN = 12
+
+    def __init__(self, main_window: DerZugMainWindow) -> None:
+        super().__init__(main_window)
+        self._main_window = main_window
+        self._document = main_window.current_document()
+        self._palette = _CanvasArrowColorPalette(self._viewport())
+        self._pressed_selected_arrows: list[SchemeArrowAnnotation] = []
+        for color, button in self._palette.buttons().items():
+            button.pressed.connect(self._capture_selected_arrows)
+            button.clicked.connect(lambda _checked=False, c=color: self._apply_color(c))
+        self._viewport().installEventFilter(self)
+        self._document.scene().selectionChanged.connect(self._sync)
+        self._document.scene().annotation_added.connect(lambda _item: self._sync())
+        self._document.scene().annotation_removed.connect(lambda _item: self._sync())
+        arrow_action = _action_by_object_name(self._document, "new-arrow-action")
+        if arrow_action is not None:
+            arrow_action.toggled.connect(self._sync)
+        self._document.undoStack().indexChanged.connect(self._sync)
+        self._document.view().horizontalScrollBar().valueChanged.connect(
+            lambda _value: self._reposition_if_visible()
+        )
+        self._document.view().verticalScrollBar().valueChanged.connect(
+            lambda _value: self._reposition_if_visible()
+        )
+        self._sync()
+
+    def palette_widget(self) -> QWidget:
+        """Expose the palette widget for tests."""
+        return self._palette
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """Keep the overlay pinned to the viewport corner."""
+        with suppress(RuntimeError):
+            if watched is self._viewport() and event.type() in (
+                QEvent.Type.Resize,
+                QEvent.Type.Show,
+                QEvent.Type.Move,
+                QEvent.Type.MouseButtonRelease,
+            ):
+                self._sync()
+        return super().eventFilter(watched, event)
+
+    def _viewport(self) -> QWidget:
+        """Return the canvas viewport receiving the overlay."""
+        return self._document.view().viewport()
+
+    def _current_color(self) -> str | None:
+        """Return the current color highlight state for the palette."""
+        arrows = _selected_arrow_annotations(self._document)
+        if arrows:
+            colors = {str(annotation.color).lower() for annotation in arrows}
+            return next(iter(colors)) if len(colors) == 1 else None
+        checked = _checked_arrow_color_action(self._document)
+        return None if checked is None else str(checked.data()).lower()
+
+    def _should_show(self) -> bool:
+        """Return True when arrow creation or arrow editing is relevant."""
+        arrow_action = _action_by_object_name(self._document, "new-arrow-action")
+        return bool(
+            (
+                getattr(self._main_window, "_canvas_middle_button_pan_filter", None)
+                is not None
+                and self._main_window._canvas_middle_button_pan_filter._active
+                and self._palette.isVisible()
+            )
+            or _selected_arrow_annotations(self._document)
+            or (arrow_action is not None and arrow_action.isChecked())
+        )
+
+    def _reposition(self) -> None:
+        """Pin the palette to the viewport's top-left inner corner."""
+        self._palette.adjustSize()
+        self._palette.move(self._MARGIN, self._MARGIN)
+        self._palette.raise_()
+
+    def _sync(self) -> None:
+        """Update palette visibility and highlight state."""
+        if _qt_object_is_deleted(self._document) or _qt_object_is_deleted(
+            self._palette
+        ):
+            return
+        self._palette.set_active_color(self._current_color())
+        if self._should_show():
+            self._reposition()
+            self._palette.show()
+        else:
+            self._palette.hide()
+
+    def _reposition_if_visible(self) -> None:
+        """Keep the overlay pinned during live scroll/pan updates."""
+        if self._palette.isVisible():
+            self._reposition()
+
+    def _apply_color(self, color: str) -> None:
+        """Apply the chosen color to selection and future arrows."""
+        _set_document_arrow_color(self._document, color)
+        arrows = _selected_arrow_annotations(self._document) or [
+            arrow
+            for arrow in self._pressed_selected_arrows
+            if arrow in self._document.scheme().annotations
+        ]
+        if arrows:
+            current_selection = _selected_arrow_annotations(self._document)
+            if current_selection:
+                _recolor_selected_arrows(self._document, color)
+            else:
+                command = orange_schemeedit.UndoCommand(
+                    self._document.tr("Set arrow color")
+                )
+                for arrow in arrows:
+                    if str(arrow.color).lower() == color.lower():
+                        continue
+                    orange_commands.SetAttrCommand(
+                        arrow,
+                        "color",
+                        color,
+                        name=self._document.tr("Set arrow color"),
+                        parent=command,
+                    )
+                if command.childCount():
+                    self._document.undoStack().push(command)
+        self._pressed_selected_arrows = []
+        self._sync()
+
+    def _capture_selected_arrows(self) -> None:
+        """Remember the current arrow selection before a palette click can clear it."""
+        self._pressed_selected_arrows = _selected_arrow_annotations(self._document)
+
+
+class _CanvasTextStylePalette(QWidget):
+    """Floating text-style toolbar for canvas text annotations."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("canvas-text-style-palette")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setStyleSheet(
+            """
+            QWidget#canvas-text-style-palette {
+                background: rgba(255, 255, 255, 235);
+                border: 1px solid rgba(50, 60, 70, 60);
+                border-radius: 8px;
+            }
+            QPushButton[textStyleToggle="true"] {
+                background: white;
+                border: 1px solid rgba(30, 30, 30, 80);
+                border-radius: 4px;
+                color: rgb(25, 25, 25);
+                font-weight: 700;
+                min-width: 24px;
+                max-width: 24px;
+                min-height: 24px;
+                max-height: 24px;
+                padding: 0;
+            }
+            QPushButton[textStyleToggle="true"]:checked {
+                background: rgb(220, 234, 252);
+                border: 2px solid rgb(35, 97, 173);
+            }
+            QComboBox#canvas-text-size-box {
+                min-width: 58px;
+                max-width: 58px;
+            }
+            QComboBox#canvas-text-font-box {
+                min-width: 118px;
+                max-width: 118px;
+            }
+            QComboBox#canvas-text-align-box {
+                min-width: 76px;
+                max-width: 76px;
+            }
+            """
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+
+        self.font_box = QComboBox(self)
+        self.font_box.setObjectName("canvas-text-font-box")
+        self.font_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.font_box.addItems(_CANVAS_TEXT_FONTS)
+        layout.addWidget(self.font_box)
+
+        self.size_box = QComboBox(self)
+        self.size_box.setObjectName("canvas-text-size-box")
+        self.size_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.size_box.addItems(_CANVAS_TEXT_SIZES)
+        layout.addWidget(self.size_box)
+
+        self.align_box = QComboBox(self)
+        self.align_box.setObjectName("canvas-text-align-box")
+        self.align_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.align_box.addItems(_CANVAS_TEXT_ALIGNMENTS)
+        layout.addWidget(self.align_box)
+
+        self.bold_button = QPushButton("B", self)
+        self.bold_button.setObjectName("canvas-text-bold-button")
+        self.bold_button.setProperty("textStyleToggle", True)
+        self.bold_button.setCheckable(True)
+        self.bold_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        layout.addWidget(self.bold_button)
+
+        self.italic_button = QPushButton("I", self)
+        self.italic_button.setObjectName("canvas-text-italic-button")
+        self.italic_button.setProperty("textStyleToggle", True)
+        self.italic_button.setCheckable(True)
+        self.italic_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        italic_font = self.italic_button.font()
+        italic_font.setItalic(True)
+        self.italic_button.setFont(italic_font)
+        layout.addWidget(self.italic_button)
+
+        self.underline_button = QPushButton("U", self)
+        self.underline_button.setObjectName("canvas-text-underline-button")
+        self.underline_button.setProperty("textStyleToggle", True)
+        self.underline_button.setCheckable(True)
+        self.underline_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        underline_font = self.underline_button.font()
+        underline_font.setUnderline(True)
+        self.underline_button.setFont(underline_font)
+        layout.addWidget(self.underline_button)
+        self.hide()
+
+
+class _CanvasTextStylePaletteController(QObject):
+    """Manage the floating text-style toolbar for one canvas document."""
+
+    _MARGIN = 12
+    _GAP = 8
+
+    def __init__(self, main_window: DerZugMainWindow) -> None:
+        super().__init__(main_window)
+        self._main_window = main_window
+        self._document = main_window.current_document()
+        self._palette = _CanvasTextStylePalette(self._viewport())
+        self._viewport().installEventFilter(self)
+        self._document.scene().selectionChanged.connect(self._sync)
+        self._document.scene().annotation_added.connect(lambda _item: self._sync())
+        self._document.scene().annotation_removed.connect(lambda _item: self._sync())
+        text_action = _action_by_object_name(self._document, "new-text-action")
+        if text_action is not None:
+            text_action.toggled.connect(self._sync)
+        self._document.undoStack().indexChanged.connect(self._sync)
+        self._document.view().horizontalScrollBar().valueChanged.connect(
+            lambda _value: self._reposition_if_visible()
+        )
+        self._document.view().verticalScrollBar().valueChanged.connect(
+            lambda _value: self._reposition_if_visible()
+        )
+        self._palette.font_box.currentTextChanged.connect(self._apply_family)
+        self._palette.size_box.currentTextChanged.connect(self._apply_size)
+        self._palette.align_box.currentTextChanged.connect(self._apply_alignment)
+        self._palette.bold_button.clicked.connect(self._apply_bold)
+        self._palette.italic_button.clicked.connect(self._apply_italic)
+        self._palette.underline_button.clicked.connect(self._apply_underline)
+        self._install_shortcuts()
+        self._sync()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """Keep the overlay pinned to the viewport corner."""
+        with suppress(RuntimeError):
+            if watched is self._viewport() and event.type() in (
+                QEvent.Type.Resize,
+                QEvent.Type.Show,
+                QEvent.Type.Move,
+                QEvent.Type.MouseButtonRelease,
+            ):
+                self._sync()
+        return super().eventFilter(watched, event)
+
+    def palette_widget(self) -> QWidget:
+        """Expose the palette widget for tests."""
+        return self._palette
+
+    def _viewport(self) -> QWidget:
+        return self._document.view().viewport()
+
+    def _should_show(self) -> bool:
+        text_action = _action_by_object_name(self._document, "new-text-action")
+        return bool(
+            (
+                getattr(self._main_window, "_canvas_middle_button_pan_filter", None)
+                is not None
+                and self._main_window._canvas_middle_button_pan_filter._active
+                and self._palette.isVisible()
+            )
+            or _active_text_editor_item(self._document)
+            or _scene_has_selected_text_item(self._document)
+            or _selected_text_annotations(self._document)
+            or (text_action is not None and text_action.isChecked())
+        )
+
+    def _target_font(self) -> QFont:
+        active_item = _active_text_editor_item(self._document)
+        if active_item is not None:
+            return active_item.font()
+        texts = _selected_text_annotations(self._document)
+        if texts:
+            return _font_from_style_dict(
+                texts[0].font, _preferred_text_font(self._document)
+            )
+        return _preferred_text_font(self._document)
+
+    def _target_alignment(self) -> str:
+        active_item = _active_text_editor_item(self._document)
+        if active_item is not None:
+            return _alignment_flag_to_name(
+                active_item.textCursor().blockFormat().alignment()
+            )
+        texts = _selected_text_annotations(self._document)
+        if texts:
+            return str(texts[0].font.get("alignment", "left"))
+        return _preferred_text_alignment(self._document)
+
+    def _apply_to_active_editor(self, configure) -> bool:
+        """Apply one inline formatting change to the active text editor."""
+        item = _active_text_editor_item(self._document)
+        if item is None:
+            return False
+        cursor = item.textCursor()
+        if not cursor.hasSelection():
+            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+        char_format = QTextCharFormat()
+        configure(char_format)
+        cursor.mergeCharFormat(char_format)
+        item.setTextCursor(cursor)
+        setattr(item, "_derzug_rich_text_edited", True)
+        return True
+
+    def _reposition(self) -> None:
+        x = self._MARGIN
+        arrow_controller = getattr(
+            self._main_window, "_canvas_arrow_palette_controller", None
+        )
+        if arrow_controller is not None:
+            arrow_palette = arrow_controller.palette_widget()
+            if arrow_palette.isVisible():
+                x += arrow_palette.width() + self._GAP
+        self._palette.adjustSize()
+        self._palette.move(x, self._MARGIN)
+        self._palette.raise_()
+
+    def _sync_controls(self) -> None:
+        font = self._target_font()
+        with suppress(RuntimeError):
+            blocker = QSignalBlocker(self._palette.font_box)
+            family = font.family()
+            index = self._palette.font_box.findText(family)
+            if index >= 0:
+                self._palette.font_box.setCurrentIndex(index)
+            else:
+                self._palette.font_box.setCurrentIndex(0)
+            del blocker
+        with suppress(RuntimeError):
+            blocker = QSignalBlocker(self._palette.size_box)
+            size_text = str(font.pixelSize())
+            index = self._palette.size_box.findText(size_text)
+            if index >= 0:
+                self._palette.size_box.setCurrentIndex(index)
+            else:
+                self._palette.size_box.setCurrentText(size_text)
+            del blocker
+        with suppress(RuntimeError):
+            blocker = QSignalBlocker(self._palette.align_box)
+            label = self._target_alignment().capitalize()
+            index = self._palette.align_box.findText(label)
+            self._palette.align_box.setCurrentIndex(0 if index < 0 else index)
+            del blocker
+        for button, checked in (
+            (self._palette.bold_button, font.bold()),
+            (self._palette.italic_button, font.italic()),
+            (self._palette.underline_button, font.underline()),
+        ):
+            blocker = QSignalBlocker(button)
+            button.setChecked(checked)
+            del blocker
+
+    def _sync(self) -> None:
+        if _qt_object_is_deleted(self._document) or _qt_object_is_deleted(
+            self._palette
+        ):
+            return
+        self._sync_controls()
+        if self._should_show():
+            self._reposition()
+            self._palette.show()
+        else:
+            self._palette.hide()
+
+    def _reposition_if_visible(self) -> None:
+        """Keep the overlay pinned during live scroll/pan updates."""
+        if self._palette.isVisible():
+            self._reposition()
+
+    def _apply_family(self, family: str) -> None:
+        if self._apply_to_active_editor(lambda fmt: fmt.setFontFamily(family)):
+            return
+        if _selected_text_annotations(self._document):
+            _set_selected_text_font_property(self._document, "family", family)
+        preferred = _preferred_text_font(self._document)
+        preferred.setFamily(family)
+        _set_preferred_text_font(self._document, preferred)
+        self._sync()
+
+    def _apply_alignment(self, label: str) -> None:
+        alignment = str(label).lower()
+        active_item = _active_text_editor_item(self._document)
+        if active_item is not None:
+            _apply_text_item_alignment(active_item, alignment)
+        if _selected_text_annotations(self._document):
+            _set_selected_text_font_property(self._document, "alignment", alignment)
+        _set_preferred_text_alignment(self._document, alignment)
+        self._sync()
+
+    def _apply_size(self, text: str) -> None:
+        with suppress(ValueError):
+            size = int(text)
+            if size <= 0:
+                return
+            if self._apply_to_active_editor(lambda fmt: fmt.setFontPixelSize(size)):
+                return
+            if _selected_text_annotations(self._document):
+                _set_selected_text_font_property(self._document, "size", size)
+            preferred = _preferred_text_font(self._document)
+            preferred.setPixelSize(size)
+            _set_preferred_text_font(self._document, preferred)
+            self._sync()
+
+    def _apply_bold(self, checked: bool) -> None:
+        weight = int(QFont.Weight.Bold if checked else QFont.Weight.Normal)
+        if self._apply_to_active_editor(lambda fmt: fmt.setFontWeight(weight)):
+            return
+        if _selected_text_annotations(self._document):
+            _set_selected_text_font_property(self._document, "weight", weight)
+        preferred = _preferred_text_font(self._document)
+        preferred.setBold(checked)
+        _set_preferred_text_font(self._document, preferred)
+        self._sync()
+
+    def _apply_italic(self, checked: bool) -> None:
+        if self._apply_to_active_editor(lambda fmt: fmt.setFontItalic(checked)):
+            return
+        if _selected_text_annotations(self._document):
+            _set_selected_text_font_property(self._document, "italic", checked)
+        preferred = _preferred_text_font(self._document)
+        preferred.setItalic(checked)
+        _set_preferred_text_font(self._document, preferred)
+        self._sync()
+
+    def _apply_underline(self, checked: bool) -> None:
+        if self._apply_to_active_editor(lambda fmt: fmt.setFontUnderline(checked)):
+            return
+        if _selected_text_annotations(self._document):
+            _set_selected_text_font_property(self._document, "underline", checked)
+        preferred = _preferred_text_font(self._document)
+        preferred.setUnderline(checked)
+        _set_preferred_text_font(self._document, preferred)
+        self._sync()
+
+    def _install_shortcuts(self) -> None:
+        """Install standard text-format shortcuts scoped to the canvas document."""
+        for name, standard_key, button in (
+            ("bold", QKeySequence.StandardKey.Bold, self._palette.bold_button),
+            ("italic", QKeySequence.StandardKey.Italic, self._palette.italic_button),
+            (
+                "underline",
+                QKeySequence.StandardKey.Underline,
+                self._palette.underline_button,
+            ),
+        ):
+            action = QAction(name.capitalize(), self._document)
+            action.setObjectName(f"canvas-text-{name}-action")
+            action.setShortcut(standard_key)
+            action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+            action.triggered.connect(button.click)
+            self._document.addAction(action)
+            button.setToolTip(
+                f"{name.capitalize()} ("
+                f"{action.shortcut().toString(QKeySequence.SequenceFormat.NativeText)})"
+            )
+
+
+def _install_canvas_text_font_support() -> None:
+    """Extend Orange canvas text annotations to support full font styling."""
+    orange_canvas_scene.font_from_dict = _font_from_style_dict
+
+    original_add_annotation = orange_canvas_scene.CanvasScene.add_annotation
+    original_remove_annotation = orange_canvas_scene.CanvasScene.remove_annotation
+    original_create_text_annotation = (
+        orange_interactions.NewTextAnnotation.createNewAnnotation
+    )
+
+    def add_annotation(self, scheme_annot):
+        item = original_add_annotation(self, scheme_annot)
+        if isinstance(scheme_annot, SchemeTextAnnotation):
+            slots = getattr(self, "_derzug_text_font_slots", None)
+            if slots is None:
+                slots = {}
+                setattr(self, "_derzug_text_font_slots", slots)
+            if scheme_annot not in slots:
+
+                def _apply_font(font_dict, target=item):
+                    target.setFont(_font_from_style_dict(font_dict, target.font()))
+                    _apply_text_item_alignment(
+                        target, str(font_dict.get("alignment", "left"))
+                    )
+
+                slots[scheme_annot] = _apply_font
+                scheme_annot.font_changed.connect(_apply_font)
+            item.setFont(_font_from_style_dict(scheme_annot.font, item.font()))
+            _apply_text_item_alignment(
+                item, str(scheme_annot.font.get("alignment", "left"))
+            )
+        elif isinstance(scheme_annot, SchemeArrowAnnotation):
+            slots = getattr(self, "_derzug_arrow_color_slots", None)
+            if slots is None:
+                slots = {}
+                setattr(self, "_derzug_arrow_color_slots", slots)
+            if scheme_annot not in slots:
+
+                def _apply_color(color, target=item):
+                    target.setColor(QColor(color))
+
+                slots[scheme_annot] = _apply_color
+                scheme_annot.color_changed.connect(_apply_color)
+            item.setColor(QColor(scheme_annot.color))
+        return item
+
+    def remove_annotation(self, scheme_annotation):
+        if isinstance(scheme_annotation, SchemeTextAnnotation):
+            slots = getattr(self, "_derzug_text_font_slots", None) or {}
+            slot = slots.pop(scheme_annotation, None)
+            if slot is not None:
+                with suppress((TypeError, RuntimeError)):
+                    scheme_annotation.font_changed.disconnect(slot)
+        elif isinstance(scheme_annotation, SchemeArrowAnnotation):
+            slots = getattr(self, "_derzug_arrow_color_slots", None) or {}
+            slot = slots.pop(scheme_annotation, None)
+            if slot is not None:
+                with suppress((TypeError, RuntimeError)):
+                    scheme_annotation.color_changed.disconnect(slot)
+        return original_remove_annotation(self, scheme_annotation)
+
+    def createNewAnnotation(self, rect):
+        result = original_create_text_annotation(self, rect)
+        annotation = getattr(self, "annotation", None)
+        font = getattr(self, "font", None)
+        if isinstance(annotation, SchemeTextAnnotation) and isinstance(font, QFont):
+            font_dict = _font_to_style_dict(font)
+            font_dict["alignment"] = _preferred_text_alignment(self.document)
+            annotation.set_font(font_dict)
+        return result
+
+    def startEdit(self):
+        """Start editing without flattening existing HTML content."""
+        if self.contentType() == "text/html":
+            self.setHtml(self.content())
+        else:
+            self.setPlainText(self.content())
+        text_item = self._TextAnnotation__textItem
+        _apply_text_item_alignment(
+            self, str(getattr(self, "_derzug_alignment", "left"))
+        )
+        text_item.setTextInteractionFlags(self.textInteractionFlags())
+        text_item.setFocus(Qt.MouseFocusReason)
+        text_item.edit()
+        text_item.document().contentsChanged.connect(self.textEdited)
+
+    def endEdit(self):
+        """End editing while preserving HTML when rich text was used."""
+        text_item = self._TextAnnotation__textItem
+        rich_content = self.contentType() == "text/html" or bool(
+            getattr(self, "_derzug_rich_text_edited", False)
+        )
+        content_type = "text/html" if rich_content else self.contentType()
+        content = text_item.toHtml() if rich_content else text_item.toPlainText()
+
+        text_item.setTextInteractionFlags(self._TextAnnotation__defaultInteractionFlags)
+        with suppress((TypeError, RuntimeError)):
+            text_item.document().contentsChanged.disconnect(self.textEdited)
+        cursor = text_item.textCursor()
+        cursor.clearSelection()
+        text_item.setTextCursor(cursor)
+        self._TextAnnotation__content = content
+        self._TextAnnotation__contentType = content_type
+        setattr(self, "_derzug_rich_text_edited", False)
+        _apply_text_item_alignment(
+            self, str(getattr(self, "_derzug_alignment", "left"))
+        )
+
+        self.editingFinished.emit()
+        QTimer.singleShot(0, self._TextAnnotation__updateRenderedContent)
+
+    def __triggerNewTextAnnotation(self):
+        center = self.view().viewport().rect().center()
+        center = self.view().mapToScene(center)
+        rect = orange_interactions.QRectF(0, 0, 300, 150)
+        rect.moveCenter(center)
+        annotation = SchemeTextAnnotation(
+            (rect.x(), rect.y(), rect.width(), rect.height()),
+            content_type="text/markdown",
+            font={
+                **_font_to_style_dict(_preferred_text_font(self)),
+                "alignment": _preferred_text_alignment(self),
+            },
+        )
+        self.addAnnotation(annotation)
+        item = self.scene().item_for_annotation(annotation)
+        item.setFocus(Qt.OtherFocusReason)
+        item.setSelected(True)
+        item.startEdit()
+
+    orange_canvas_scene.CanvasScene.add_annotation = add_annotation
+    orange_canvas_scene.CanvasScene.remove_annotation = remove_annotation
+    orange_interactions.NewTextAnnotation.createNewAnnotation = createNewAnnotation
+    orange_canvas_scene.items.TextAnnotation.startEdit = startEdit
+    orange_canvas_scene.items.TextAnnotation.endEdit = endEdit
+    orange_schemeedit.SchemeEditWidget._SchemeEditWidget__triggerNewTextAnnotation = (
+        __triggerNewTextAnnotation
+    )
+
+
+_install_canvas_text_font_support()
+
+
+def _install_canvas_arrow_snap_support() -> None:
+    """Snap created and edited canvas arrows while Shift is held."""
+    original_active_control_moved = (
+        orange_controlpoints.ControlPointLine._ControlPointLine__activeControlMoved
+    )
+    original_new_arrow_mouse_move = (
+        orange_interactions.NewArrowAnnotation.mouseMoveEvent
+    )
+    original_new_arrow_mouse_release = (
+        orange_interactions.NewArrowAnnotation.mouseReleaseEvent
+    )
+
+    def __activeControlMoved(self, pos):
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers & Qt.ShiftModifier:
+            control = getattr(self, "_ControlPointLine__activeControl", None)
+            line = getattr(self, "_ControlPointLine__line", None)
+            if control is not None and line is not None:
+                if control.anchor() == orange_controlpoints.ControlPoint.TopLeft:
+                    pos = _snap_arrow_endpoint_to_octilinear(pos, line.p2())
+                elif control.anchor() == orange_controlpoints.ControlPoint.BottomRight:
+                    pos = _snap_arrow_endpoint_to_octilinear(pos, line.p1())
+        return original_active_control_moved(self, pos)
+
+    def mouseMoveEvent(self, event):
+        modifiers = event.modifiers() | QApplication.keyboardModifiers()
+        if (
+            event.buttons() & Qt.LeftButton
+            and getattr(self, "down_pos", None) is not None
+            and modifiers & Qt.ShiftModifier
+        ):
+            original = event.scenePos
+
+            def _scene_pos():
+                return _snap_arrow_endpoint_to_octilinear(original(), self.down_pos)
+
+            event.scenePos = _scene_pos
+            try:
+                return original_new_arrow_mouse_move(self, event)
+            finally:
+                event.scenePos = original
+        return original_new_arrow_mouse_move(self, event)
+
+    def mouseReleaseEvent(self, event):
+        modifiers = event.modifiers() | QApplication.keyboardModifiers()
+        if (
+            event.button() == Qt.LeftButton
+            and getattr(self, "down_pos", None) is not None
+            and modifiers & Qt.ShiftModifier
+        ):
+            original = event.scenePos
+
+            def _scene_pos():
+                return _snap_arrow_endpoint_to_octilinear(original(), self.down_pos)
+
+            event.scenePos = _scene_pos
+            try:
+                return original_new_arrow_mouse_release(self, event)
+            finally:
+                event.scenePos = original
+        return original_new_arrow_mouse_release(self, event)
+
+    orange_controlpoints.ControlPointLine._ControlPointLine__activeControlMoved = (
+        __activeControlMoved
+    )
+    orange_interactions.NewArrowAnnotation.mouseMoveEvent = mouseMoveEvent
+    orange_interactions.NewArrowAnnotation.mouseReleaseEvent = mouseReleaseEvent
+
+
+_install_canvas_arrow_snap_support()
+
+
+def _install_canvas_axis_locked_drag_support() -> None:
+    """Lock widget and text annotation dragging to one axis while Shift is held."""
+    original_node_item_change = NodeItem.itemChange
+    original_text_item_change = orange_canvas_scene.items.TextAnnotation.itemChange
+
+    def node_item_change(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            value = _axis_locked_position(self, value)
+        elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            if QApplication.keyboardModifiers() != Qt.ShiftModifier:
+                setattr(self, "_derzug_axis_lock_origin", None)
+                setattr(self, "_derzug_axis_lock_axis", None)
+        return original_node_item_change(self, change, value)
+
+    def text_item_change(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            value = _axis_locked_position(self, value)
+        elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            if QApplication.keyboardModifiers() != Qt.ShiftModifier:
+                setattr(self, "_derzug_axis_lock_origin", None)
+                setattr(self, "_derzug_axis_lock_axis", None)
+        return original_text_item_change(self, change, value)
+
+    NodeItem.itemChange = node_item_change
+    orange_canvas_scene.items.TextAnnotation.itemChange = text_item_change
+
+
+_install_canvas_axis_locked_drag_support()
+
+
+def _install_canvas_text_alignment_roundtrip_support() -> None:
+    """Persist text alignment through Orange's .ows annotation read/write path."""
+    original_parse_ows_etree_v_2_0 = readwrite.parse_ows_etree_v_2_0
+    original_scheme_to_etree = readwrite.scheme_to_etree
+
+    def parse_ows_etree_v_2_0(tree):
+        desc = original_parse_ows_etree_v_2_0(tree)
+        updated_annotations = []
+        for annotation_desc in desc.annotations:
+            if annotation_desc.type != "text":
+                updated_annotations.append(annotation_desc)
+                continue
+            annot = next(
+                (
+                    elem
+                    for elem in tree.findall("annotations/*")
+                    if elem.get("id") == annotation_desc.id
+                ),
+                None,
+            )
+            alignment = (
+                None if annot is None else annot.get("font-alignment", "").strip()
+            )
+            if not alignment:
+                updated_annotations.append(annotation_desc)
+                continue
+            params = annotation_desc.params
+            updated_annotations.append(
+                annotation_desc._replace(
+                    params=params._replace(
+                        font={**params.font, "alignment": alignment.lower()}
+                    )
+                )
+            )
+        return desc._replace(annotations=updated_annotations)
+
+    def scheme_to_etree(scheme, data_format="literal", pickle_fallback=False):
+        tree = original_scheme_to_etree(
+            scheme, data_format=data_format, pickle_fallback=pickle_fallback
+        )
+        annotations = tree.find("annotations")
+        if annotations is None:
+            return tree
+        text_elements = [elem for elem in annotations if elem.tag == "text"]
+        text_annotations = [
+            annotation
+            for annotation in scheme.annotations
+            if isinstance(annotation, SchemeTextAnnotation)
+        ]
+        for element, annotation in zip(text_elements, text_annotations):
+            alignment = str(annotation.font.get("alignment", "")).strip().lower()
+            if alignment:
+                element.set("font-alignment", alignment)
+        return tree
+
+    readwrite.parse_ows_etree_v_2_0 = parse_ows_etree_v_2_0
+    readwrite.scheme_to_etree = scheme_to_etree
+
+
+_install_canvas_text_alignment_roundtrip_support()
+
+
+def _install_canvas_clipboard_actions(document: QWidget) -> None:
+    """Use standard platform shortcuts and add cut support for canvas selections."""
+    copy_action = _action_by_object_name(document, "copy-action")
+    paste_action = _action_by_object_name(document, "paste-action")
+
+    if copy_action is not None:
+        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        copy_action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+    if paste_action is not None:
+        paste_action.setShortcut(QKeySequence.StandardKey.Paste)
+        paste_action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+
+    existing_cut = _action_by_object_name(document, "cut-action")
+    if existing_cut is not None:
+        existing_cut.setShortcut(QKeySequence.StandardKey.Cut)
+        existing_cut.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+        return
+
+    cut_action = QAction("Cut", document)
+    cut_action.setObjectName("cut-action")
+    cut_action.setShortcut(QKeySequence.StandardKey.Cut)
+    cut_action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+    cut_action.setEnabled(False)
+
+    def _cut_selected() -> None:
+        nodes = document.selectedNodes()
+        annotations = document.selectedAnnotations()
+        if not nodes and not annotations:
+            return
+        document._SchemeEditWidget__copyToClipboard()
+        document.removeSelected()
+
+    cut_action.triggered.connect(_cut_selected)
+    document.addAction(cut_action)
 
 
 def _load_sip_modules() -> tuple[object, ...]:
@@ -188,6 +1715,37 @@ def _port_name_specs(boundary_specs: list[dict[str, object]]) -> list[str]:
     if unique:
         return raw_names
     return [f"{spec['node_title']}: {spec['channel_name']}" for spec in boundary_specs]
+
+
+def _parsed_workflow_contains_code_widget(parsed) -> bool:
+    """Return True when one parsed workflow embeds a Code widget."""
+    nodes = getattr(parsed, "nodes", ()) or ()
+    for node_desc in nodes:
+        qualified_name = str(getattr(node_desc, "qualified_name", "") or "")
+        if qualified_name == _CODE_WIDGET_QUALIFIED_NAME:
+            return True
+        data = getattr(node_desc, "data", None)
+        if data is None:
+            continue
+        try:
+            properties = readwrite.loads(data.data, data.format)
+        except Exception:
+            continue
+        payload = composite_payload_from_properties(properties)
+        if payload is None:
+            continue
+        internal_scheme_xml = str(payload.get("internal_scheme_xml") or "")
+        if not internal_scheme_xml:
+            continue
+        try:
+            internal_parsed = readwrite.parse_ows_stream(
+                io.BytesIO(internal_scheme_xml.encode("utf-8"))
+            )
+        except Exception:
+            continue
+        if _parsed_workflow_contains_code_widget(internal_parsed):
+            return True
+    return False
 
 
 class _CanvasCompositeController(QObject):
@@ -1491,6 +3049,13 @@ class DerZugMain(OMain):
 class DerZugMainWindow(OrangeMainWindow):
     """Orange main window customized for DerZug."""
 
+    def set_notification_server(self, notif_server):
+        """Accept a missing notification server when creating secondary windows."""
+        self.notification_server = notif_server
+        if notif_server is None:
+            return
+        super().set_notification_server(notif_server)
+
     def __init__(self, *args, **kwargs):
         """Initialize the DerZug main window."""
         super().__init__(*args, **kwargs)
@@ -1510,11 +3075,26 @@ class DerZugMainWindow(OrangeMainWindow):
         self._canvas_composite_controller = _CanvasCompositeController(self)
         self._canvas_traceback_filter = _CanvasTracebackIconFilter(self)
         self._canvas_middle_button_pan_filter = _CanvasMiddleButtonPanFilter(self)
+        self._canvas_arrow_palette_controller: (
+            _CanvasArrowColorPaletteController | None
+        ) = None
+        self._canvas_text_palette_controller: (
+            _CanvasTextStylePaletteController | None
+        ) = None
         self._apply_default_help_visibility()
         self._customize_shell()
         self._install_canvas_traceback_filter()
         self._install_canvas_middle_button_pan_filter()
         self._install_canvas_reset_view_handler()
+        document = self.current_document()
+        if document is not None:
+            _install_canvas_clipboard_actions(document)
+            self._canvas_arrow_palette_controller = _CanvasArrowColorPaletteController(
+                self
+            )
+            self._canvas_text_palette_controller = _CanvasTextStylePaletteController(
+                self
+            )
 
     def _apply_default_help_visibility(self) -> None:
         """Default quick-help pane to hidden unless user has saved a preference."""
@@ -1716,7 +3296,11 @@ class DerZugMainWindow(OrangeMainWindow):
             action.triggered.connect(self._reset_canvas_view_to_contents)
 
     def _reset_canvas_view_to_contents(self) -> None:
-        """Shrink the canvas scene rect back to workflow contents and recenter it."""
+        """Shrink the canvas scene rect back to workflow contents and fit it in view."""
+        self._fit_canvas_view_to_contents()
+
+    def _fit_canvas_view_to_contents(self) -> None:
+        """Zoom out only when needed to show all widgets and annotations."""
         scheme_widget = getattr(self, "scheme_widget", None)
         view = getattr(scheme_widget, "view", lambda: None)()
         scene = getattr(scheme_widget, "scene", lambda: None)()
@@ -1728,8 +3312,14 @@ class DerZugMainWindow(OrangeMainWindow):
         padding_x = max(contents.width() * 0.15, 120.0)
         padding_y = max(contents.height() * 0.15, 120.0)
         framed = contents.adjusted(-padding_x, -padding_y, padding_x, padding_y)
-        scene.setSceneRect(framed)
-        view.centerOn(framed.center())
+        current_visible = view.mapToScene(view.viewport().rect()).boundingRect()
+        current_scene_rect = scene.sceneRect()
+        if not current_scene_rect.isValid() or current_scene_rect.isNull():
+            current_scene_rect = framed
+        scene.setSceneRect(current_scene_rect.united(framed))
+        if current_visible.isValid() and current_visible.contains(framed):
+            return
+        view.fitInView(framed, Qt.AspectRatioMode.KeepAspectRatio)
 
     def _register_composite_description(self, payload: dict[str, object]) -> None:
         """Ensure one dynamic composite description exists in the live registry."""
@@ -1760,10 +3350,19 @@ class DerZugMainWindow(OrangeMainWindow):
                     continue
                 ensure_composite_widget_class(payload)
                 self._register_composite_description(payload)
+        if parsed is not None and _parsed_workflow_contains_code_widget(parsed):
+            if not self.maybe_confirm_code_widget_load():
+                return
         super().load_scheme(filename)
+        QTimer.singleShot(0, self._fit_canvas_view_to_contents)
         QTimer.singleShot(0, self._reemit_restored_source_widgets)
         if self.startup_open_widget_ids:
             QTimer.singleShot(0, self._open_startup_widgets)
+
+    def set_scheme(self, new_scheme, freeze_creation=False):
+        """Set the active scheme and frame all content once the scene settles."""
+        super().set_scheme(new_scheme, freeze_creation=freeze_creation)
+        QTimer.singleShot(0, self._fit_canvas_view_to_contents)
 
     def _reemit_restored_source_widgets(self) -> None:
         """Re-emit restored source-widget outputs after workflow reload settles."""
@@ -2066,6 +3665,39 @@ class DerZugMainWindow(OrangeMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.hide_future_warnings:
             self.set_experimental_warning_hidden(True)
 
+    def should_show_code_widget_warning(self) -> bool:
+        """Return True when the code-widget load warning is enabled."""
+        settings = _derzug_settings()
+        settings.beginGroup(_CODE_WARNING_GROUP)
+        hidden = settings.value(_CODE_WARNING_HIDE_KEY, False, type=bool)
+        settings.endGroup()
+        return not bool(hidden)
+
+    def set_code_widget_warning_hidden(self, hidden: bool) -> None:
+        """Persist whether the code-widget load warning should stay hidden."""
+        settings = _derzug_settings()
+        settings.beginGroup(_CODE_WARNING_GROUP)
+        settings.setValue(_CODE_WARNING_HIDE_KEY, bool(hidden))
+        settings.endGroup()
+
+    def clear_code_widget_warning_hidden(self) -> None:
+        """Clear the persisted code-widget load warning preference."""
+        settings = _derzug_settings()
+        settings.beginGroup(_CODE_WARNING_GROUP)
+        settings.remove(_CODE_WARNING_HIDE_KEY)
+        settings.endGroup()
+
+    def maybe_confirm_code_widget_load(self) -> bool:
+        """Return True when one code-containing workflow load may proceed."""
+        if not self.should_show_code_widget_warning():
+            return True
+        dialog = CodeWorkflowWarningDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        if dialog.hide_future_warnings:
+            self.set_code_widget_warning_hidden(True)
+        return True
+
 
 class ExperimentalWarningDialog(QDialog):
     """Modal startup warning for DerZug's experimental status."""
@@ -2164,5 +3796,110 @@ class ExperimentalWarningDialog(QDialog):
 
     def _accept_for_now(self) -> None:
         """Accept the dialog without suppressing future startup warnings."""
+        self.hide_future_warnings = self._hide_checkbox.isChecked()
+        self.accept()
+
+
+class CodeWorkflowWarningDialog(QDialog):
+    """Modal warning shown before loading workflows that can execute code."""
+
+    TITLE = "Code Execution Warning"
+    HEADING = "This Workflow Can Run Arbitrary Code"
+    MESSAGE = (
+        "This .ows file contains a Code widget. Loading it can execute arbitrary "
+        "Python code on your machine. Only continue if you trust the workflow "
+        "author and understand the risks."
+    )
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(self.TITLE)
+        self.setModal(True)
+        self.resize(540, 250)
+        self.hide_future_warnings = False
+        self.setObjectName("code-workflow-warning-dialog")
+        self.setStyleSheet(
+            """
+            QDialog#code-workflow-warning-dialog {
+                background-color: #fff7ed;
+            }
+            QWidget#code-workflow-warning-panel {
+                background-color: #fffbf5;
+                border: 1px solid #d8b38a;
+                border-left: 6px solid #c26b1d;
+                border-radius: 10px;
+            }
+            QLabel#code-workflow-warning-heading {
+                color: #8a3d00;
+                font-size: 22px;
+                font-weight: 700;
+            }
+            QLabel#code-workflow-warning-body {
+                color: #5b3418;
+                font-size: 14px;
+                line-height: 1.35;
+            }
+            QPushButton#code-workflow-warning-open {
+                background-color: #c26b1d;
+                border: 1px solid #9f5715;
+                border-radius: 6px;
+                color: white;
+                font-weight: 700;
+                padding: 6px 16px;
+            }
+            QPushButton#code-workflow-warning-open:hover {
+                background-color: #d47623;
+            }
+            QPushButton#code-workflow-warning-cancel {
+                border-radius: 6px;
+                padding: 6px 16px;
+            }
+            QCheckBox#code-workflow-warning-checkbox {
+                color: #5b3418;
+                font-size: 13px;
+                spacing: 8px;
+            }
+            """
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        panel = QWidget(self)
+        panel.setObjectName("code-workflow-warning-panel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(18, 16, 18, 16)
+        panel_layout.setSpacing(8)
+
+        heading = QLabel(self.HEADING, panel)
+        heading.setObjectName("code-workflow-warning-heading")
+        heading.setWordWrap(True)
+        panel_layout.addWidget(heading)
+
+        label = QLabel(self.MESSAGE, panel)
+        label.setObjectName("code-workflow-warning-body")
+        label.setWordWrap(True)
+        panel_layout.addWidget(label)
+
+        layout.addWidget(panel)
+
+        self._hide_checkbox = QCheckBox("Don't show this message again", self)
+        self._hide_checkbox.setObjectName("code-workflow-warning-checkbox")
+        layout.addWidget(self._hide_checkbox)
+
+        buttons = QDialogButtonBox(self)
+        cancel_button = QPushButton("Cancel", self)
+        cancel_button.setObjectName("code-workflow-warning-cancel")
+        buttons.addButton(cancel_button, QDialogButtonBox.ButtonRole.RejectRole)
+        cancel_button.clicked.connect(self.reject)
+        open_button = QPushButton("Load Workflow", self)
+        open_button.setObjectName("code-workflow-warning-open")
+        buttons.addButton(open_button, QDialogButtonBox.ButtonRole.AcceptRole)
+        open_button.clicked.connect(self._accept_for_now)
+        layout.addWidget(buttons)
+
+    def _accept_for_now(self) -> None:
+        """Accept the dialog and optionally suppress future warnings."""
         self.hide_future_warnings = self._hide_checkbox.isChecked()
         self.accept()
