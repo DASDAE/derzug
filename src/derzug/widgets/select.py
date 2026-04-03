@@ -372,6 +372,8 @@ class Select(SelectionControlsMixin, ZugWidget):
         if self._input_kind != "patch" or self._patch is None:
             return False
         if self._pending_saved_patch_selection_payload is None:
+            self._sync_pending_saved_patch_selection_payload()
+        if self._pending_saved_patch_selection_payload is None:
             return False
         if not self._reconcile_saved_patch_selection_state():
             return False

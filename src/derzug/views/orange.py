@@ -3140,6 +3140,7 @@ class DerZugMainWindow(OrangeMainWindow):
         self.documentation_action.triggered.connect(self.open_documentation)
         self.examples_action.setText("Example Workflow")
         self.donate_action.setText("Donate to Orange")
+        self.donate_action.setVisible(True)
         self.keyboard_shortcuts_action = QAction("Keyboard Shortcuts", self)
         self.keyboard_shortcuts_action.triggered.connect(self.open_keyboard_shortcuts)
 

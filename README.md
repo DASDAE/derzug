@@ -19,25 +19,27 @@ It can be launched as a standalone application, or used for interactive explorat
 ## Installation
 
 Install from PyPI with:
-
 ```bash
 pip install derzug
 ```
 
-> [!TIP]
-> DerZug can be installed on any of the listed Python versions, but Qt-related issues are still possible.
-> The smoothest experience is generally on Python 3.13. It may help to first create a mamba/conda environment 
-> with Orange3 installed, then install DerZug into that. 
-
-## Basic Usage
-
-DerZug is a full-fledged application that can be launched from the command line like so:
-
+or mamba/conda:
 ```bash
-derzug
+mamba install derzug
 ```
 
-Conversely, DerZug can be used interactively in code: 
+> [!TIP]
+> The PyQT stack can have some rough installation edges. The smoothest experience is generally on Python 3.13 with mamba.
+
+## Getting start
+
+To get a quick introduction to DerZug, launch it in demo mode and load the quickstart workflow:
+
+```bash
+derzug --demo
+```
+
+DerZug can also be used interactively in code: 
 
 ```python
 import dascore as dc
