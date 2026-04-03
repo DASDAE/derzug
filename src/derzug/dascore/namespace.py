@@ -6,7 +6,7 @@ import os
 import tempfile
 from typing import TYPE_CHECKING
 
-from AnyQt.QtCore import QEvent, QEventLoop, QObject, QTimer, Qt
+from AnyQt.QtCore import QEvent, QEventLoop, QObject, Qt, QTimer
 from AnyQt.QtWidgets import QApplication, QWidget
 
 try:
