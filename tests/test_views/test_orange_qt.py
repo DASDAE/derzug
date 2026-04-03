@@ -32,6 +32,7 @@ from AnyQt.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QWidget,
 )
 from derzug.annotations_config import (
@@ -66,6 +67,7 @@ from derzug.views.orange import (
 from derzug.views.orange_errors import _build_issue_body, _build_issue_url
 from derzug.widgets.spool import Spool
 from derzug.widgets.table2annotation import Table2Annotation
+from orangecanvas.application.canvastooldock import SplitterResizer
 from orangecanvas.application.outputview import ExceptHook, TerminalTextDocument
 from orangecanvas.document.interactions import RectangleSelectionAction
 from orangecanvas.gui.windowlistmanager import WindowListManager
@@ -331,6 +333,21 @@ class TestDerZugMainWindow:
             "Example Workflow",
             "Donate to Orange",
         ]
+
+    def test_splitter_resizer_ignores_generic_resize_events(self, qtbot):
+        """Orange splitter resizer should not assert on generic resize events."""
+        splitter = QSplitter()
+        top = QWidget()
+        bottom = QWidget()
+        splitter.addWidget(top)
+        splitter.addWidget(bottom)
+        qtbot.addWidget(splitter)
+
+        resizer = SplitterResizer()
+        resizer.setSplitterAndWidget(splitter, bottom)
+
+        event = QEvent(QEvent.Type.Resize)
+        assert resizer.eventFilter(bottom, event) is False
 
     def test_shell_hides_inherited_orange_actions(self, derzug_app):
         """Menus should drop the inherited Orange-specific maintenance actions."""

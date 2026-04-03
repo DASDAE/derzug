@@ -32,6 +32,7 @@ from AnyQt.QtCore import (
     QLineF,
     QObject,
     QPointF,
+    QPropertyAnimation,
     QSignalBlocker,
     Qt,
     QTimer,
@@ -81,6 +82,7 @@ from AnyQt.QtWidgets import (
 from Orange.canvas.__main__ import OMain
 from Orange.canvas.config import Config as OrangeConfig
 from Orange.canvas.mainwindow import MainWindow as OrangeMainWindow
+from orangecanvas.application.canvastooldock import SplitterResizer
 from orangecanvas.application.outputview import ExceptHook
 from orangecanvas.canvas import scene as orange_canvas_scene
 from orangecanvas.canvas.items import controlpoints as orange_controlpoints
@@ -163,6 +165,59 @@ _CANVAS_TEXT_FONTS = (
 )
 _ORIGINAL_CANVAS_FONT_FROM_DICT = orange_canvas_scene.font_from_dict
 _CANVAS_TEXT_ALIGNMENTS = ("Left", "Center", "Right")
+
+
+def _patch_splitter_resizer_resize_event_filter() -> None:
+    """Guard Orange's splitter resizer against generic resize events.
+
+    On some Qt/PyQt combinations, a `QEvent.Resize` reaches the event filter as a
+    generic `QEvent` wrapper instead of `QResizeEvent`. Orange asserts on the
+    concrete type, which turns a benign event-loop quirk into a hard test
+    failure. DerZug only needs the size bookkeeping, so skip the strict type
+    assertion and use `event.size()` when available.
+    """
+    original = SplitterResizer.eventFilter
+    if getattr(original, "_derzug_resize_guard", False):
+        return
+
+    def _patched(self, obj, event):
+        if (
+            event.type() == QEvent.Resize
+            and obj is getattr(self, "_SplitterResizer__widget", None)
+            and getattr(self, "_SplitterResizer__animation", None) is not None
+            and self._SplitterResizer__animation.state() == QPropertyAnimation.Stopped
+        ):
+            splitter = getattr(self, "_SplitterResizer__splitter", None)
+            action = getattr(self, "_SplitterResizer__action", None)
+            size_getter = getattr(event, "size", None)
+            if splitter is not None and action is not None and callable(size_getter):
+                size_hint = size_getter()
+                size = (
+                    size_hint.height()
+                    if splitter.orientation() == Qt.Vertical
+                    else size_hint.width()
+                )
+                if self._SplitterResizer__expanded and size == 0:
+                    action.setChecked(False)
+                    self._SplitterResizer__expanded = False
+                elif not self._SplitterResizer__expanded and size > 0:
+                    action.setChecked(True)
+                    self._SplitterResizer__expanded = True
+
+        if (
+            event.type() == QEvent.Show
+            and obj is getattr(self, "_SplitterResizer__splitter", None)
+            and getattr(self, "_SplitterResizer__updateOnShow", False)
+        ):
+            self._SplitterResizer__updateOnShow = False
+            self._SplitterResizer__update()
+        return QObject.eventFilter(self, obj, event)
+
+    _patched._derzug_resize_guard = True
+    SplitterResizer.eventFilter = _patched
+
+
+_patch_splitter_resizer_resize_event_filter()
 
 
 def _copy_scheme_annotation(annotation):

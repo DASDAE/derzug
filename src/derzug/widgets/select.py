@@ -18,6 +18,7 @@ from derzug.utils.spool import (
     filter_contents_by_annotations,
 )
 from derzug.widgets.selection import (
+    PatchSelectionBasis,
     SelectionControlsMixin,
     SelectionMode,
     SelectionState,
@@ -311,6 +312,15 @@ class Select(SelectionControlsMixin, ZugWidget):
     ) -> bool:
         """Return True when the saved patch-selection rows already match live state."""
         if not isinstance(payload, dict):
+            return False
+        basis_name = str(payload.get("basis", "")).strip()
+        requires_bound_patch = basis_name != PatchSelectionBasis.ABSOLUTE.value
+        if requires_bound_patch and self._selection_state.patch_source is None:
+            return False
+        if (
+            requires_bound_patch
+            and self._selection_state.mode is not SelectionMode.PATCH
+        ):
             return False
         live_payload = self._selection_state.patch_settings_payload(
             include_inactive=True

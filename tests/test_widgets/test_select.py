@@ -15,7 +15,7 @@ from derzug.utils.testing import (
     widget_context,
 )
 from derzug.widgets.select import Select
-from derzug.widgets.selection import PatchSelectionBasis
+from derzug.widgets.selection import PatchSelectionBasis, SelectionMode
 
 
 @pytest.fixture
@@ -125,6 +125,30 @@ class TestSelectStateDefaults(TestPatchInputStateDefaults):
 
 class TestSelect:
     """Behavioral tests for the Select widget."""
+
+    def test_saved_relative_selection_is_not_treated_as_live_before_patch_binding(
+        self, qtbot
+    ):
+        """Saved selection payload should be reapplied once a patch source exists."""
+        with widget_context(Select) as widget:
+            widget.show()
+            qtbot.wait(10)
+            payload = {
+                "basis": "relative",
+                "rows": [
+                    {
+                        "dim": "distance",
+                        "enabled": True,
+                        "low": {"kind": "float", "value": 100.0},
+                        "high": {"kind": "float", "value": 200.0},
+                    }
+                ],
+            }
+
+            assert widget._selection_state.prime_patch_state_from_settings(payload)
+            widget._selection_state.mode = SelectionMode.NONE
+
+            assert not widget._saved_patch_selection_matches_live_state(payload)
 
     def test_new_widget_starts_with_blank_selection_state(self, qtbot):
         """Selection state does not carry across widget instances."""
