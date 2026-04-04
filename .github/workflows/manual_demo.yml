@@ -1,12 +1,12 @@
 name: Interactive Demo (noVNC)
 
-# Runs automatically when a PR is labeled "demo", or can be triggered manually.
+# Runs automatically when a PR is labeled "debug", or can be triggered manually.
 # The noVNC URL is printed in the "Print session URL" step of the job log.
 # Access requires the MANUAL_DEMO_PASSWORD Actions secret.
 # Cancel the workflow run to end the session early.
 on:
   pull_request:
-    types: [labeled, synchronize, closed]
+    types: [labeled, synchronize]
   workflow_dispatch:
     inputs:
       timeout_minutes:
@@ -31,10 +31,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (
         github.event_name == 'pull_request' &&
-        (
-          contains(github.event.pull_request.labels.*.name, 'demo') ||
-          github.event.action == 'closed'
-        )
+        contains(github.event.pull_request.labels.*.name, 'debug')
       )
 
     env:
@@ -42,37 +39,28 @@ jobs:
       QT_QPA_PLATFORM: xcb
 
     steps:
-      - name: Stop demo on PR close
-        if: github.event_name == 'pull_request' && github.event.action == 'closed'
-        run: echo "PR closed; concurrency will cancel any older in-progress demo run."
-
       - uses: actions/checkout@v4
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
         with:
           fetch-tags: "true"
           fetch-depth: "0"
 
       - uses: ./.github/actions/mamba-install-derzug
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
         with:
           python-version: "3.13"
           cache-number: 3
 
       - name: Install display, VNC, and window manager
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
         run: |
           sudo apt-get update -q
           sudo apt-get install -y xvfb x11vnc novnc openbox
 
       - name: Download cloudflared
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
         run: |
           curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
             -o cloudflared
           chmod +x cloudflared
 
       - name: Start virtual display and window manager
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
         run: |
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 1
@@ -80,7 +68,6 @@ jobs:
           sleep 1
 
       - name: Start VNC server
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
         env:
           MANUAL_DEMO_PASSWORD: ${{ secrets.MANUAL_DEMO_PASSWORD }}
         run: |
@@ -101,13 +88,13 @@ jobs:
           echo "VNC_AVAILABLE=true" >> "$GITHUB_ENV"
 
       - name: Start noVNC websocket proxy
-        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
+        if: env.VNC_AVAILABLE == 'true'
         run: |
           websockify --web /usr/share/novnc 6080 localhost:5900 &
           sleep 1
 
       - name: Start cloudflare tunnel
-        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
+        if: env.VNC_AVAILABLE == 'true'
         run: |
           ./cloudflared tunnel --url http://localhost:6080 > /tmp/cf.log 2>&1 &
           # Wait up to 30 s for the public URL to appear
@@ -125,14 +112,14 @@ jobs:
           echo "DEMO_URL=$BASE_URL/vnc.html?autoconnect=true" >> "$GITHUB_ENV"
 
       - name: Launch DerZug
-        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
+        if: env.VNC_AVAILABLE == 'true'
         shell: bash -el {0}
         run: |
           derzug --demo --dev &
           sleep 5
 
       - name: Print session URL
-        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
+        if: env.VNC_AVAILABLE == 'true'
         run: |
           echo "Session URL: $DEMO_URL"
           echo ""
@@ -151,7 +138,7 @@ jobs:
           echo ""
 
       - name: Find PR demo comment
-        if: github.event_name == 'pull_request' && github.event.action != 'closed' && env.VNC_AVAILABLE == 'true'
+        if: github.event_name == 'pull_request' && env.VNC_AVAILABLE == 'true'
         id: find_demo_comment
         uses: peter-evans/find-comment@v3
         with:
@@ -160,7 +147,7 @@ jobs:
           body-includes: "<!-- derzug-interactive-demo -->"
 
       - name: Create or update PR demo comment
-        if: github.event_name == 'pull_request' && github.event.action != 'closed' && env.VNC_AVAILABLE == 'true'
+        if: github.event_name == 'pull_request' && env.VNC_AVAILABLE == 'true'
         uses: peter-evans/create-or-update-comment@v4
         with:
           comment-id: ${{ steps.find_demo_comment.outputs.comment-id }}
@@ -176,7 +163,7 @@ jobs:
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Keep session alive
-        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
+        if: env.VNC_AVAILABLE == 'true'
         run: |
           TIMEOUT_MINS="${{ github.event.inputs.timeout_minutes }}"
           TIMEOUT_SECS=$(( ${TIMEOUT_MINS:-30} * 60 ))
