@@ -222,8 +222,7 @@ class TestSelect:
                 }
             ],
         }
-        select_widget.saved_selection_basis = payload["basis"]
-        select_widget.saved_selection_ranges = payload["rows"]
+        select_widget.saved_patch_selection = payload
         select_widget._selection_state = type(select_widget._selection_state)()
 
         select_widget.set_patch(patch)
@@ -252,8 +251,7 @@ class TestSelect:
         }
 
         select_widget.set_patch(patch)
-        select_widget.saved_selection_basis = payload["basis"]
-        select_widget.saved_selection_ranges = payload["rows"]
+        select_widget.saved_patch_selection = payload
 
         changed = select_widget._reconcile_saved_patch_selection_state()
 
@@ -283,8 +281,7 @@ class TestSelect:
         received = capture_output(select_widget.Outputs.patch, monkeypatch)
 
         select_widget.set_patch(patch)
-        select_widget.saved_selection_basis = payload["basis"]
-        select_widget.saved_selection_ranges = payload["rows"]
+        select_widget.saved_patch_selection = payload
 
         assert len(received) >= 2
         expected = select_widget.get_task().run(
@@ -316,13 +313,11 @@ class TestSelect:
             "_emit_selected_output",
             lambda: emitted.append(True),
         )
-        select_widget.saved_selection_basis = payload["basis"]
-        select_widget.saved_selection_ranges = payload["rows"]
+        select_widget.saved_patch_selection = payload
         select_widget.set_patch(patch)
         emitted.clear()
 
-        select_widget.saved_selection_basis = payload["basis"]
-        select_widget.saved_selection_ranges = payload["rows"]
+        select_widget.saved_patch_selection = payload
 
         assert not emitted
 
@@ -347,8 +342,7 @@ class TestSelect:
         select_widget.set_patch(patch)
         received_before = len(received)
 
-        select_widget.saved_selection_basis = payload["basis"]
-        select_widget.saved_selection_ranges = payload["rows"]
+        select_widget.saved_patch_selection = payload
         qtbot.waitUntil(lambda: len(received) > received_before, timeout=1000)
 
         assert select_widget._selection_patch_basis == "relative"

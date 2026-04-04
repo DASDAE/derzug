@@ -93,6 +93,7 @@ class Select(SelectionControlsMixin, ZugWidget):
     keywords = ("select", "patch", "spool", "subset", "filter")
     priority = 23
     unpack_single_patch = Setting(True)
+    saved_patch_selection = Setting({}, schema_only=True)
     saved_selection_basis = Setting("", schema_only=True)
     saved_selection_ranges = Setting([], schema_only=True)
     saved_spool_filters = Setting([], schema_only=True)
@@ -108,7 +109,7 @@ class Select(SelectionControlsMixin, ZugWidget):
     def __setattr__(self, name, value) -> None:
         """Track restored settings so pending patch restore stays deterministic."""
         super().__setattr__(name, value)
-        if name not in {"saved_selection_basis", "saved_selection_ranges"}:
+        if name not in {"saved_patch_selection", "saved_selection_ranges"}:
             return
         if not getattr(self, "_saved_patch_setting_sync_enabled", False):
             return
@@ -165,6 +166,7 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._saved_patch_setting_sync_enabled = True
         self._debug(
             "post-prime "
+            f"saved_patch_selection={self.saved_patch_selection!r} "
             f"saved_basis={self.saved_selection_basis!r} "
             f"saved_rows={self.saved_selection_ranges!r} "
             f"pending={self._pending_saved_patch_selection_payload!r} "
@@ -193,6 +195,7 @@ class Select(SelectionControlsMixin, ZugWidget):
         """Receive a patch input and expose patch-range selection controls."""
         self._debug(
             "set_patch start "
+            f"saved_patch_selection={self.saved_patch_selection!r} "
             f"saved_basis={self.saved_selection_basis!r} "
             f"saved_rows={self.saved_selection_ranges!r} "
             f"pending_before={self._pending_saved_patch_selection_payload!r} "
@@ -312,6 +315,17 @@ class Select(SelectionControlsMixin, ZugWidget):
 
     def _load_saved_patch_selection_state(self) -> dict[str, object] | None:
         """Return serialized patch selection settings staged from widget state."""
+        payload = self.saved_patch_selection
+        if isinstance(payload, dict):
+            basis_name = str(payload.get("basis", "")).strip()
+            rows = payload.get("rows")
+            if basis_name and isinstance(rows, list) and rows:
+                restored = {"basis": basis_name, "rows": rows}
+                self._debug(
+                    "_load_saved_patch_selection_state payload="
+                    f"{restored!r} source='combined'"
+                )
+                return restored
         basis_name = str(self.saved_selection_basis or "").strip()
         rows = (
             self.saved_selection_ranges
@@ -321,13 +335,16 @@ class Select(SelectionControlsMixin, ZugWidget):
         if not basis_name or not rows:
             self._debug(
                 "_load_saved_patch_selection_state empty "
+                f"saved_patch_selection={self.saved_patch_selection!r} "
                 f"saved_basis={self.saved_selection_basis!r} "
                 f"saved_rows={self.saved_selection_ranges!r}"
             )
             return None
-        payload = {"basis": basis_name, "rows": rows}
-        self._debug(f"_load_saved_patch_selection_state payload={payload!r}")
-        return payload
+        restored = {"basis": basis_name, "rows": rows}
+        self._debug(
+            f"_load_saved_patch_selection_state payload={restored!r} source='legacy'"
+        )
+        return restored
 
     def _load_saved_spool_filter_state(self) -> list[tuple[str, str]]:
         """Return persisted spool filter rows from widget settings."""
@@ -503,16 +520,21 @@ class Select(SelectionControlsMixin, ZugWidget):
             self._suspend_saved_patch_setting_sync = True
             try:
                 if payload is None:
+                    self.saved_patch_selection = {}
                     self.saved_selection_basis = ""
                     self.saved_selection_ranges = []
                 else:
-                    self.saved_selection_basis = str(payload["basis"])
-                    self.saved_selection_ranges = list(payload["rows"])
+                    self.saved_patch_selection = dict(payload)
+                    # Keep legacy split settings only as a read fallback for older
+                    # workflows; do not repopulate them during normal persistence.
+                    self.saved_selection_basis = ""
+                    self.saved_selection_ranges = []
             finally:
                 self._suspend_saved_patch_setting_sync = False
             self._debug(
                 "_persist_selection_settings patch "
                 f"payload={payload!r} "
+                f"saved_patch_selection={self.saved_patch_selection!r} "
                 f"saved_basis={self.saved_selection_basis!r} "
                 f"saved_rows={self.saved_selection_ranges!r}"
             )
