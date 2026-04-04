@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import ClassVar
 
 import dascore as dc
@@ -276,7 +277,7 @@ class Select(SelectionControlsMixin, ZugWidget):
             basis_name = str(payload.get("basis", "")).strip()
             rows = payload.get("rows")
             if basis_name and isinstance(rows, list) and rows:
-                return {"basis": basis_name, "rows": rows}
+                return {"basis": basis_name, "rows": deepcopy(rows)}
         basis_name = str(self.saved_selection_basis or "").strip()
         rows = (
             self.saved_selection_ranges
@@ -285,7 +286,7 @@ class Select(SelectionControlsMixin, ZugWidget):
         )
         if not basis_name or not rows:
             return None
-        return {"basis": basis_name, "rows": rows}
+        return {"basis": basis_name, "rows": deepcopy(rows)}
 
     def _load_saved_spool_filter_state(self) -> list[tuple[str, str]]:
         """Return persisted spool filter rows from widget settings."""
@@ -425,11 +426,11 @@ class Select(SelectionControlsMixin, ZugWidget):
                     self.saved_selection_basis = ""
                     self.saved_selection_ranges = []
                 else:
-                    self.saved_patch_selection = dict(payload)
+                    self.saved_patch_selection = deepcopy(payload)
                     self.saved_selection_basis = str(payload.get("basis", "")).strip()
                     rows = payload.get("rows")
                     self.saved_selection_ranges = (
-                        list(rows) if isinstance(rows, list) else []
+                        deepcopy(rows) if isinstance(rows, list) else []
                     )
             finally:
                 self._suspend_saved_patch_setting_sync = False
