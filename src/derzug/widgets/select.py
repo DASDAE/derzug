@@ -98,14 +98,22 @@ class Select(SelectionControlsMixin, ZugWidget):
     saved_spool_filters = Setting([], schema_only=True)
 
     def __setattr__(self, name, value) -> None:
-        """Track restored settings so pending patch restore stays deterministic."""
+        """Track restored settings so late patch selection restore stays atomic."""
         super().__setattr__(name, value)
-        if name not in {"saved_patch_selection", "saved_selection_ranges"}:
+        if name not in {
+            "saved_patch_selection",
+            "saved_selection_basis",
+            "saved_selection_ranges",
+        }:
             return
         if not getattr(self, "_saved_patch_setting_sync_enabled", False):
             return
-        self._sync_pending_saved_patch_selection_payload()
-        self._apply_pending_saved_patch_selection_if_ready()
+        if name == "saved_patch_selection":
+            self._sync_pending_saved_patch_selection_payload()
+            if not self._restore_pending_saved_patch_selection_if_ready():
+                self._queue_pending_saved_patch_selection_apply()
+            return
+        self._queue_pending_saved_patch_selection_apply()
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -145,6 +153,7 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._preview_selected = None
         self._compact_width_done = False
         self._pending_saved_patch_selection_payload: dict[str, object] | None = None
+        self._saved_patch_apply_queued = False
         self._saved_patch_setting_sync_enabled = False
         self._suspend_saved_patch_setting_sync = False
         self._prime_saved_selection_state()
@@ -174,9 +183,10 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._patch = patch
         self._spool = None
         self._sync_pending_saved_patch_selection_payload()
-        applied = self._apply_pending_saved_patch_selection_if_ready()
+        applied = self._restore_pending_saved_patch_selection_if_ready()
         if not applied:
             self._selection_set_patch_source(patch, notify=False, refresh_ui=False)
+            self._queue_pending_saved_patch_selection_apply()
         self._emit_selected_output()
 
     @Inputs.spool
@@ -296,12 +306,8 @@ class Select(SelectionControlsMixin, ZugWidget):
         return restored
 
     def _prime_saved_selection_state(self) -> None:
-        """Stage workflow-backed selection settings before any input arrives."""
+        """Load persisted settings that do not require a bound patch source."""
         self._sync_pending_saved_patch_selection_payload()
-        if self._selection_state.prime_patch_state_from_settings(
-            self._pending_saved_patch_selection_payload
-        ):
-            self._selection_state.mode = SelectionMode.NONE
         saved_filters = self._load_saved_spool_filter_state()
         if saved_filters:
             self._selection_state.set_spool_filters(saved_filters)
@@ -313,6 +319,19 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._pending_saved_patch_selection_payload = (
             self._load_saved_patch_selection_state()
         )
+
+    def _queue_pending_saved_patch_selection_apply(self) -> None:
+        """Coalesce saved patch restore until the current Qt event turn finishes."""
+        if self._saved_patch_apply_queued:
+            return
+        self._saved_patch_apply_queued = True
+        QTimer.singleShot(0, self._flush_pending_saved_patch_selection_apply)
+
+    def _flush_pending_saved_patch_selection_apply(self) -> None:
+        """Refresh and apply any saved patch selection after queued restores land."""
+        self._saved_patch_apply_queued = False
+        self._sync_pending_saved_patch_selection_payload()
+        self._restore_pending_saved_patch_selection_if_ready()
 
     def _saved_patch_selection_matches_live_state(
         self,
@@ -350,42 +369,35 @@ class Select(SelectionControlsMixin, ZugWidget):
                 return False
         return True
 
-    def _reconcile_saved_patch_selection_state(self) -> bool:
-        """Restore saved patch selection onto the current live patch, if needed."""
-        payload = (
-            self._pending_saved_patch_selection_payload
-            or self._load_saved_patch_selection_state()
-        )
+    def _restore_saved_patch_selection_payload(
+        self,
+        payload: dict[str, object] | None,
+    ) -> bool:
+        """Rebuild live patch state atomically from saved payload plus current patch."""
         patch = self._patch
         if payload is None or patch is None:
             return False
         if self._saved_patch_selection_matches_live_state(payload):
+            self._pending_saved_patch_selection_payload = None
             return False
-        if not self._selection_state.prime_patch_state_from_settings(payload):
+        restored_state = SelectionState()
+        if not restored_state.prime_patch_state_from_settings(payload):
             return False
-        self._selection_state.set_patch_source(patch)
-        self._apply_saved_patch_selection_payload(payload)
+        restored_state.set_patch_source(patch)
+        self._selection_state = restored_state
         self._pending_saved_patch_selection_payload = None
         self._selection_refresh_panel()
         return True
 
-    def _apply_saved_patch_selection_payload(self, payload: dict[str, object]) -> None:
-        """Overlay one serialized patch-selection payload onto the live state."""
-        rows = payload.get("rows")
-        if not isinstance(rows, list):
-            return
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            dim = str(row.get("dim", "")).strip()
-            if not dim or dim not in self._selection_state.patch.ranges:
-                continue
-            low = self._selection_state._deserialize_value(row.get("low"))
-            high = self._selection_state._deserialize_value(row.get("high"))
-            self._selection_state.patch.ranges[dim] = (low, high)
-            self._selection_state.patch.enabled[dim] = bool(row.get("enabled", True))
+    def _reconcile_saved_patch_selection_state(self) -> bool:
+        """Compatibility shim for tests calling the old restore helper directly."""
+        payload = (
+            self._pending_saved_patch_selection_payload
+            or self._load_saved_patch_selection_state()
+        )
+        return self._restore_saved_patch_selection_payload(payload)
 
-    def _apply_pending_saved_patch_selection_if_ready(self) -> bool:
+    def _restore_pending_saved_patch_selection_if_ready(self) -> bool:
         """Apply staged saved patch settings once a patch input is available."""
         if self._input_kind != "patch" or self._patch is None:
             return False
@@ -393,7 +405,9 @@ class Select(SelectionControlsMixin, ZugWidget):
             self._sync_pending_saved_patch_selection_payload()
         if self._pending_saved_patch_selection_payload is None:
             return False
-        if not self._reconcile_saved_patch_selection_state():
+        if not self._restore_saved_patch_selection_payload(
+            self._pending_saved_patch_selection_payload
+        ):
             return False
         self._emit_selected_output()
         return True
@@ -412,10 +426,11 @@ class Select(SelectionControlsMixin, ZugWidget):
                     self.saved_selection_ranges = []
                 else:
                     self.saved_patch_selection = dict(payload)
-                    # Keep legacy split settings only as a read fallback for older
-                    # workflows; do not repopulate them during normal persistence.
-                    self.saved_selection_basis = ""
-                    self.saved_selection_ranges = []
+                    self.saved_selection_basis = str(payload.get("basis", "")).strip()
+                    rows = payload.get("rows")
+                    self.saved_selection_ranges = (
+                        list(rows) if isinstance(rows, list) else []
+                    )
             finally:
                 self._suspend_saved_patch_setting_sync = False
             return

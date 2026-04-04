@@ -3237,6 +3237,14 @@ class TestDerZugCanvasWorkflow:
             )
             loaded_select_widget.show()
             qapp.processEvents()
+            qtbot.waitUntil(
+                lambda: (
+                    loaded_select_widget._selection_patch_basis == "relative"
+                    and loaded_select_widget._selection_current_patch_range("distance")
+                    == (100.0, 200.0)
+                ),
+                timeout=5000,
+            )
 
             assert loaded_select_widget._selection_patch_basis == "relative"
             assert loaded_select_widget._selection_current_patch_range("distance") == (
