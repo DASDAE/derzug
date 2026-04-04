@@ -85,22 +85,29 @@ jobs:
           MANUAL_DEMO_PASSWORD: ${{ secrets.MANUAL_DEMO_PASSWORD }}
         run: |
           if [ -z "$MANUAL_DEMO_PASSWORD" ]; then
-            echo "ERROR: MANUAL_DEMO_PASSWORD secret is not configured."
-            exit 1
+            echo "VNC unavailable: MANUAL_DEMO_PASSWORD secret is not configured."
+            echo "VNC_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
           fi
           mkdir -p "$RUNNER_TEMP"
           x11vnc -storepasswd "$MANUAL_DEMO_PASSWORD" "$RUNNER_TEMP/x11vnc.pass" >/dev/null
           x11vnc -display :99 -rfbauth "$RUNNER_TEMP/x11vnc.pass" -listen localhost -xkb -forever -shared &
           sleep 1
+          if ! pgrep -f "x11vnc -display :99" >/dev/null; then
+            echo "VNC unavailable: x11vnc failed to stay running."
+            echo "VNC_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "VNC_AVAILABLE=true" >> "$GITHUB_ENV"
 
       - name: Start noVNC websocket proxy
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
+        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
         run: |
           websockify --web /usr/share/novnc 6080 localhost:5900 &
           sleep 1
 
       - name: Start cloudflare tunnel
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
+        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
         run: |
           ./cloudflared tunnel --url http://localhost:6080 > /tmp/cf.log 2>&1 &
           # Wait up to 30 s for the public URL to appear
@@ -118,14 +125,14 @@ jobs:
           echo "DEMO_URL=$BASE_URL/vnc.html?autoconnect=true" >> "$GITHUB_ENV"
 
       - name: Launch DerZug
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
+        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
         shell: bash -el {0}
         run: |
           derzug --demo --dev &
           sleep 5
 
       - name: Print session URL
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
+        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
         run: |
           echo "Session URL: $DEMO_URL"
           echo ""
@@ -144,7 +151,7 @@ jobs:
           echo ""
 
       - name: Find PR demo comment
-        if: github.event_name == 'pull_request' && github.event.action != 'closed'
+        if: github.event_name == 'pull_request' && github.event.action != 'closed' && env.VNC_AVAILABLE == 'true'
         id: find_demo_comment
         uses: peter-evans/find-comment@v3
         with:
@@ -153,7 +160,7 @@ jobs:
           body-includes: "<!-- derzug-interactive-demo -->"
 
       - name: Create or update PR demo comment
-        if: github.event_name == 'pull_request' && github.event.action != 'closed'
+        if: github.event_name == 'pull_request' && github.event.action != 'closed' && env.VNC_AVAILABLE == 'true'
         uses: peter-evans/create-or-update-comment@v4
         with:
           comment-id: ${{ steps.find_demo_comment.outputs.comment-id }}
@@ -169,7 +176,7 @@ jobs:
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Keep session alive
-        if: github.event_name != 'pull_request' || github.event.action != 'closed'
+        if: (github.event_name != 'pull_request' || github.event.action != 'closed') && env.VNC_AVAILABLE == 'true'
         run: |
           TIMEOUT_MINS="${{ github.event.inputs.timeout_minutes }}"
           TIMEOUT_SECS=$(( ${TIMEOUT_MINS:-30} * 60 ))
