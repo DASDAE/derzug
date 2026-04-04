@@ -257,6 +257,26 @@ def _fresh_derzug_window(qapp, tmp_path):
             os.environ["XDG_DATA_HOME"] = old_data_home
 
 
+def _debug_select_widget_state(label: str, widget) -> None:
+    """Print verbose Select-widget state for CI debugging."""
+    try:
+        payload = widget._selection_state.patch_settings_payload(include_inactive=True)
+    except Exception as exc:  # pragma: no cover - debug only
+        payload = f"<payload-error {exc!r}>"
+    print(  # noqa: T201
+        "TEST_SELECT_DEBUG "
+        f"{label} "
+        f"widget_id={id(widget)} "
+        f"input_kind={getattr(widget, '_input_kind', None)!r} "
+        f"saved_basis={getattr(widget, 'saved_selection_basis', None)!r} "
+        f"saved_ranges={getattr(widget, 'saved_selection_ranges', None)!r} "
+        f"pending={getattr(widget, '_pending_saved_patch_selection_payload', None)!r} "
+        f"live_basis={getattr(widget, '_selection_patch_basis', None)!r} "
+        f"live_payload={payload!r}",
+        flush=True,
+    )
+
+
 @pytest.fixture
 def orange_workflow(derzug_app, qapp):
     """Return a helper for building workflows in the DerZug main window."""
@@ -3208,15 +3228,19 @@ class TestDerZugCanvasWorkflow:
         spool_widget.run()
         wait_for_widget_idle(spool_widget, timeout=5.0)
         qtbot.waitUntil(lambda: select_widget._patch is not None, timeout=5000)
+        _debug_select_widget_state("before-switch-relative", select_widget)
 
         select_widget._selection_panel.patch_basis_combo.setCurrentText("Relative")
         qapp.processEvents()
+        _debug_select_widget_state("after-switch-relative", select_widget)
         selected = (100.0, 200.0)
         select_widget._selection_update_patch_range("distance", *selected)
         qapp.processEvents()
+        _debug_select_widget_state("after-range-update", select_widget)
 
         workflow_path = tmp_path / "select-cold-reopen-relative.ows"
         assert window.save_scheme_to(workflow.scheme, str(workflow_path))
+        _debug_select_widget_state("after-save-original-widget", select_widget)
 
         with _fresh_derzug_window(qapp, tmp_path / "fresh-relative") as fresh_window:
             fresh_window.load_scheme(str(workflow_path))
@@ -3231,6 +3255,7 @@ class TestDerZugCanvasWorkflow:
             )
             loaded_spool_widget = loaded_scheme.widget_for_node(loaded_spool_node)
             loaded_select_widget = loaded_scheme.widget_for_node(loaded_select_node)
+            _debug_select_widget_state("loaded-widget-immediate", loaded_select_widget)
 
             wait_for_widget_idle(loaded_spool_widget, timeout=5.0)
             qtbot.waitUntil(
@@ -3238,6 +3263,9 @@ class TestDerZugCanvasWorkflow:
             )
             loaded_select_widget.show()
             qapp.processEvents()
+            _debug_select_widget_state(
+                "loaded-widget-after-patch", loaded_select_widget
+            )
 
             assert loaded_select_widget._selection_patch_basis == "relative"
             assert loaded_select_widget._selection_current_patch_range("distance") == (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -35,6 +36,11 @@ def _values_equal(left: Any, right: Any) -> bool:
     if isinstance(result, np.ndarray):
         return bool(result.all())
     return bool(result)
+
+
+def _selection_debug(message: str) -> None:
+    """Emit selection-state diagnostics for CI debugging."""
+    print(f"SELECTION_DEBUG {message}", file=sys.stderr, flush=True)  # noqa: T201
 
 
 def _ordered_pair(first: Any, second: Any) -> tuple[Any, Any]:
@@ -319,15 +325,24 @@ class SelectionState:
 
     def prime_patch_state_from_settings(self, payload: dict[str, Any] | None) -> bool:
         """Seed patch selection state from a serialized workflow payload."""
+        _selection_debug(f"prime_patch_state_from_settings start payload={payload!r}")
         if not isinstance(payload, dict):
+            _selection_debug("prime_patch_state_from_settings bail_not_dict")
             return False
         basis_name = str(payload.get("basis", "")).strip()
         rows = payload.get("rows")
         if not basis_name or not isinstance(rows, list):
+            _selection_debug(
+                "prime_patch_state_from_settings bail_missing_basis_or_rows"
+            )
             return False
         try:
             basis = PatchSelectionBasis(basis_name)
         except Exception:
+            _selection_debug(
+                "prime_patch_state_from_settings bail_invalid_basis "
+                f"basis_name={basis_name!r}"
+            )
             return False
         ranges: dict[str, tuple[Any, Any]] = {}
         enabled: dict[str, bool] = {}
@@ -343,6 +358,7 @@ class SelectionState:
             )
             enabled[dim] = bool(row.get("enabled", True))
         if not ranges:
+            _selection_debug("prime_patch_state_from_settings bail_no_ranges")
             return False
         self.mode = SelectionMode.PATCH
         self.patch = PatchSelectionState(
@@ -351,14 +367,27 @@ class SelectionState:
             enabled=enabled,
         )
         self.spool = SpoolFilterState()
+        _selection_debug(
+            "prime_patch_state_from_settings applied "
+            f"basis={self.patch.basis.value!r} ranges={self.patch.ranges!r}"
+        )
         return True
 
     def set_patch_source(self, patch) -> None:
         """Seed patch ranges from a patch while preserving basis and valid ranges."""
+        _selection_debug(
+            "set_patch_source start "
+            f"patch_present={patch is not None} "
+            f"mode_before={self.mode.value!r} "
+            f"basis_before={self.patch.basis.value!r} "
+            f"ranges_before={self.patch.ranges!r} "
+            f"extents_before={self.patch.extents!r}"
+        )
         self.spool = SpoolFilterState()
         if patch is None:
             self.patch_source = None
             self.mode = SelectionMode.NONE
+            _selection_debug("set_patch_source cleared")
             return
         self.patch_source = patch
 
@@ -396,6 +425,13 @@ class SelectionState:
             extents=extents,
             ranges=ranges,
             enabled=enabled,
+        )
+        _selection_debug(
+            "set_patch_source end "
+            f"basis_after={self.patch.basis.value!r} "
+            f"ranges_after={self.patch.ranges!r} "
+            f"extents_after={self.patch.extents!r} "
+            f"selection_active={selection_active}"
         )
 
     def set_spool_source(self, spool) -> None:
@@ -502,7 +538,14 @@ class SelectionState:
 
     def set_patch_basis(self, basis: PatchSelectionBasis) -> None:
         """Switch patch basis while preserving the logical selected window."""
+        _selection_debug(
+            "set_patch_basis start "
+            f"basis_before={self.patch.basis.value!r} "
+            f"basis_target={basis.value!r} "
+            f"patch_present={self.patch_source is not None}"
+        )
         if basis is self.patch.basis:
+            _selection_debug("set_patch_basis noop_same_basis")
             return
         patch = self.patch_source
         previous_basis = self.patch.basis
@@ -532,6 +575,11 @@ class SelectionState:
             extents=extents,
             ranges=ranges,
             enabled=previous_enabled,
+        )
+        _selection_debug(
+            "set_patch_basis end "
+            f"basis_after={self.patch.basis.value!r} "
+            f"ranges_after={self.patch.ranges!r}"
         )
 
     def set_spool_filter(self, key: str, raw_value: str) -> None:
