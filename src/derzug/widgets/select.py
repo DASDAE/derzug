@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import ClassVar
 
 import dascore as dc
@@ -18,6 +19,7 @@ from derzug.utils.spool import (
     filter_contents_by_annotations,
 )
 from derzug.widgets.selection import (
+    PatchSelectionBasis,
     SelectionControlsMixin,
     SelectionMode,
     SelectionState,
@@ -91,9 +93,28 @@ class Select(SelectionControlsMixin, ZugWidget):
     keywords = ("select", "patch", "spool", "subset", "filter")
     priority = 23
     unpack_single_patch = Setting(True)
+    saved_patch_selection = Setting({}, schema_only=True)
     saved_selection_basis = Setting("", schema_only=True)
     saved_selection_ranges = Setting([], schema_only=True)
     saved_spool_filters = Setting([], schema_only=True)
+
+    def __setattr__(self, name, value) -> None:
+        """Track restored settings so late patch selection restore stays atomic."""
+        super().__setattr__(name, value)
+        if name not in {
+            "saved_patch_selection",
+            "saved_selection_basis",
+            "saved_selection_ranges",
+        }:
+            return
+        if not getattr(self, "_saved_patch_setting_sync_enabled", False):
+            return
+        if name == "saved_patch_selection":
+            self._sync_pending_saved_patch_selection_payload()
+            if not self._restore_pending_saved_patch_selection_if_ready():
+                self._queue_pending_saved_patch_selection_apply()
+            return
+        self._queue_pending_saved_patch_selection_apply()
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -126,15 +147,18 @@ class Select(SelectionControlsMixin, ZugWidget):
     def __init__(self) -> None:
         super().__init__()
         self._init_selection_controls()
-        self._prime_saved_selection_state()
         self._patch: dc.Patch | None = None
         self._spool: dc.BaseSpool | None = None
         self._annotation_set: AnnotationSet | None = None
         self._input_kind: str | None = None
         self._preview_selected = None
         self._compact_width_done = False
-        self._saved_patch_restore_generation = 0
-
+        self._pending_saved_patch_selection_payload: dict[str, object] | None = None
+        self._saved_patch_apply_queued = False
+        self._saved_patch_setting_sync_enabled = False
+        self._suspend_saved_patch_setting_sync = False
+        self._prime_saved_selection_state()
+        self._saved_patch_setting_sync_enabled = True
         params_box = gui.widgetBox(self.controlArea, "Parameters")
         self._build_selection_panel(params_box)
         self.unpack_checkbox = gui.checkBox(
@@ -156,25 +180,19 @@ class Select(SelectionControlsMixin, ZugWidget):
     @Inputs.patch
     def set_patch(self, patch: dc.Patch | None) -> None:
         """Receive a patch input and expose patch-range selection controls."""
-        self._saved_patch_restore_generation += 1
-        generation = self._saved_patch_restore_generation
         self._input_kind = "patch"
         self._patch = patch
         self._spool = None
-        self._ensure_saved_patch_selection_state_primed()
-        self._selection_set_patch_source(patch, notify=False, refresh_ui=False)
+        self._sync_pending_saved_patch_selection_payload()
+        applied = self._restore_pending_saved_patch_selection_if_ready()
+        if not applied:
+            self._selection_set_patch_source(patch, notify=False, refresh_ui=False)
+            self._queue_pending_saved_patch_selection_apply()
         self._emit_selected_output()
-        QTimer.singleShot(
-            0,
-            lambda run_generation=generation: (
-                self._apply_deferred_saved_patch_selection_reconcile(run_generation)
-            ),
-        )
 
     @Inputs.spool
     def set_spool(self, spool: dc.BaseSpool | None) -> None:
         """Receive a spool input and expose metadata selection controls."""
-        self._saved_patch_restore_generation += 1
         self._input_kind = "spool"
         self._spool = spool
         self._patch = None
@@ -189,6 +207,7 @@ class Select(SelectionControlsMixin, ZugWidget):
 
     def _selection_on_state_changed(self) -> None:
         """Recompute the current selected output and preview."""
+        self._pending_saved_patch_selection_payload = None
         self._persist_selection_settings()
         self._emit_selected_output()
 
@@ -253,6 +272,12 @@ class Select(SelectionControlsMixin, ZugWidget):
 
     def _load_saved_patch_selection_state(self) -> dict[str, object] | None:
         """Return serialized patch selection settings staged from widget state."""
+        payload = self.saved_patch_selection
+        if isinstance(payload, dict):
+            basis_name = str(payload.get("basis", "")).strip()
+            rows = payload.get("rows")
+            if basis_name and isinstance(rows, list) and rows:
+                return {"basis": basis_name, "rows": deepcopy(rows)}
         basis_name = str(self.saved_selection_basis or "").strip()
         rows = (
             self.saved_selection_ranges
@@ -261,7 +286,7 @@ class Select(SelectionControlsMixin, ZugWidget):
         )
         if not basis_name or not rows:
             return None
-        return {"basis": basis_name, "rows": rows}
+        return {"basis": basis_name, "rows": deepcopy(rows)}
 
     def _load_saved_spool_filter_state(self) -> list[tuple[str, str]]:
         """Return persisted spool filter rows from widget settings."""
@@ -282,26 +307,32 @@ class Select(SelectionControlsMixin, ZugWidget):
         return restored
 
     def _prime_saved_selection_state(self) -> None:
-        """Stage workflow-backed selection settings before any input arrives."""
-        if self._selection_state.prime_patch_state_from_settings(
-            self._load_saved_patch_selection_state()
-        ):
-            self._selection_state.mode = SelectionMode.NONE
+        """Load persisted settings that do not require a bound patch source."""
+        self._sync_pending_saved_patch_selection_payload()
         saved_filters = self._load_saved_spool_filter_state()
         if saved_filters:
             self._selection_state.set_spool_filters(saved_filters)
 
-    def _ensure_saved_patch_selection_state_primed(self) -> None:
-        """Prime delayed-restored patch selection settings before first patch load."""
-        if self._selection_state.patch_source is not None:
+    def _sync_pending_saved_patch_selection_payload(self) -> None:
+        """Refresh the staged saved patch selection payload from widget settings."""
+        if self._suspend_saved_patch_setting_sync:
             return
-        payload = self._load_saved_patch_selection_state()
-        if payload is None:
+        self._pending_saved_patch_selection_payload = (
+            self._load_saved_patch_selection_state()
+        )
+
+    def _queue_pending_saved_patch_selection_apply(self) -> None:
+        """Coalesce saved patch restore until the current Qt event turn finishes."""
+        if self._saved_patch_apply_queued:
             return
-        if self._saved_patch_selection_matches_live_state(payload):
-            return
-        if self._selection_state.prime_patch_state_from_settings(payload):
-            self._selection_state.mode = SelectionMode.NONE
+        self._saved_patch_apply_queued = True
+        QTimer.singleShot(0, self._flush_pending_saved_patch_selection_apply)
+
+    def _flush_pending_saved_patch_selection_apply(self) -> None:
+        """Refresh and apply any saved patch selection after queued restores land."""
+        self._saved_patch_apply_queued = False
+        self._sync_pending_saved_patch_selection_payload()
+        self._restore_pending_saved_patch_selection_if_ready()
 
     def _saved_patch_selection_matches_live_state(
         self,
@@ -309,6 +340,15 @@ class Select(SelectionControlsMixin, ZugWidget):
     ) -> bool:
         """Return True when the saved patch-selection rows already match live state."""
         if not isinstance(payload, dict):
+            return False
+        basis_name = str(payload.get("basis", "")).strip()
+        requires_bound_patch = basis_name != PatchSelectionBasis.ABSOLUTE.value
+        if requires_bound_patch and self._selection_state.patch_source is None:
+            return False
+        if (
+            requires_bound_patch
+            and self._selection_state.mode is not SelectionMode.PATCH
+        ):
             return False
         live_payload = self._selection_state.patch_settings_payload(
             include_inactive=True
@@ -330,31 +370,48 @@ class Select(SelectionControlsMixin, ZugWidget):
                 return False
         return True
 
-    def _reconcile_saved_patch_selection_state(self) -> bool:
-        """Restore saved patch selection onto the current live patch, if needed."""
-        payload = self._load_saved_patch_selection_state()
+    def _restore_saved_patch_selection_payload(
+        self,
+        payload: dict[str, object] | None,
+    ) -> bool:
+        """Rebuild live patch state atomically from saved payload plus current patch."""
         patch = self._patch
         if payload is None or patch is None:
             return False
         if self._saved_patch_selection_matches_live_state(payload):
+            self._pending_saved_patch_selection_payload = None
             return False
-        if not self._selection_state.prime_patch_state_from_settings(payload):
+        restored_state = SelectionState()
+        if not restored_state.prime_patch_state_from_settings(payload):
             return False
-        self._selection_state.set_patch_source(patch)
+        restored_state.set_patch_source(patch)
+        self._selection_state = restored_state
+        self._pending_saved_patch_selection_payload = None
         self._selection_refresh_panel()
         return True
 
-    def _apply_deferred_saved_patch_selection_reconcile(
-        self,
-        generation: int,
-    ) -> None:
-        """Reapply saved patch selection after load-time settings restoration."""
-        if generation != self._saved_patch_restore_generation:
-            return
+    def _reconcile_saved_patch_selection_state(self) -> bool:
+        """Compatibility shim for tests calling the old restore helper directly."""
+        payload = (
+            self._pending_saved_patch_selection_payload
+            or self._load_saved_patch_selection_state()
+        )
+        return self._restore_saved_patch_selection_payload(payload)
+
+    def _restore_pending_saved_patch_selection_if_ready(self) -> bool:
+        """Apply staged saved patch settings once a patch input is available."""
         if self._input_kind != "patch" or self._patch is None:
-            return
-        if self._reconcile_saved_patch_selection_state():
-            self._emit_selected_output()
+            return False
+        if self._pending_saved_patch_selection_payload is None:
+            self._sync_pending_saved_patch_selection_payload()
+        if self._pending_saved_patch_selection_payload is None:
+            return False
+        if not self._restore_saved_patch_selection_payload(
+            self._pending_saved_patch_selection_payload
+        ):
+            return False
+        self._emit_selected_output()
+        return True
 
     def _persist_selection_settings(self) -> None:
         """Mirror the current selection controls into schema-backed settings."""
@@ -362,12 +419,21 @@ class Select(SelectionControlsMixin, ZugWidget):
             payload = self._selection_state.patch_settings_payload(
                 include_inactive=True
             )
-            if payload is None:
-                self.saved_selection_basis = ""
-                self.saved_selection_ranges = []
-            else:
-                self.saved_selection_basis = str(payload["basis"])
-                self.saved_selection_ranges = list(payload["rows"])
+            self._suspend_saved_patch_setting_sync = True
+            try:
+                if payload is None:
+                    self.saved_patch_selection = {}
+                    self.saved_selection_basis = ""
+                    self.saved_selection_ranges = []
+                else:
+                    self.saved_patch_selection = deepcopy(payload)
+                    self.saved_selection_basis = str(payload.get("basis", "")).strip()
+                    rows = payload.get("rows")
+                    self.saved_selection_ranges = (
+                        deepcopy(rows) if isinstance(rows, list) else []
+                    )
+            finally:
+                self._suspend_saved_patch_setting_sync = False
             return
 
         if self._input_kind == "spool":

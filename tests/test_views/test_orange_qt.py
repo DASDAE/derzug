@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import sys
 from contextlib import contextmanager
@@ -11,8 +12,16 @@ from urllib.parse import parse_qs, urlparse
 import dascore as dc
 import derzug.constants as constants
 import pytest
-from AnyQt.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
-from AnyQt.QtGui import QAction, QKeyEvent, QMouseEvent
+from AnyQt.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QRectF, Qt
+from AnyQt.QtGui import (
+    QAction,
+    QCursor,
+    QFont,
+    QKeyEvent,
+    QKeySequence,
+    QMouseEvent,
+    QTextCursor,
+)
 from AnyQt.QtTest import QTest
 from AnyQt.QtWidgets import (
     QApplication,
@@ -23,6 +32,7 @@ from AnyQt.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QWidget,
 )
 from derzug.annotations_config import (
@@ -39,6 +49,7 @@ from derzug.utils.testing import (
 from derzug.views import orange as orange_view
 from derzug.views.orange import (
     ActiveSourceManager,
+    CodeWorkflowWarningDialog,
     DerZugConfig,
     DerZugErrorDialog,
     DerZugMain,
@@ -56,9 +67,18 @@ from derzug.views.orange import (
 from derzug.views.orange_errors import _build_issue_body, _build_issue_url
 from derzug.widgets.spool import Spool
 from derzug.widgets.table2annotation import Table2Annotation
+from orangecanvas.application.canvastooldock import SplitterResizer
 from orangecanvas.application.outputview import ExceptHook, TerminalTextDocument
 from orangecanvas.document.interactions import RectangleSelectionAction
 from orangecanvas.gui.windowlistmanager import WindowListManager
+
+
+def _action_by_name(actions, name: str) -> QAction:
+    """Return one QAction by objectName."""
+    for action in actions:
+        if action.objectName() == name:
+            return action
+    raise LookupError(name)
 
 
 def _graph_signature(scheme) -> tuple[set[str], set[tuple[str, str, str, str]]]:
@@ -139,6 +159,14 @@ def _menu_labels(window, menu_name: str) -> list[str]:
     ]
 
 
+def _clear_code_warning_setting() -> None:
+    """Reset the persisted code-workflow warning preference for one test."""
+    settings = orange_view._derzug_settings()
+    settings.beginGroup("load")
+    settings.remove("hide-code-widget-warning")
+    settings.endGroup()
+
+
 def _dispatch_mouse_event(
     widget,
     event_type: QEvent.Type,
@@ -157,6 +185,11 @@ def _dispatch_mouse_event(
         Qt.NoModifier,
     )
     QApplication.sendEvent(widget, event)
+
+
+def _visible_scene_rect(view) -> QRectF:
+    """Return the current viewport coverage mapped into scene coordinates."""
+    return view.mapToScene(view.viewport().rect()).boundingRect()
 
 
 class _SipModuleWrongWrapper:
@@ -300,6 +333,21 @@ class TestDerZugMainWindow:
             "Example Workflow",
             "Donate to Orange",
         ]
+
+    def test_splitter_resizer_ignores_generic_resize_events(self, qtbot):
+        """Orange splitter resizer should not assert on generic resize events."""
+        splitter = QSplitter()
+        top = QWidget()
+        bottom = QWidget()
+        splitter.addWidget(top)
+        splitter.addWidget(bottom)
+        qtbot.addWidget(splitter)
+
+        resizer = SplitterResizer()
+        resizer.setSplitterAndWidget(splitter, bottom)
+
+        event = QEvent(QEvent.Type.Resize)
+        assert resizer.eventFilter(bottom, event) is False
 
     def test_shell_hides_inherited_orange_actions(self, derzug_app):
         """Menus should drop the inherited Orange-specific maintenance actions."""
@@ -549,6 +597,56 @@ class TestDerZugMainWindow:
         assert dialog.result() == QDialog.DialogCode.Accepted
         assert dialog.hide_future_warnings is True
 
+    def test_code_warning_ok_keeps_future_warnings_enabled(self, qtbot):
+        """Accepting the code warning without opt-out keeps future warnings on."""
+        dialog = CodeWorkflowWarningDialog()
+        qtbot.addWidget(dialog)
+        ok_button = next(
+            button
+            for button in dialog.findChildren(QPushButton)
+            if button.text() == "Load Workflow"
+        )
+
+        dialog.show()
+        QTest.mouseClick(ok_button, Qt.MouseButton.LeftButton)
+
+        assert dialog.result() == QDialog.DialogCode.Accepted
+        assert dialog.hide_future_warnings is False
+
+    def test_code_warning_checked_checkbox_persists_opt_out(self, qtbot):
+        """Checking the opt-out box before load should persist suppression intent."""
+        dialog = CodeWorkflowWarningDialog()
+        qtbot.addWidget(dialog)
+        checkbox = dialog.findChild(QCheckBox)
+        ok_button = next(
+            button
+            for button in dialog.findChildren(QPushButton)
+            if button.text() == "Load Workflow"
+        )
+
+        dialog.show()
+        checkbox.setChecked(True)
+        QTest.mouseClick(ok_button, Qt.MouseButton.LeftButton)
+
+        assert dialog.result() == QDialog.DialogCode.Accepted
+        assert dialog.hide_future_warnings is True
+
+    def test_code_warning_cancel_rejects_without_opt_out(self, qtbot):
+        """Canceling the code warning should reject without suppressing prompts."""
+        dialog = CodeWorkflowWarningDialog()
+        qtbot.addWidget(dialog)
+        cancel_button = next(
+            button
+            for button in dialog.findChildren(QPushButton)
+            if button.text() == "Cancel"
+        )
+
+        dialog.show()
+        QTest.mouseClick(cancel_button, Qt.MouseButton.LeftButton)
+
+        assert dialog.result() == QDialog.DialogCode.Rejected
+        assert dialog.hide_future_warnings is False
+
     def test_about_dialog_is_derzug_led_with_orange_in_credits(self, qtbot):
         """About should lead with DerZug while keeping Orange as secondary credit."""
         dialog = orange_view.DerZugAboutDialog()
@@ -625,6 +723,18 @@ class TestDerZugMainWindow:
 
         assert window.should_show_experimental_warning() is True
 
+    def test_clear_code_warning_setting_restores_warning_visibility(self, derzug_app):
+        """Clearing the stored opt-out should make code warnings visible again."""
+        window = derzug_app.window
+        _clear_code_warning_setting()
+
+        window.set_code_widget_warning_hidden(True)
+        assert window.should_show_code_widget_warning() is False
+
+        window.clear_code_widget_warning_hidden()
+
+        assert window.should_show_code_widget_warning() is True
+
     def test_startup_warning_ignores_other_settings_scopes(self, derzug_app):
         """DerZug should not read the warning flag from unrelated QSettings scopes."""
         window = derzug_app.window
@@ -640,6 +750,22 @@ class TestDerZugMainWindow:
         other.endGroup()
 
         assert window.should_show_experimental_warning() is True
+
+    def test_code_warning_ignores_other_settings_scopes(self, derzug_app):
+        """DerZug should not read the code warning flag from unrelated scopes."""
+        window = derzug_app.window
+        _clear_code_warning_setting()
+        other = orange_view.QSettings(
+            orange_view.QSettings.IniFormat,
+            orange_view.QSettings.UserScope,
+            "some.other.scope",
+            "NotDerZug",
+        )
+        other.beginGroup("load")
+        other.setValue("hide-code-widget-warning", True)
+        other.endGroup()
+
+        assert window.should_show_code_widget_warning() is True
 
     def test_hot_reload_is_noop_outside_dev_mode(self, derzug_app, monkeypatch):
         """Non-dev hot reload attempts should not spawn a new process."""
@@ -1039,6 +1165,25 @@ class TestDerZugMainWindow:
         assert all(dist == constants.PKG_NAME for _, _, dist in loaded), loaded
         assert "000-Orange3" not in {name for name, _, _ in loaded}
 
+    def test_create_new_window_allows_missing_notification_server(
+        self, derzug_app, qapp
+    ):
+        """Opening example workflows should not crash without a notification server."""
+        window = derzug_app.window
+        assert window.notification_server is None
+
+        created = window.create_new_window()
+        qapp.processEvents()
+
+        try:
+            assert created is not None
+            assert isinstance(created, orange_view.DerZugMainWindow)
+        finally:
+            created.hide()
+            created.close()
+            created.deleteLater()
+            qapp.processEvents()
+
     def test_application_icon_loads_from_packaged_asset(self):
         """DerZug should expose a non-null application icon from static assets."""
         icon = DerZugConfig.application_icon()
@@ -1345,6 +1490,844 @@ class TestDerZugCanvasWorkflow:
             window.scheme_widget, "_SchemeEditWidget__possibleSelectionHandler"
         )
 
+    @staticmethod
+    def _create_canvas_annotation(
+        document,
+        kind: str,
+        qapp,
+        *,
+        start: QPoint | None = None,
+        end: QPoint | None = None,
+    ) -> object:
+        """Create one real canvas text or arrow annotation through the toolbar tool."""
+        view = document.view()
+        scene = document.scene()
+        viewport = view.viewport()
+        before = len(document.scheme().annotations)
+
+        action_name = {
+            "text": "new-text-action",
+            "arrow": "new-arrow-action",
+        }[kind]
+        start = QPoint(80, 80) if start is None else start
+        end = QPoint(180, 130) if end is None else end
+        action = _action_by_name(document.toolbarActions(), action_name)
+        if not action.isChecked():
+            action.trigger()
+        QTest.mousePress(viewport, Qt.LeftButton, Qt.NoModifier, start)
+        _dispatch_mouse_event(
+            viewport,
+            QEvent.Type.MouseMove,
+            end,
+            button=Qt.NoButton,
+            buttons=Qt.LeftButton,
+        )
+        QTest.mouseRelease(viewport, Qt.LeftButton, Qt.NoModifier, end)
+        scene.setFocusItem(None)
+        qapp.processEvents()
+        assert len(document.scheme().annotations) == before + 1
+        return document.scheme().annotations[-1]
+
+    @staticmethod
+    def _select_canvas_annotation_via_viewport(document, annotation, qapp) -> None:
+        """Select one rendered canvas annotation by clicking it in the viewport."""
+        view = document.view()
+        scene = document.scene()
+        viewport = view.viewport()
+        item = scene.item_for_annotation(annotation)
+        scene.clearSelection()
+        qapp.processEvents()
+        target_scene_pos = item.sceneBoundingRect().center()
+        target_viewport_pos = view.mapFromScene(target_scene_pos)
+        QTest.mouseClick(viewport, Qt.LeftButton, Qt.NoModifier, target_viewport_pos)
+        qapp.processEvents()
+
+    @staticmethod
+    def _arrow_palette(window) -> QWidget:
+        """Return the floating arrow color palette widget."""
+        palette = window.findChild(QWidget, "canvas-arrow-color-palette")
+        assert palette is not None
+        return palette
+
+    @staticmethod
+    def _arrow_palette_button(window, color: str) -> QPushButton:
+        """Return one arrow color swatch button by hex color."""
+        button = window.findChild(
+            QPushButton, f"canvas-arrow-color-{color.lstrip('#').lower()}"
+        )
+        assert button is not None
+        return button
+
+    @staticmethod
+    def _text_palette(window) -> QWidget:
+        """Return the floating text style palette widget."""
+        palette = window.findChild(QWidget, "canvas-text-style-palette")
+        assert palette is not None
+        return palette
+
+    @staticmethod
+    def _text_size_box(window) -> QComboBox:
+        """Return the floating text palette size combo box."""
+        box = window.findChild(QComboBox, "canvas-text-size-box")
+        assert box is not None
+        return box
+
+    @staticmethod
+    def _text_align_box(window) -> QComboBox:
+        """Return the floating text palette alignment combo box."""
+        box = window.findChild(QComboBox, "canvas-text-align-box")
+        assert box is not None
+        return box
+
+    @staticmethod
+    def _text_style_button(window, name: str) -> QPushButton:
+        """Return one floating text style toggle button."""
+        button = window.findChild(QPushButton, f"canvas-text-{name}-button")
+        assert button is not None
+        return button
+
+    def test_canvas_text_annotation_copy_paste_shortcuts_duplicate_selection(
+        self, derzug_app, qapp
+    ):
+        """Ctrl/Cmd+C then Ctrl/Cmd+V should duplicate selected canvas text."""
+        window = derzug_app.window
+        document = window.current_document()
+        view = document.view()
+        scene = document.scene()
+        viewport = view.viewport()
+
+        window.show()
+        qapp.processEvents()
+
+        annotation = self._create_canvas_annotation(document, "text", qapp)
+        scene.clearSelection()
+        scene.item_for_annotation(annotation).setSelected(True)
+        qapp.processEvents()
+        assert document.selectedAnnotations() == [annotation]
+
+        copy_action = _action_by_name(document.actions(), "copy-action")
+        paste_action = _action_by_name(document.actions(), "paste-action")
+        assert copy_action.shortcut().matches(QKeySequence.StandardKey.Copy)
+        assert paste_action.shortcut().matches(QKeySequence.StandardKey.Paste)
+        viewport.setFocus(Qt.OtherFocusReason)
+        qapp.processEvents()
+
+        QTest.keySequence(viewport, copy_action.shortcut())
+        qapp.processEvents()
+        QTest.keySequence(viewport, paste_action.shortcut())
+        qapp.processEvents()
+
+        assert len(document.scheme().annotations) == 2
+
+    def test_canvas_arrow_annotation_copy_paste_shortcuts_duplicate_selection(
+        self, derzug_app, qapp
+    ):
+        """Copy/paste should also duplicate selected canvas arrow annotations."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+        viewport = document.view().viewport()
+
+        window.show()
+        qapp.processEvents()
+
+        annotation = self._create_canvas_annotation(document, "arrow", qapp)
+        scene.clearSelection()
+        scene.item_for_annotation(annotation).setSelected(True)
+        qapp.processEvents()
+        assert document.selectedAnnotations() == [annotation]
+
+        copy_action = _action_by_name(document.actions(), "copy-action")
+        paste_action = _action_by_name(document.actions(), "paste-action")
+        viewport.setFocus(Qt.OtherFocusReason)
+        qapp.processEvents()
+
+        QTest.keySequence(viewport, copy_action.shortcut())
+        qapp.processEvents()
+        QTest.keySequence(viewport, paste_action.shortcut())
+        qapp.processEvents()
+
+        assert len(document.scheme().annotations) == 2
+
+    def test_canvas_arrow_shortcuts_work_after_viewport_click_selection(
+        self, derzug_app, qapp
+    ):
+        """Arrow cut/copy/paste should work after viewport click-selection."""
+        window = derzug_app.window
+        document = window.current_document()
+        viewport = document.view().viewport()
+
+        window.show()
+        qapp.processEvents()
+
+        annotation = self._create_canvas_annotation(document, "arrow", qapp)
+        self._select_canvas_annotation_via_viewport(document, annotation, qapp)
+        assert document.selectedAnnotations() == [annotation]
+
+        copy_action = _action_by_name(document.actions(), "copy-action")
+        cut_action = _action_by_name(document.actions(), "cut-action")
+        paste_action = _action_by_name(document.actions(), "paste-action")
+        viewport.setFocus(Qt.OtherFocusReason)
+        qapp.processEvents()
+
+        QTest.keySequence(viewport, copy_action.shortcut())
+        qapp.processEvents()
+        QTest.keySequence(viewport, paste_action.shortcut())
+        qapp.processEvents()
+        assert len(document.scheme().annotations) == 2
+
+        latest = document.scheme().annotations[-1]
+        self._select_canvas_annotation_via_viewport(document, latest, qapp)
+        assert document.selectedAnnotations() == [latest]
+        QTest.keySequence(viewport, cut_action.shortcut())
+        qapp.processEvents()
+        assert len(document.scheme().annotations) == 1
+
+    def test_canvas_text_annotation_cut_shortcut_removes_then_pastes_selection(
+        self, derzug_app, qapp
+    ):
+        """Cut should remove a selected canvas annotation and allow standard paste."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+        viewport = document.view().viewport()
+
+        window.show()
+        qapp.processEvents()
+
+        annotation = self._create_canvas_annotation(document, "text", qapp)
+        scene.clearSelection()
+        scene.item_for_annotation(annotation).setSelected(True)
+        qapp.processEvents()
+        assert document.selectedAnnotations() == [annotation]
+
+        cut_action = _action_by_name(document.actions(), "cut-action")
+        paste_action = _action_by_name(document.actions(), "paste-action")
+        assert cut_action is not None
+        assert cut_action.shortcut().matches(QKeySequence.StandardKey.Cut)
+        viewport.setFocus(Qt.OtherFocusReason)
+        qapp.processEvents()
+
+        QTest.keySequence(viewport, cut_action.shortcut())
+        qapp.processEvents()
+        assert len(document.scheme().annotations) == 0
+
+        QTest.keySequence(viewport, paste_action.shortcut())
+        qapp.processEvents()
+        assert len(document.scheme().annotations) == 1
+
+    def test_canvas_paste_places_text_annotation_near_mouse_position(
+        self, derzug_app, qapp
+    ):
+        """Paste should place copied canvas annotations so the cursor touches them."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+        view = document.view()
+        viewport = view.viewport()
+
+        window.show()
+        qapp.processEvents()
+
+        annotation = self._create_canvas_annotation(document, "text", qapp)
+        scene.clearSelection()
+        scene.item_for_annotation(annotation).setSelected(True)
+        qapp.processEvents()
+
+        copy_action = _action_by_name(document.actions(), "copy-action")
+        paste_action = _action_by_name(document.actions(), "paste-action")
+        viewport.setFocus(Qt.OtherFocusReason)
+        qapp.processEvents()
+
+        QTest.keySequence(viewport, copy_action.shortcut())
+        qapp.processEvents()
+
+        paste_viewport_pos = QPoint(240, 210)
+        target_scene_pos = view.mapToScene(paste_viewport_pos)
+        QCursor.setPos(viewport.mapToGlobal(paste_viewport_pos))
+        qapp.processEvents()
+
+        QTest.keySequence(viewport, paste_action.shortcut())
+        qapp.processEvents()
+
+        assert len(document.scheme().annotations) == 2
+        pasted = document.scheme().annotations[-1]
+        pasted_item = scene.item_for_annotation(pasted)
+        assert pasted_item.sceneBoundingRect().contains(target_scene_pos)
+
+    def test_arrow_palette_visibility_follows_tool_and_selection(
+        self, derzug_app, qapp
+    ):
+        """The floating arrow palette should appear only for arrow states."""
+        window = derzug_app.window
+        document = window.current_document()
+        palette = self._arrow_palette(window)
+        arrow_action = _action_by_name(document.toolbarActions(), "new-arrow-action")
+
+        window.show()
+        qapp.processEvents()
+
+        assert not palette.isVisible()
+        arrow_action.trigger()
+        qapp.processEvents()
+        assert palette.isVisible()
+
+        QTest.keyClick(document.view().viewport(), Qt.Key_Escape)
+        qapp.processEvents()
+        assert not palette.isVisible()
+
+        arrow = self._create_canvas_annotation(document, "arrow", qapp)
+        self._select_canvas_annotation_via_viewport(document, arrow, qapp)
+        assert palette.isVisible()
+
+        text = self._create_canvas_annotation(document, "text", qapp)
+        document.scene().clearSelection()
+        document.scene().item_for_annotation(text).setSelected(True)
+        qapp.processEvents()
+        assert not palette.isVisible()
+
+    def test_arrow_palette_changes_active_color_for_new_arrows(self, derzug_app, qapp):
+        """Clicking a swatch in arrow-create mode should set new-arrow color."""
+        window = derzug_app.window
+        document = window.current_document()
+        arrow_action = _action_by_name(document.toolbarActions(), "new-arrow-action")
+        target_color = "#1F9CDF"
+
+        window.show()
+        qapp.processEvents()
+
+        arrow_action.trigger()
+        qapp.processEvents()
+        QTest.mouseClick(
+            self._arrow_palette_button(window, target_color),
+            Qt.LeftButton,
+        )
+        qapp.processEvents()
+
+        start = QPoint(90, 90)
+        end = QPoint(180, 120)
+        viewport = document.view().viewport()
+        QTest.mousePress(viewport, Qt.LeftButton, Qt.NoModifier, start)
+        _dispatch_mouse_event(
+            viewport,
+            QEvent.Type.MouseMove,
+            end,
+            button=Qt.NoButton,
+            buttons=Qt.LeftButton,
+        )
+        QTest.mouseRelease(viewport, Qt.LeftButton, Qt.NoModifier, end)
+        qapp.processEvents()
+
+        arrow = document.scheme().annotations[-1]
+        assert isinstance(arrow, orange_view.SchemeArrowAnnotation)
+        assert arrow.color.lower() == target_color.lower()
+
+    def test_arrow_palette_enlarges_selected_swatch(self, derzug_app, qapp):
+        """The arrow palette should enlarge the active color swatch."""
+        window = derzug_app.window
+        document = window.current_document()
+        arrow_action = _action_by_name(document.toolbarActions(), "new-arrow-action")
+        active_button = self._arrow_palette_button(window, "#C1272D")
+        inactive_button = self._arrow_palette_button(window, "#000")
+
+        window.show()
+        qapp.processEvents()
+
+        arrow_action.trigger()
+        qapp.processEvents()
+
+        assert active_button.width() > inactive_button.width()
+
+    def test_arrow_palette_recolors_selected_arrows_with_undo(self, derzug_app, qapp):
+        """Clicking a swatch with an arrow selected should stay undoable."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+        target_color = "#39B54A"
+
+        window.show()
+        qapp.processEvents()
+
+        arrow = self._create_canvas_annotation(document, "arrow", qapp)
+        assert isinstance(arrow, orange_view.SchemeArrowAnnotation)
+        old_color = arrow.color
+        self._select_canvas_annotation_via_viewport(document, arrow, qapp)
+
+        QTest.mouseClick(
+            self._arrow_palette_button(window, target_color),
+            Qt.LeftButton,
+        )
+        qapp.processEvents()
+
+        assert arrow.color.lower() == target_color.lower()
+        assert (
+            scene.item_for_annotation(arrow).color().name().lower()
+            == target_color.lower()
+        )
+
+        document.undoStack().undo()
+        qapp.processEvents()
+        assert arrow.color == old_color
+
+    def test_arrow_palette_recolors_selected_arrow_when_click_clears_selection(
+        self,
+        derzug_app,
+        qapp,
+    ):
+        """Arrow recolor should survive a palette click clearing selection."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+        target_color = "#39B54A"
+
+        window.show()
+        qapp.processEvents()
+
+        arrow = self._create_canvas_annotation(document, "arrow", qapp)
+        self._select_canvas_annotation_via_viewport(document, arrow, qapp)
+        button = self._arrow_palette_button(window, target_color)
+        button.pressed.connect(scene.clearSelection)
+
+        QTest.mouseClick(button, Qt.LeftButton)
+        qapp.processEvents()
+
+        assert arrow.color.lower() == target_color.lower()
+
+    def test_arrow_palette_recolors_live_arrow_item_for_each_swatch(
+        self, derzug_app, qapp
+    ):
+        """Selecting swatches should repaint the selected arrow immediately."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+
+        window.show()
+        qapp.processEvents()
+
+        arrow = self._create_canvas_annotation(document, "arrow", qapp)
+        self._select_canvas_annotation_via_viewport(document, arrow, qapp)
+        item = scene.item_for_annotation(arrow)
+
+        for color in ("#000", "#C1272D", "#662D91", "#1F9CDF", "#39B54A"):
+            QTest.mouseClick(self._arrow_palette_button(window, color), Qt.LeftButton)
+            qapp.processEvents()
+            assert arrow.color.lower() == color.lower()
+            assert (
+                item.color().name().lower() == orange_view.QColor(color).name().lower()
+            )
+
+    def test_shift_arrow_edit_snaps_to_octilinear_angles(
+        self, derzug_app, qapp, monkeypatch
+    ):
+        """Shift-dragging an arrow endpoint should snap to 45-degree increments."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+
+        window.show()
+        qapp.processEvents()
+
+        arrow = self._create_canvas_annotation(document, "arrow", qapp)
+        item = scene.item_for_annotation(arrow)
+        document._SchemeEditWidget__startControlPointEdit(item)
+        handler = scene.user_interaction_handler
+        control = handler.control
+        point = control._ControlPointLine__points[1]
+
+        monkeypatch.setattr(
+            orange_view.QApplication,
+            "keyboardModifiers",
+            staticmethod(lambda: Qt.ShiftModifier),
+        )
+
+        control._ControlPointLine__setActiveControl(point)
+        control._ControlPointLine__activeControlMoved(QPointF(200, 145))
+        qapp.processEvents()
+
+        line = control.line()
+        dx = line.p2().x() - line.p1().x()
+        dy = line.p2().y() - line.p1().y()
+        rounded_abs = sorted((round(abs(dx), 3), round(abs(dy), 3)))
+
+        assert rounded_abs[0] == 0 or rounded_abs[0] == rounded_abs[1]
+
+    def test_shift_new_arrow_creation_snaps_to_octilinear_angles(
+        self, derzug_app, qapp
+    ):
+        """Shift while drawing a new arrow should snap it to 45-degree increments."""
+        window = derzug_app.window
+        document = window.current_document()
+        viewport = document.view().viewport()
+
+        window.show()
+        qapp.processEvents()
+
+        _action_by_name(document.toolbarActions(), "new-arrow-action").trigger()
+        qapp.processEvents()
+
+        start = QPoint(90, 90)
+        end = QPoint(180, 135)
+        QTest.mousePress(viewport, Qt.LeftButton, Qt.ShiftModifier, start)
+        _dispatch_mouse_event(
+            viewport,
+            QEvent.Type.MouseMove,
+            end,
+            button=Qt.NoButton,
+            buttons=Qt.LeftButton,
+        )
+        QTest.mouseRelease(viewport, Qt.LeftButton, Qt.ShiftModifier, end)
+        qapp.processEvents()
+
+        arrow = document.scheme().annotations[-1]
+        assert isinstance(arrow, orange_view.SchemeArrowAnnotation)
+        dx = arrow.end_pos[0] - arrow.start_pos[0]
+        dy = arrow.end_pos[1] - arrow.start_pos[1]
+        rounded_abs = sorted((round(abs(dx), 3), round(abs(dy), 3)))
+
+        assert rounded_abs[0] == 0 or rounded_abs[0] == rounded_abs[1]
+
+    def test_text_palette_visibility_follows_tool_and_selection(self, derzug_app, qapp):
+        """The floating text palette should appear only for text states."""
+        window = derzug_app.window
+        document = window.current_document()
+        palette = self._text_palette(window)
+        text_action = _action_by_name(document.toolbarActions(), "new-text-action")
+
+        window.show()
+        qapp.processEvents()
+
+        assert not palette.isVisible()
+        text_action.trigger()
+        qapp.processEvents()
+        assert palette.isVisible()
+
+        QTest.keyClick(document.view().viewport(), Qt.Key_Escape)
+        qapp.processEvents()
+        assert not palette.isVisible()
+
+        text = self._create_canvas_annotation(document, "text", qapp)
+        self._select_canvas_annotation_via_viewport(document, text, qapp)
+        assert palette.isVisible()
+
+        arrow = self._create_canvas_annotation(document, "arrow", qapp)
+        document.scene().clearSelection()
+        document.scene().item_for_annotation(arrow).setSelected(True)
+        qapp.processEvents()
+        assert not palette.isVisible()
+
+    def test_text_palette_stays_visible_after_creating_text_annotation(
+        self, derzug_app, qapp
+    ):
+        """Creating a text box should keep the text palette visible."""
+        window = derzug_app.window
+        document = window.current_document()
+        palette = self._text_palette(window)
+
+        window.show()
+        qapp.processEvents()
+
+        self._create_canvas_annotation(document, "text", qapp)
+        qapp.processEvents()
+
+        assert palette.isVisible()
+
+    def test_text_palette_changes_active_style_for_new_text_annotations(
+        self, derzug_app, qapp
+    ):
+        """Choosing text styles in text-create mode should affect new text."""
+        window = derzug_app.window
+        document = window.current_document()
+        text_action = _action_by_name(document.toolbarActions(), "new-text-action")
+
+        window.show()
+        qapp.processEvents()
+
+        text_action.trigger()
+        qapp.processEvents()
+        self._text_size_box(window).setCurrentText("24")
+        self._text_align_box(window).setCurrentText("Center")
+        qapp.processEvents()
+        QTest.mouseClick(self._text_style_button(window, "bold"), Qt.LeftButton)
+        QTest.mouseClick(self._text_style_button(window, "italic"), Qt.LeftButton)
+        QTest.mouseClick(self._text_style_button(window, "underline"), Qt.LeftButton)
+        qapp.processEvents()
+
+        text = self._create_canvas_annotation(document, "text", qapp)
+        assert isinstance(text, orange_view.SchemeTextAnnotation)
+        assert text.font["size"] == 24
+        assert text.font["weight"] == int(QFont.Weight.Bold)
+        assert text.font["italic"] is True
+        assert text.font["underline"] is True
+        assert text.font["alignment"] == "center"
+
+    def test_text_palette_restyles_only_selected_text_with_undo(self, derzug_app, qapp):
+        """Formatting changes should affect only selected text and stay undoable."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+
+        window.show()
+        qapp.processEvents()
+
+        first = self._create_canvas_annotation(
+            document,
+            "text",
+            qapp,
+            start=QPoint(70, 70),
+            end=QPoint(190, 130),
+        )
+        second = self._create_canvas_annotation(
+            document,
+            "text",
+            qapp,
+            start=QPoint(240, 180),
+            end=QPoint(360, 240),
+        )
+        first_before = dict(first.font)
+        second_before = dict(second.font)
+
+        self._select_canvas_annotation_via_viewport(document, first, qapp)
+        assert document.selectedAnnotations() == [first]
+
+        self._text_size_box(window).setCurrentText("28")
+        qapp.processEvents()
+        QTest.mouseClick(self._text_style_button(window, "italic"), Qt.LeftButton)
+        qapp.processEvents()
+
+        assert first.font["size"] == 28
+        assert first.font["italic"] is True
+        assert second.font == second_before
+
+        item_font = scene.item_for_annotation(first).font()
+        assert item_font.pixelSize() == 28
+        assert item_font.italic() is True
+
+        document.undoStack().undo()
+        qapp.processEvents()
+        document.undoStack().undo()
+        qapp.processEvents()
+
+        assert first.font == first_before
+        assert second.font == second_before
+
+    def test_text_palette_realigns_selected_text(self, derzug_app, qapp):
+        """Changing alignment should affect only the selected text annotation."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+
+        window.show()
+        qapp.processEvents()
+
+        first = self._create_canvas_annotation(
+            document, "text", qapp, start=QPoint(70, 70), end=QPoint(190, 130)
+        )
+        second = self._create_canvas_annotation(
+            document, "text", qapp, start=QPoint(240, 180), end=QPoint(360, 240)
+        )
+
+        self._select_canvas_annotation_via_viewport(document, first, qapp)
+        self._text_align_box(window).setCurrentText("Right")
+        qapp.processEvents()
+
+        assert first.font["alignment"] == "right"
+        assert second.font.get("alignment", "left") == "left"
+        assert (
+            scene.item_for_annotation(first).textCursor().blockFormat().alignment()
+            & Qt.AlignmentFlag.AlignRight
+        )
+
+    def test_text_alignment_round_trips_through_ows_save_load(self, derzug_app):
+        """Text alignment should persist through standard .ows serialization."""
+        scheme = orange_view.Scheme()
+        scheme.add_annotation(
+            orange_view.SchemeTextAnnotation(
+                (10.0, 20.0, 100.0, 50.0),
+                "hello",
+                "text/plain",
+                {"family": "Arial", "size": 16, "alignment": "center"},
+            )
+        )
+        buffer = io.BytesIO()
+
+        scheme.save_to(buffer)
+        loaded = orange_view.Scheme()
+        loaded.load_from(io.BytesIO(buffer.getvalue()))
+
+        assert len(loaded.annotations) == 1
+        loaded_text = loaded.annotations[0]
+        assert isinstance(loaded_text, orange_view.SchemeTextAnnotation)
+        assert loaded_text.font["alignment"] == "center"
+
+    def test_load_scheme_fits_view_to_all_widgets_and_annotations(
+        self, derzug_app, qapp, orange_workflow, tmp_path
+    ):
+        """Loading a workflow should zoom out to show widgets and annotations."""
+        window = derzug_app.window
+        orange_workflow((("Spool", "spool-node"),))
+        document = window.current_document()
+        scheme = document.scheme()
+        assert scheme is not None
+
+        scheme.add_annotation(
+            orange_view.SchemeTextAnnotation(
+                (4200.0, 3100.0, 220.0, 120.0),
+                "far away",
+                "text/plain",
+                {"family": "Arial", "size": 16},
+            )
+        )
+        qapp.processEvents()
+
+        workflow_path = tmp_path / "fit_all_contents.ows"
+        with workflow_path.open("wb") as stream:
+            scheme.save_to(stream)
+
+        window.load_scheme(str(workflow_path))
+        qapp.processEvents()
+        QCoreApplication.sendPostedEvents()
+        qapp.processEvents()
+
+        view = window.current_document().view()
+        scene = window.current_document().scene()
+        visible = _visible_scene_rect(view)
+        contents = scene.itemsBoundingRect()
+
+        assert visible.contains(contents)
+
+    def test_load_scheme_keeps_larger_existing_view_when_contents_already_fit(
+        self, derzug_app, qapp, orange_workflow, tmp_path
+    ):
+        """
+        Loading should not zoom in when the current view already contains
+        contents.
+        """
+        window = derzug_app.window
+        orange_workflow((("Spool", "spool-node"),))
+        document = window.current_document()
+        scheme = document.scheme()
+        assert scheme is not None
+
+        scheme.add_annotation(
+            orange_view.SchemeTextAnnotation(
+                (220.0, 180.0, 120.0, 60.0),
+                "small",
+                "text/plain",
+                {"family": "Arial", "size": 16},
+            )
+        )
+        qapp.processEvents()
+
+        workflow_path = tmp_path / "keep_large_view.ows"
+        with workflow_path.open("wb") as stream:
+            scheme.save_to(stream)
+
+        view = document.view()
+        view.setSceneRect(QRectF(-2000.0, -1500.0, 5000.0, 4000.0))
+        view.fitInView(view.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        qapp.processEvents()
+        visible_before = _visible_scene_rect(view)
+
+        window.load_scheme(str(workflow_path))
+        qapp.processEvents()
+        QCoreApplication.sendPostedEvents()
+        qapp.processEvents()
+
+        reloaded_view = window.current_document().view()
+        reloaded_scene = window.current_document().scene()
+        visible_after = _visible_scene_rect(reloaded_view)
+        contents = reloaded_scene.itemsBoundingRect()
+
+        assert visible_after.contains(contents)
+        assert visible_after.width() >= visible_before.width()
+        assert visible_after.height() >= visible_before.height()
+
+    def test_text_palette_applies_inline_rich_text_to_active_editor(
+        self, derzug_app, qapp
+    ):
+        """Formatting while editing should preserve mixed rich text."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+
+        window.show()
+        qapp.processEvents()
+
+        annotation = self._create_canvas_annotation(document, "text", qapp)
+        item = scene.item_for_annotation(annotation)
+        item.setSelected(True)
+        item.startEdit()
+        qapp.processEvents()
+
+        cursor = item.textCursor()
+        cursor.insertText("alpha beta")
+        item.setTextCursor(cursor)
+
+        cursor = item.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Left, n=2)
+        item.setTextCursor(cursor)
+        qapp.processEvents()
+
+        QTest.mouseClick(self._text_style_button(window, "bold"), Qt.LeftButton)
+        qapp.processEvents()
+        item.endEdit()
+        qapp.processEvents()
+
+        assert annotation.content_type == "text/html"
+        assert "alpha" in annotation.content
+        assert "beta" in annotation.content
+        assert "<" in annotation.content
+        assert "font-weight" in annotation.content or "<b>" in annotation.content
+
+    def test_text_style_buttons_have_tooltips_with_shortcuts(self, derzug_app, qapp):
+        """Formatting buttons should advertise their standard shortcuts."""
+        window = derzug_app.window
+
+        window.show()
+        qapp.processEvents()
+
+        assert "Bold" in self._text_style_button(window, "bold").toolTip()
+        assert "Italic" in self._text_style_button(window, "italic").toolTip()
+        assert "Underline" in self._text_style_button(window, "underline").toolTip()
+
+    def test_standard_text_shortcuts_apply_to_active_text_editor(
+        self, derzug_app, qapp
+    ):
+        """Bold/italic/underline shortcuts should format the active editor."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+        viewport = document.view().viewport()
+
+        window.show()
+        qapp.processEvents()
+
+        annotation = self._create_canvas_annotation(document, "text", qapp)
+        item = scene.item_for_annotation(annotation)
+        item.setSelected(True)
+        item.startEdit()
+        qapp.processEvents()
+
+        cursor = item.textCursor()
+        cursor.insertText("alpha")
+        cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+        item.setTextCursor(cursor)
+        viewport.setFocus(Qt.OtherFocusReason)
+        qapp.processEvents()
+
+        QTest.keySequence(viewport, QKeySequence.StandardKey.Bold)
+        QTest.keySequence(viewport, QKeySequence.StandardKey.Italic)
+        QTest.keySequence(viewport, QKeySequence.StandardKey.Underline)
+        qapp.processEvents()
+
+        item.endEdit()
+        qapp.processEvents()
+
+        assert annotation.content_type == "text/html"
+        assert "font-weight" in annotation.content or "<b>" in annotation.content
+        assert "font-style" in annotation.content or "<i>" in annotation.content
+        assert "text-decoration" in annotation.content or "<u>" in annotation.content
+
     def test_middle_button_drag_pans_canvas_and_expands_scene(
         self, derzug_app, qapp, orange_workflow
     ):
@@ -1417,6 +2400,106 @@ class TestDerZugCanvasWorkflow:
         assert viewport.cursor().shape() == Qt.CursorShape.ArrowCursor
         assert self._possible_selection_handler(window) is None
         assert scene.user_interaction_handler is None
+
+    def test_text_palette_stays_pinned_during_middle_button_pan(self, derzug_app, qapp):
+        """The floating text palette should stay fixed to the viewport during pan."""
+        window = derzug_app.window
+        document = window.current_document()
+        view = document.view()
+        viewport = view.viewport()
+
+        window.show()
+        qapp.processEvents()
+
+        self._create_canvas_annotation(document, "text", qapp)
+        palette = self._text_palette(window)
+        assert palette.isVisible()
+        initial_pos = palette.pos()
+
+        start = viewport.rect().center()
+        end = start - QPoint(120, 90)
+
+        _dispatch_mouse_event(
+            viewport,
+            QEvent.Type.MouseButtonPress,
+            start,
+            button=Qt.MiddleButton,
+            buttons=Qt.MiddleButton,
+        )
+        qapp.processEvents()
+
+        _dispatch_mouse_event(
+            viewport,
+            QEvent.Type.MouseMove,
+            end,
+            button=Qt.NoButton,
+            buttons=Qt.MiddleButton,
+        )
+        qapp.processEvents()
+
+        assert palette.isVisible()
+        assert palette.pos() == initial_pos
+
+        _dispatch_mouse_event(
+            viewport,
+            QEvent.Type.MouseButtonRelease,
+            end,
+            button=Qt.MiddleButton,
+            buttons=Qt.NoButton,
+        )
+        qapp.processEvents()
+
+        assert palette.pos() == initial_pos
+
+    def test_shift_drag_locks_text_annotation_to_one_axis(
+        self, derzug_app, qapp, monkeypatch
+    ):
+        """Holding Shift while moving a text annotation should lock it to one axis."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+
+        window.show()
+        qapp.processEvents()
+
+        annotation = self._create_canvas_annotation(document, "text", qapp)
+        item = scene.item_for_annotation(annotation)
+        start = QPointF(item.pos())
+
+        monkeypatch.setattr(
+            orange_view.QApplication,
+            "keyboardModifiers",
+            staticmethod(lambda: Qt.ShiftModifier),
+        )
+        item.setPos(start + QPointF(80, 20))
+        qapp.processEvents()
+
+        delta = item.pos() - start
+        assert delta.x() == 0 or delta.y() == 0
+
+    def test_shift_drag_locks_widget_to_one_axis(
+        self, derzug_app, qapp, orange_workflow, monkeypatch
+    ):
+        """Holding Shift while moving a widget should lock it to one axis."""
+        window = derzug_app.window
+        workflow = orange_workflow((("Spool", "spool-node"),))
+        node = workflow.nodes_by_title["spool-node"]
+        item = window.current_document().scene().item_for_node(node)
+
+        window.show()
+        qapp.processEvents()
+
+        start = QPointF(item.pos())
+        monkeypatch.setattr(
+            orange_view.QApplication,
+            "keyboardModifiers",
+            staticmethod(lambda: Qt.ShiftModifier),
+        )
+        item.setPos(start + QPointF(80, 20))
+        qapp.processEvents()
+
+        delta = item.pos() - start
+        assert delta.x() == 0 or delta.y() == 0
 
     def test_left_drag_on_empty_canvas_still_uses_rectangle_selection(
         self, derzug_app, qapp, orange_workflow
@@ -1646,6 +2729,158 @@ class TestDerZugCanvasWorkflow:
         )
         loaded_filter_widget = loaded_scheme.widget_for_node(loaded_filter_node)
         assert loaded_filter_widget.selected_filter == "median_filter"
+
+    def test_load_scheme_without_code_widget_skips_security_warning(
+        self, derzug_app, tmp_path, qapp, orange_workflow, monkeypatch
+    ):
+        """Loading a safe workflow should not show the code-widget warning."""
+        window = derzug_app.window
+        _clear_code_warning_setting()
+        workflow = orange_workflow((("Spool", "spool-node"),))
+        workflow_path = tmp_path / "safe.ows"
+        shown: list[object] = []
+
+        class _FakeDialog:
+            hide_future_warnings = False
+
+            def __init__(self, parent=None) -> None:
+                shown.append(parent)
+
+            def exec(self):
+                return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(orange_view, "CodeWorkflowWarningDialog", _FakeDialog)
+
+        assert window.save_scheme_to(workflow.scheme, str(workflow_path))
+
+        window.load_scheme(str(workflow_path))
+        qapp.processEvents()
+
+        assert shown == []
+
+    def test_load_scheme_with_code_widget_shows_security_warning(
+        self, derzug_app, tmp_path, qapp, orange_workflow, monkeypatch
+    ):
+        """Loading a workflow with a Code widget should show the warning."""
+        window = derzug_app.window
+        _clear_code_warning_setting()
+        workflow = orange_workflow((("Code", "code-node"),))
+        workflow_path = tmp_path / "code.ows"
+        shown: list[object] = []
+
+        class _FakeDialog:
+            hide_future_warnings = False
+
+            def __init__(self, parent=None) -> None:
+                shown.append(parent)
+
+            def exec(self):
+                return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(orange_view, "CodeWorkflowWarningDialog", _FakeDialog)
+
+        assert window.save_scheme_to(workflow.scheme, str(workflow_path))
+
+        window.load_scheme(str(workflow_path))
+        qapp.processEvents()
+
+        assert shown == [window]
+
+    def test_code_warning_cancel_aborts_workflow_load(
+        self, derzug_app, tmp_path, qapp, orange_workflow, monkeypatch
+    ):
+        """Canceling the code warning should leave the current workflow unchanged."""
+        window = derzug_app.window
+        _clear_code_warning_setting()
+        initial = orange_workflow((("Spool", "spool-node"),))
+        initial_signature = _graph_signature(initial.scheme)
+        code_workflow = orange_workflow((("Code", "code-node"),), clear=False)
+        workflow_path = tmp_path / "code-cancel.ows"
+
+        class _FakeDialog:
+            hide_future_warnings = False
+
+            def __init__(self, parent=None) -> None:
+                self.parent = parent
+
+            def exec(self):
+                return QDialog.DialogCode.Rejected
+
+        monkeypatch.setattr(orange_view, "CodeWorkflowWarningDialog", _FakeDialog)
+
+        assert window.save_scheme_to(code_workflow.scheme, str(workflow_path))
+        orange_workflow((("Spool", "spool-node"),))
+
+        window.load_scheme(str(workflow_path))
+        qapp.processEvents()
+
+        assert _graph_signature(window.current_document().scheme()) == initial_signature
+
+    def test_code_warning_opt_out_suppresses_later_load_prompt(
+        self, derzug_app, tmp_path, qapp, orange_workflow, monkeypatch
+    ):
+        """Accepting with opt-out should suppress the prompt on later code loads."""
+        window = derzug_app.window
+        _clear_code_warning_setting()
+        workflow = orange_workflow((("Code", "code-node"),))
+        workflow_path = tmp_path / "code-optout.ows"
+        shown: list[object] = []
+
+        class _FakeDialog:
+            hide_future_warnings = True
+
+            def __init__(self, parent=None) -> None:
+                shown.append(parent)
+
+            def exec(self):
+                return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(orange_view, "CodeWorkflowWarningDialog", _FakeDialog)
+
+        assert window.save_scheme_to(workflow.scheme, str(workflow_path))
+
+        window.load_scheme(str(workflow_path))
+        qapp.processEvents()
+        window.load_scheme(str(workflow_path))
+        qapp.processEvents()
+
+        assert shown == [window]
+        assert window.should_show_code_widget_warning() is False
+
+    def test_load_scheme_warns_for_code_widget_inside_composite(
+        self, derzug_app, tmp_path, qapp, orange_workflow, monkeypatch
+    ):
+        """Grouped composites with internal Code widgets should trigger the warning."""
+        window = derzug_app.window
+        _clear_code_warning_setting()
+        workflow = orange_workflow((("Spool", "spool-node"), ("Code", "code-node")))
+        composite = window._canvas_composite_controller.group_nodes(
+            [
+                workflow.nodes_by_title["spool-node"],
+                workflow.nodes_by_title["code-node"],
+            ]
+        )
+        workflow_path = tmp_path / "composite-code.ows"
+        shown: list[object] = []
+
+        class _FakeDialog:
+            hide_future_warnings = False
+
+            def __init__(self, parent=None) -> None:
+                shown.append(parent)
+
+            def exec(self):
+                return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(orange_view, "CodeWorkflowWarningDialog", _FakeDialog)
+
+        assert composite is not None
+        assert window.save_scheme_to(workflow.scheme, str(workflow_path))
+
+        window.load_scheme(str(workflow_path))
+        qapp.processEvents()
+
+        assert shown == [window]
 
     def test_workflow_roundtrip_preserves_waterfall_selection(
         self, derzug_app, tmp_path, qapp, orange_workflow
@@ -1973,7 +3208,6 @@ class TestDerZugCanvasWorkflow:
         spool_widget.run()
         wait_for_widget_idle(spool_widget, timeout=5.0)
         qtbot.waitUntil(lambda: select_widget._patch is not None, timeout=5000)
-
         select_widget._selection_panel.patch_basis_combo.setCurrentText("Relative")
         qapp.processEvents()
         selected = (100.0, 200.0)
@@ -2003,6 +3237,14 @@ class TestDerZugCanvasWorkflow:
             )
             loaded_select_widget.show()
             qapp.processEvents()
+            qtbot.waitUntil(
+                lambda: (
+                    loaded_select_widget._selection_patch_basis == "relative"
+                    and loaded_select_widget._selection_current_patch_range("distance")
+                    == (100.0, 200.0)
+                ),
+                timeout=5000,
+            )
 
             assert loaded_select_widget._selection_patch_basis == "relative"
             assert loaded_select_widget._selection_current_patch_range("distance") == (
@@ -2173,7 +3415,7 @@ class TestDerZugCanvasWorkflow:
             / "src"
             / "derzug"
             / "workflows"
-            / "020_basic_dss.ows"
+            / "01_Quick Start.ows"
         )
 
         window.load_scheme(str(workflow_path))

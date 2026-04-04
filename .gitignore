@@ -31,3 +31,4 @@ htmlcov/
 
 # Local CI helpers
 .tools/
+coverage.xml

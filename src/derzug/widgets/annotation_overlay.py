@@ -1264,8 +1264,7 @@ class AnnotationOverlayController:
         """Run the current annotation tool from one plot-space click position."""
         self.activate_layer()
         if self.tool == "point":
-            self.draw_start = plot_pos
-            self.start_preview(plot_pos)
+            self.create_point_annotation(*plot_pos)
             return True
         if self.tool == "line":
             self.draw_start = plot_pos
@@ -1343,6 +1342,13 @@ class AnnotationOverlayController:
                     "start_plot": plot_pos,
                     "annotation_id": item_at_pos.annotation_id,
                     "drag_ids": drag_ids,
+                    "original_annotations": {
+                        annotation.id: annotation
+                        for annotation in (self.annotation_set.annotations or ())
+                        if annotation.id in drag_ids
+                    }
+                    if self.annotation_set is not None
+                    else {},
                 }
                 event.accept()
                 return True
@@ -1355,6 +1361,13 @@ class AnnotationOverlayController:
                 self._group_drag_state = {
                     "start_plot": plot_pos,
                     "selected_ids": set(self.selected_annotation_ids),
+                    "original_annotations": {
+                        annotation.id: annotation
+                        for annotation in (self.annotation_set.annotations or ())
+                        if annotation.id in self.selected_annotation_ids
+                    }
+                    if self.annotation_set is not None
+                    else {},
                 }
                 event.accept()
                 return True
@@ -1381,9 +1394,35 @@ class AnnotationOverlayController:
             return False
         if event_type == QEvent.Type.GraphicsSceneMouseMove:
             if self._point_drag_state is not None:
+                plot_pos = self.scene_to_plot(event.scenePos())
+                if plot_pos is not None and self._host._axes is not None:
+                    delta_x = float(
+                        plot_pos[0] - self._point_drag_state["start_plot"][0]
+                    )
+                    delta_y = float(
+                        plot_pos[1] - self._point_drag_state["start_plot"][1]
+                    )
+                    self._preview_drag_translation(
+                        self._point_drag_state["original_annotations"],
+                        delta_x,
+                        delta_y,
+                    )
                 event.accept()
                 return True
             if self._group_drag_state is not None:
+                plot_pos = self.scene_to_plot(event.scenePos())
+                if plot_pos is not None and self._host._axes is not None:
+                    delta_x = float(
+                        plot_pos[0] - self._group_drag_state["start_plot"][0]
+                    )
+                    delta_y = float(
+                        plot_pos[1] - self._group_drag_state["start_plot"][1]
+                    )
+                    self._preview_drag_translation(
+                        self._group_drag_state["original_annotations"],
+                        delta_x,
+                        delta_y,
+                    )
                 event.accept()
                 return True
             if self.draw_start is None:
@@ -1413,8 +1452,9 @@ class AnnotationOverlayController:
                     return False
                 delta_x = float(plot_pos[0] - self._point_drag_state["start_plot"][0])
                 delta_y = float(plot_pos[1] - self._point_drag_state["start_plot"][1])
-                annotation_id = str(self._point_drag_state["annotation_id"])
-                drag_ids = set(self._point_drag_state["drag_ids"])
+                point_drag_state = self._point_drag_state
+                annotation_id = str(point_drag_state["annotation_id"])
+                drag_ids = set(point_drag_state["drag_ids"])
                 self._point_drag_state = None
                 if (
                     self.annotation_set is not None
@@ -1423,7 +1463,12 @@ class AnnotationOverlayController:
                 ):
                     updated_annotations = [
                         self._translate_annotation_by_plot_delta(
-                            annotation, delta_x, delta_y, self._host._axes
+                            point_drag_state["original_annotations"].get(
+                                annotation.id, annotation
+                            ),
+                            delta_x,
+                            delta_y,
+                            self._host._axes,
                         )
                         if annotation.id in drag_ids
                         else annotation
@@ -1449,7 +1494,8 @@ class AnnotationOverlayController:
                     return False
                 delta_x = float(plot_pos[0] - self._group_drag_state["start_plot"][0])
                 delta_y = float(plot_pos[1] - self._group_drag_state["start_plot"][1])
-                selected_ids = set(self._group_drag_state["selected_ids"])
+                group_drag_state = self._group_drag_state
+                selected_ids = set(group_drag_state["selected_ids"])
                 self._group_drag_state = None
                 if (
                     self.annotation_set is not None
@@ -1458,7 +1504,12 @@ class AnnotationOverlayController:
                 ):
                     updated_annotations = [
                         self._translate_annotation_by_plot_delta(
-                            annotation, delta_x, delta_y, self._host._axes
+                            group_drag_state["original_annotations"].get(
+                                annotation.id, annotation
+                            ),
+                            delta_x,
+                            delta_y,
+                            self._host._axes,
                         )
                         if annotation.id in selected_ids
                         else annotation
@@ -2573,6 +2624,12 @@ class AnnotationOverlayController:
         if axes is None:
             return
         geometry = annotation.geometry
+        if isinstance(item, _AnnotationPointDisplayItem) and isinstance(
+            geometry, PointGeometry
+        ):
+            plot_x, plot_y = _point_plot_xy(geometry, axes)
+            item.setPos(plot_x, plot_y)
+            return
         if isinstance(item, _AnnotationPointROI) and isinstance(
             geometry, PointGeometry
         ):
@@ -2600,6 +2657,38 @@ class AnnotationOverlayController:
             item.setSize(
                 (max(xmax - xmin, 1e-12), max(ymax - ymin, 1e-12)), finish=False
             )
+            return
+        if isinstance(geometry, PathGeometry) and len(geometry.points) >= 2:
+            plot_points = _path_plot_xy_points(geometry, axes)
+            xs = [float(point[0]) for point in plot_points]
+            ys = [float(point[1]) for point in plot_points]
+            xmin = min(xs)
+            ymin = min(ys)
+            if isinstance(item, _AnnotationPathROI):
+                item.setPos((xmin, ymin), finish=False)
+                return
+            if isinstance(item, _AnnotationPathDisplayItem):
+                item.setPos(xmin, ymin)
+                return
+
+    def _preview_drag_translation(
+        self,
+        original_annotations: dict[str, Annotation],
+        delta_x: float,
+        delta_y: float,
+    ) -> None:
+        """Apply one transient translated preview to currently dragged items."""
+        axes = self._host._axes
+        if axes is None:
+            return
+        for annotation_id, original in original_annotations.items():
+            item = self.annotation_items.get(annotation_id)
+            if item is None:
+                continue
+            translated = self._translate_annotation_by_plot_delta(
+                original, delta_x, delta_y, axes
+            )
+            self._apply_annotation_to_item(item, translated)
 
     @staticmethod
     def _annotation_anchor_plot(annotation: Annotation, axes) -> tuple[float, float]:

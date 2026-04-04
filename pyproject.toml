@@ -93,10 +93,10 @@ Table2Annotation = "derzug.widgets.table2annotation"
 Annotation2DataFrame = "derzug.widgets.annotation2dataframe"
 
 [project.entry-points."dascore.patch_namespace"]
-zug = "derzug.dascore:ZugPatchNameSpace"
+zug = "derzug.dascore.namespace:ZugPatchNameSpace"
 
 [project.entry-points."dascore.spool_namespace"]
-zug = "derzug.dascore:ZugSpoolNameSpace"
+zug = "derzug.dascore.namespace:ZugSpoolNameSpace"
 
 [tool.setuptools.package-data]
 "derzug" = ["static/*.png", "styles/*.qss", "styles/orange/*.svg"]

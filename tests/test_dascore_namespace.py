@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
-from importlib.metadata import entry_points
+import tomllib
+from pathlib import Path
 
 import dascore as dc
 import numpy as np
 import pytest
 from AnyQt.QtCore import QTimer
 from AnyQt.QtWidgets import QApplication, QWidget
-from derzug import dascore as dz_dascore
-from derzug.dascore import ZugPatchNameSpace, ZugSpoolNameSpace
+from derzug.dascore import namespace as dz_namespace
+from derzug.dascore.namespace import ZugPatchNameSpace, ZugSpoolNameSpace
 from derzug.widgets.spool import Spool
 from derzug.widgets.waterfall import Waterfall
 from derzug.widgets.wiggle import Wiggle
@@ -20,6 +21,13 @@ pytestmark = pytest.mark.skipif(
     importlib.util.find_spec("dascore.utils.namespace") is None,
     reason="Installed dascore build does not expose namespace support yet.",
 )
+
+
+def _pyproject_entry_point(group: str, name: str) -> str:
+    """Return one entry-point target from the source-tree pyproject."""
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    return data["project"]["entry-points"][group][name]
 
 
 def _test_patch() -> dc.Patch:
@@ -37,14 +45,14 @@ class TestPatchZugNamespace:
     """Tests for the Patch.zug namespace."""
 
     def test_patch_entry_point_metadata_is_registered(self):
-        """Package metadata should expose the patch zug namespace entry point."""
-        group = entry_points(group="dascore.patch_namespace")
-        zug = {ep.name: ep.value for ep in group}
-
-        assert zug["zug"] == "derzug.dascore:ZugPatchNameSpace"
+        """Source metadata should expose the patch zug namespace entry point."""
+        assert (
+            _pyproject_entry_point("dascore.patch_namespace", "zug")
+            == "derzug.dascore.namespace:ZugPatchNameSpace"
+        )
 
     def test_namespace_registers_on_patch_class(self):
-        """Importing derzug.dascore should register the zug namespace."""
+        """Importing the namespace module should register the zug namespace."""
         namespaces = dc.Patch.get_registered_namespaces()
 
         assert namespaces["zug"] is ZugPatchNameSpace
@@ -56,11 +64,11 @@ class TestPatchZugNamespace:
         sentinel = object()
 
         monkeypatch.setattr(
-            "derzug.dascore._launch_canvas_window",
+            "derzug.dascore.namespace._launch_canvas_window",
             lambda value, *, show, block: seen.append((value, show, block)) or sentinel,
         )
 
-        window = patch.zug.canvas(show=False)
+        window = ZugPatchNameSpace(patch).canvas(show=False)
 
         assert window is sentinel
         assert seen == [(patch, False, True)]
@@ -72,11 +80,11 @@ class TestPatchZugNamespace:
         sentinel = object()
 
         monkeypatch.setattr(
-            "derzug.dascore._launch_canvas_window",
+            "derzug.dascore.namespace._launch_canvas_window",
             lambda value, *, show, block: seen.append((value, show, block)) or sentinel,
         )
 
-        window = patch.zug.canvas(show=True, block=False)
+        window = ZugPatchNameSpace(patch).canvas(show=True, block=False)
 
         assert window is sentinel
         assert seen == [(patch, True, False)]
@@ -85,7 +93,7 @@ class TestPatchZugNamespace:
         """show=False should return a Waterfall widget with the patch loaded."""
         patch = _test_patch()
 
-        widget = patch.zug.waterfall(show=False)
+        widget = ZugPatchNameSpace(patch).waterfall(show=False)
 
         assert isinstance(widget, Waterfall)
         assert widget._patch is patch
@@ -96,7 +104,7 @@ class TestPatchZugNamespace:
         """show=False should return a Wiggle widget with the patch loaded."""
         patch = _test_patch()
 
-        widget = patch.zug.wiggle(show=False)
+        widget = ZugPatchNameSpace(patch).wiggle(show=False)
 
         assert isinstance(widget, Wiggle)
         assert widget._patch is patch
@@ -110,7 +118,7 @@ class TestPatchZugNamespace:
         blocked: list[Waterfall] = []
 
         monkeypatch.setattr(
-            "derzug.dascore._block_until_closed",
+            "derzug.dascore.namespace._block_until_closed",
             lambda widget: blocked.append(widget),
         )
         monkeypatch.setattr(
@@ -119,7 +127,7 @@ class TestPatchZugNamespace:
             lambda self: shown.append(self),
         )
 
-        widget = patch.zug.waterfall(show=True)
+        widget = ZugPatchNameSpace(patch).waterfall(show=True)
 
         assert isinstance(widget, Waterfall)
         assert shown == [widget]
@@ -134,7 +142,7 @@ class TestPatchZugNamespace:
         blocked: list[Waterfall] = []
 
         monkeypatch.setattr(
-            "derzug.dascore._block_until_closed",
+            "derzug.dascore.namespace._block_until_closed",
             lambda widget: blocked.append(widget),
         )
         monkeypatch.setattr(
@@ -143,7 +151,7 @@ class TestPatchZugNamespace:
             lambda self: shown.append(self),
         )
 
-        widget = patch.zug.waterfall(show=True, block=False)
+        widget = ZugPatchNameSpace(patch).waterfall(show=True, block=False)
 
         assert isinstance(widget, Waterfall)
         assert shown == [widget]
@@ -158,7 +166,7 @@ class TestPatchZugNamespace:
         blocked: list[Wiggle] = []
 
         monkeypatch.setattr(
-            "derzug.dascore._block_until_closed",
+            "derzug.dascore.namespace._block_until_closed",
             lambda widget: blocked.append(widget),
         )
         monkeypatch.setattr(
@@ -167,7 +175,7 @@ class TestPatchZugNamespace:
             lambda self: shown.append(self),
         )
 
-        widget = patch.zug.wiggle(show=True, block=False)
+        widget = ZugPatchNameSpace(patch).wiggle(show=True, block=False)
 
         assert isinstance(widget, Wiggle)
         assert shown == [widget]
@@ -179,7 +187,7 @@ class TestPatchZugNamespace:
         """Namespace-launched viewers should start with the control area hidden."""
         patch = _test_patch()
 
-        widget = patch.zug.waterfall(show=False)
+        widget = ZugPatchNameSpace(patch).waterfall(show=False)
 
         assert widget.controlAreaVisible is False
         widget.close()
@@ -203,16 +211,16 @@ class TestQApplicationLifecycle:
                 app_calls.append(argv)
                 return sentinel
 
-        monkeypatch.setattr("derzug.dascore._APP", None)
-        monkeypatch.setattr("derzug.dascore.QApplication", FakeQApplication)
-        monkeypatch.setattr("derzug.dascore.install_sigint_handler", lambda app: app)
+        monkeypatch.setattr("derzug.dascore.namespace._APP", None)
+        monkeypatch.setattr("derzug.dascore.namespace.QApplication", FakeQApplication)
+        monkeypatch.setattr(
+            "derzug.dascore.namespace.install_sigint_handler", lambda app: app
+        )
 
-        from derzug import dascore as dz_dascore
-
-        app = dz_dascore._ensure_qapplication()
+        app = dz_namespace._ensure_qapplication()
 
         assert app is sentinel
-        assert dz_dascore._APP is sentinel
+        assert dz_namespace._APP is sentinel
         assert app_calls == [["derzug"]]
 
 
@@ -220,14 +228,14 @@ class TestSpoolZugNamespace:
     """Tests for the BaseSpool.zug namespace."""
 
     def test_spool_entry_point_metadata_is_registered(self):
-        """Package metadata should expose the spool zug namespace entry point."""
-        group = entry_points(group="dascore.spool_namespace")
-        zug = {ep.name: ep.value for ep in group}
-
-        assert zug["zug"] == "derzug.dascore:ZugSpoolNameSpace"
+        """Source metadata should expose the spool zug namespace entry point."""
+        assert (
+            _pyproject_entry_point("dascore.spool_namespace", "zug")
+            == "derzug.dascore.namespace:ZugSpoolNameSpace"
+        )
 
     def test_namespace_registers_on_base_spool_class(self):
-        """Importing derzug.dascore should register the spool zug namespace."""
+        """Importing the namespace module should register the spool zug namespace."""
         namespaces = dc.BaseSpool.get_registered_namespaces()
 
         assert namespaces["zug"] is ZugSpoolNameSpace
@@ -240,11 +248,11 @@ class TestSpoolZugNamespace:
         sentinel = object()
 
         monkeypatch.setattr(
-            "derzug.dascore._launch_canvas_window",
+            "derzug.dascore.namespace._launch_canvas_window",
             lambda value, *, show, block: seen.append((value, show, block)) or sentinel,
         )
 
-        window = spool.zug.canvas(show=False)
+        window = ZugSpoolNameSpace(spool).canvas(show=False)
 
         assert window is sentinel
         assert seen == [(spool, False, True)]
@@ -257,11 +265,11 @@ class TestSpoolZugNamespace:
         sentinel = object()
 
         monkeypatch.setattr(
-            "derzug.dascore._launch_canvas_window",
+            "derzug.dascore.namespace._launch_canvas_window",
             lambda value, *, show, block: seen.append((value, show, block)) or sentinel,
         )
 
-        window = spool.zug.canvas(show=True, block=False)
+        window = ZugSpoolNameSpace(spool).canvas(show=True, block=False)
 
         assert window is sentinel
         assert seen == [(spool, True, False)]
@@ -282,11 +290,11 @@ class TestCanvasLaunchHelpers:
 
         sentinel = FakeWindow()
         monkeypatch.setattr(
-            "derzug.dascore._seed_canvas_window",
+            "derzug.dascore.namespace._seed_canvas_window",
             lambda value: sentinel,
         )
 
-        out = dz_dascore._launch_canvas_window(_test_patch(), show=False, block=True)
+        out = dz_namespace._launch_canvas_window(_test_patch(), show=False, block=True)
 
         assert out is sentinel
         assert sentinel.shown is False
@@ -304,15 +312,15 @@ class TestCanvasLaunchHelpers:
         sentinel = FakeWindow()
         blocked: list[object] = []
         monkeypatch.setattr(
-            "derzug.dascore._seed_canvas_window",
+            "derzug.dascore.namespace._seed_canvas_window",
             lambda value: sentinel,
         )
         monkeypatch.setattr(
-            "derzug.dascore._block_until_closed",
+            "derzug.dascore.namespace._block_until_closed",
             lambda widget: blocked.append(widget),
         )
 
-        out = dz_dascore._launch_canvas_window(_test_patch(), show=True, block=True)
+        out = dz_namespace._launch_canvas_window(_test_patch(), show=True, block=True)
 
         assert out is sentinel
         assert sentinel.shown is True
@@ -333,15 +341,15 @@ class TestCanvasLaunchHelpers:
         sentinel = FakeWindow()
         blocked: list[object] = []
         monkeypatch.setattr(
-            "derzug.dascore._seed_canvas_window",
+            "derzug.dascore.namespace._seed_canvas_window",
             lambda value: sentinel,
         )
         monkeypatch.setattr(
-            "derzug.dascore._block_until_closed",
+            "derzug.dascore.namespace._block_until_closed",
             lambda widget: blocked.append(widget),
         )
 
-        out = dz_dascore._launch_canvas_window(_test_patch(), show=True, block=False)
+        out = dz_namespace._launch_canvas_window(_test_patch(), show=True, block=False)
 
         assert out is sentinel
         assert sentinel.shown is True
@@ -350,13 +358,13 @@ class TestCanvasLaunchHelpers:
     def test_block_until_closed_tolerates_delete_on_close_widget(self, qapp):
         """Closing a delete-on-close widget should not touch it after deletion."""
         widget = QWidget()
-        widget.setAttribute(dz_dascore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        widget.setAttribute(dz_namespace.Qt.WidgetAttribute.WA_DeleteOnClose, True)
         widget.show()
         qapp.processEvents()
 
         QTimer.singleShot(0, widget.close)
 
-        dz_dascore._block_until_closed(widget)
+        dz_namespace._block_until_closed(widget)
 
     def test_get_canvas_spool_description_prefers_public_spool_widget(self):
         """Canvas seeding should resolve the registered public Spool widget."""
@@ -381,7 +389,7 @@ class TestCanvasLaunchHelpers:
             },
         )()
 
-        out = dz_dascore._get_canvas_spool_description(window)
+        out = dz_namespace._get_canvas_spool_description(window)
 
         assert out is description
 
@@ -434,22 +442,22 @@ class TestNonBlockingNamespaceLaunches:
     def test_patch_viewers_share_qapplication_when_shown_non_blocking(self, qapp):
         """Multiple non-blocking viewers should coexist on one shared QApplication."""
         patch = _test_patch()
-        dz_dascore._LIVE_WIDGETS.clear()
+        dz_namespace._LIVE_WIDGETS.clear()
 
-        waterfall = patch.zug.waterfall(show=True, block=False)
-        wiggle = patch.zug.wiggle(show=True, block=False)
+        waterfall = ZugPatchNameSpace(patch).waterfall(show=True, block=False)
+        wiggle = ZugPatchNameSpace(patch).wiggle(show=True, block=False)
         qapp.processEvents()
 
         assert waterfall is not wiggle
         assert waterfall.isVisible() is True
         assert wiggle.isVisible() is True
-        assert waterfall in dz_dascore._LIVE_WIDGETS.values()
-        assert wiggle in dz_dascore._LIVE_WIDGETS.values()
+        assert waterfall in dz_namespace._LIVE_WIDGETS.values()
+        assert wiggle in dz_namespace._LIVE_WIDGETS.values()
         assert QApplication.instance() is qapp
-        assert dz_dascore._APP is qapp
+        assert dz_namespace._APP is qapp
 
         waterfall.close()
         wiggle.close()
         qapp.processEvents()
-        assert waterfall not in dz_dascore._LIVE_WIDGETS.values()
-        assert wiggle not in dz_dascore._LIVE_WIDGETS.values()
+        assert waterfall not in dz_namespace._LIVE_WIDGETS.values()
+        assert wiggle not in dz_namespace._LIVE_WIDGETS.values()

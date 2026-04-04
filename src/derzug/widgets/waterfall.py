@@ -589,6 +589,17 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             return
         super().keyPressEvent(event)
 
+    def _handle_escape(self) -> None:
+        """Cancel Waterfall interactions and clear active annotation selection mode."""
+        clear_annotation_select = (
+            self._annotation_controller.in_annotation_selection_mode()
+        )
+        self._cancel_active_interactions()
+        if clear_annotation_select:
+            self._annotation_controller.clear_active_tool(notify=False)
+            self._sync_overlay_mode_from_annotation_tool()
+        self._restore_window_focus()
+
     def _handle_widget_key_press(self, event) -> bool:
         """Handle Waterfall-specific keys from either the widget or plot viewport."""
         if event.key() == Qt.Key_A:

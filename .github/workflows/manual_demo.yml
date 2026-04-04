@@ -1,0 +1,176 @@
+name: Interactive Demo (noVNC)
+
+# Runs automatically when a PR is labeled "debug", or can be triggered manually.
+# The noVNC URL is printed in the "Print session URL" step of the job log.
+# Access requires the MANUAL_DEMO_PASSWORD Actions secret.
+# Cancel the workflow run to end the session early.
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      timeout_minutes:
+        description: "Session timeout in minutes (max 350)"
+        default: "30"
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: manual-demo-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    # Hard cap slightly under GitHub Actions' 360-minute limit
+    timeout-minutes: 355
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'debug')
+      )
+
+    env:
+      DISPLAY: ":99"
+      QT_QPA_PLATFORM: xcb
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: "true"
+          fetch-depth: "0"
+
+      - uses: ./.github/actions/mamba-install-derzug
+        with:
+          python-version: "3.13"
+          cache-number: 3
+
+      - name: Install display, VNC, and window manager
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y xvfb x11vnc novnc openbox
+
+      - name: Download cloudflared
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o cloudflared
+          chmod +x cloudflared
+
+      - name: Start virtual display and window manager
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 1
+          DISPLAY=:99 openbox &
+          sleep 1
+
+      - name: Start VNC server
+        env:
+          MANUAL_DEMO_PASSWORD: ${{ secrets.MANUAL_DEMO_PASSWORD }}
+        run: |
+          if [ -z "$MANUAL_DEMO_PASSWORD" ]; then
+            echo "VNC unavailable: MANUAL_DEMO_PASSWORD secret is not configured."
+            echo "VNC_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP"
+          x11vnc -storepasswd "$MANUAL_DEMO_PASSWORD" "$RUNNER_TEMP/x11vnc.pass" >/dev/null
+          x11vnc -display :99 -rfbauth "$RUNNER_TEMP/x11vnc.pass" -listen localhost -xkb -forever -shared &
+          sleep 1
+          if ! pgrep -f "x11vnc -display :99" >/dev/null; then
+            echo "VNC unavailable: x11vnc failed to stay running."
+            echo "VNC_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "VNC_AVAILABLE=true" >> "$GITHUB_ENV"
+
+      - name: Start noVNC websocket proxy
+        if: env.VNC_AVAILABLE == 'true'
+        run: |
+          websockify --web /usr/share/novnc 6080 localhost:5900 &
+          sleep 1
+
+      - name: Start cloudflare tunnel
+        if: env.VNC_AVAILABLE == 'true'
+        run: |
+          ./cloudflared tunnel --url http://localhost:6080 > /tmp/cf.log 2>&1 &
+          # Wait up to 30 s for the public URL to appear
+          for _ in $(seq 1 15); do
+            BASE_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cf.log | head -1)
+            [ -n "$BASE_URL" ] && break
+            sleep 2
+          done
+          if [ -z "$BASE_URL" ]; then
+            echo "ERROR: cloudflare tunnel URL did not appear in time."
+            cat /tmp/cf.log
+            exit 1
+          fi
+          echo "CF_BASE_URL=$BASE_URL" >> "$GITHUB_ENV"
+          echo "DEMO_URL=$BASE_URL/vnc.html?autoconnect=true" >> "$GITHUB_ENV"
+
+      - name: Launch DerZug
+        if: env.VNC_AVAILABLE == 'true'
+        shell: bash -el {0}
+        run: |
+          derzug --demo --dev &
+          sleep 5
+
+      - name: Print session URL
+        if: env.VNC_AVAILABLE == 'true'
+        run: |
+          echo "Session URL: $DEMO_URL"
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║            DerZug Interactive Demo Session                  ║"
+          echo "╠══════════════════════════════════════════════════════════════╣"
+          echo "║  Open this URL in your browser:                              ║"
+          echo "║                                                              ║"
+          echo "║  $DEMO_URL"
+          echo "║                                                              ║"
+          echo "║  Resolution : 1920 × 1080                                   ║"
+          echo "║  Password   : use the MANUAL_DEMO_PASSWORD repo secret      ║"
+          TIMEOUT_MINS="${{ github.event.inputs.timeout_minutes }}"
+          echo "║  Ends in    : ${TIMEOUT_MINS:-30} minutes (or cancel this run)               ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+
+      - name: Find PR demo comment
+        if: github.event_name == 'pull_request' && env.VNC_AVAILABLE == 'true'
+        id: find_demo_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: "<!-- derzug-interactive-demo -->"
+
+      - name: Create or update PR demo comment
+        if: github.event_name == 'pull_request' && env.VNC_AVAILABLE == 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_demo_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body: |
+            <!-- derzug-interactive-demo -->
+            ✅ Interactive demo ready
+
+            👉 [Open demo](${{ env.DEMO_URL }})
+
+            Password: use the `MANUAL_DEMO_PASSWORD` repository secret.
+            Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Keep session alive
+        if: env.VNC_AVAILABLE == 'true'
+        run: |
+          TIMEOUT_MINS="${{ github.event.inputs.timeout_minutes }}"
+          TIMEOUT_SECS=$(( ${TIMEOUT_MINS:-30} * 60 ))
+          END=$(( $(date +%s) + TIMEOUT_SECS ))
+          while [ "$(date +%s)" -lt "$END" ]; do
+            REMAINING=$(( (END - $(date +%s)) / 60 ))
+            echo "Session active — ${REMAINING} minute(s) remaining. Cancel workflow to end early."
+            sleep 60
+          done
+          echo "Timeout reached. Session closed."
