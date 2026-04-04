@@ -31,7 +31,7 @@ mamba install derzug
 > [!TIP]
 > The PyQT stack can have some rough installation edges. The smoothest experience is generally on Python 3.13 with mamba.
 
-## Getting start
+## Getting Started
 
 To get a quick introduction to DerZug, launch it in demo mode and load the quickstart workflow:
 
