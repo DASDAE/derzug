@@ -250,6 +250,31 @@ class _AsyncWidget(ZugWidget):
         self.results.append(result)
 
 
+class _SyncFromControlsWidget(ZugWidget):
+    """Concrete test widget for the settings/control sync contract."""
+
+    name = "Sync From Controls Widget"
+    description = "Test widget for settings/control sync"
+    category = "Test"
+
+    def __init__(self):
+        super().__init__()
+        box = gui.widgetBox(self.controlArea, "Parameters")
+        self.value_edit = QLineEdit(box)
+        box.layout().addWidget(self.value_edit)
+        self.synced_value = "stale"
+        self.results: list[str] = []
+
+    def _sync_settings_from_controls(self) -> None:
+        self.synced_value = self.value_edit.text().strip()
+
+    def _run(self):
+        return self.synced_value
+
+    def _on_result(self, result) -> None:
+        self.results.append(result)
+
+
 class _AsyncDeletedQtObjectWidget(_AsyncWidget, openclass=True):
     """Async test widget whose result delivery hits a deleted Qt wrapper."""
 
@@ -592,6 +617,23 @@ class TestZugWidgetAsyncExecution:
 
             assert widget.results[-1] == "done"
 
+    def test_async_run_sets_standard_busy_state_while_running(self, qtbot):
+        """Async dispatch should drive Orange's processing-state spinner."""
+        with widget_context(_AsyncWidget) as widget:
+            widget.value = "busy"
+            widget.delay = 0.05
+
+            assert widget.processingState == 0
+
+            widget.run()
+
+            assert widget.processingState == 1
+
+            wait_for_widget_idle(widget)
+            qtbot.waitUntil(lambda: bool(widget.results), timeout=1000)
+
+            assert widget.processingState == 0
+
     def test_latest_wins_ignores_stale_completion(self, qtbot):
         """A slower earlier run should be dropped after a newer result wins."""
         with widget_context(_AsyncWidget) as widget:
@@ -661,6 +703,21 @@ class TestZugWidgetAsyncExecution:
         with widget_context(_AsyncUnexpectedRuntimeErrorWidget) as widget:
             with pytest.raises(RuntimeError, match="unexpected async runtime error"):
                 widget._apply_async_completion_payload("boom")
+
+
+class TestZugWidgetSettingsSync:
+    """Tests for the shared settings-to-controls execution contract."""
+
+    def test_run_syncs_settings_from_controls_before_execution(self):
+        """Execution should consume freshly synchronized control state."""
+        with widget_context(_SyncFromControlsWidget) as widget:
+            widget.value_edit.setText("from ui")
+            widget.synced_value = "stale"
+
+            widget.run()
+
+            assert widget.synced_value == "from ui"
+            assert widget.results == ["from ui"]
 
 
 class TestZugWidgetDeferredRefresh:

@@ -68,6 +68,13 @@ class ZugWidget(OWWidget, openclass=True):
 
     Subclasses implement ``_run()`` to perform their core operation and
     optionally override ``_on_result()`` to update display areas after each run.
+
+    Settings-backed widgets should follow one explicit restore contract:
+    ``_apply_settings_to_controls()`` hydrates persisted settings into visible
+    controls, ``_sync_settings_from_controls()`` pulls current control state back
+    into settings immediately before execution/export, and
+    ``_rebind_dynamic_controls()`` rebuilds option-dependent controls after new
+    input metadata arrives without silently discarding saved values.
     """
 
     _FOCUS_EXCLUDE = (
@@ -113,6 +120,7 @@ class ZugWidget(OWWidget, openclass=True):
             tuple[type[BaseException], BaseException, object] | None
         ) = None
         self._reported_error_during_run = False
+        self._async_busy_state = False
         self._message_bar_click_timer = QTimer(self)
         self._message_bar_click_timer.setSingleShot(True)
         self._message_bar_click_timer.timeout.connect(
@@ -673,6 +681,7 @@ class ZugWidget(OWWidget, openclass=True):
         --------
         >>> widget.run()  # typically triggered by input signals or control callbacks
         """
+        self._sync_settings_from_controls()
         self.Error.clear()
         self.Warning.clear()
         self._reported_error_during_run = False
@@ -703,6 +712,52 @@ class ZugWidget(OWWidget, openclass=True):
     def _supports_async_execution(self) -> bool:
         """Return True when this widget should dispatch execution off-thread."""
         return False
+
+    def _apply_settings_to_controls(self) -> None:
+        """Hydrate visible controls from persisted settings.
+
+        Override in widgets whose Qt controls need an explicit restore pass after
+        ``Setting`` values have been loaded.
+        """
+
+    def _sync_settings_from_controls(self) -> None:
+        """Persist current control values back into widget settings.
+
+        ``run()`` calls this before building any execution request so worker
+        snapshots and workflow exports cannot drift from the visible controls.
+        """
+
+    def _rebind_dynamic_controls(self) -> None:
+        """Rebuild data-dependent controls and reapply persisted values.
+
+        Override in widgets whose available options depend on input data, such as
+        dimension combos or metadata-driven filter lists.
+        """
+
+    @staticmethod
+    def _set_line_edit_value(widget, value: object) -> None:
+        """Assign one line edit value without firing change handlers."""
+        widget.blockSignals(True)
+        widget.setText("" if value is None else str(value))
+        widget.blockSignals(False)
+
+    @staticmethod
+    def _set_checkbox_value(widget, value: bool) -> None:
+        """Assign one checkbox or checkable widget without firing handlers."""
+        widget.blockSignals(True)
+        widget.setChecked(bool(value))
+        widget.blockSignals(False)
+
+    @staticmethod
+    def _set_combo_value(widget, value: object) -> None:
+        """Assign one combo value without firing change handlers."""
+        widget.blockSignals(True)
+        text = "" if value is None else str(value)
+        if text:
+            widget.setCurrentText(text)
+        else:
+            widget.setCurrentIndex(-1)
+        widget.blockSignals(False)
 
     def _build_execution_request(self) -> WidgetExecutionRequest | None:
         """Return a worker-safe execution request or None for an empty result."""
@@ -737,12 +792,14 @@ class ZugWidget(OWWidget, openclass=True):
 
     def _run_async(self) -> None:
         """Dispatch one execution request to the widget's worker thread."""
+        self._set_async_busy_state(True)
         self._execution_runtime.dispatch(
             self._build_execution_request,
         )
 
     def _apply_async_result(self, result) -> None:
         """Apply a worker result on the main thread."""
+        self._set_async_busy_state(False)
         self._cancel_message_bar_popup()
         if not self._reported_error_during_run:
             self._last_error_exc = None
@@ -750,11 +807,13 @@ class ZugWidget(OWWidget, openclass=True):
 
     def _apply_async_error(self, exc: Exception) -> None:
         """Apply a worker exception on the main thread."""
+        self._set_async_busy_state(False)
         self._handle_execution_exception(exc)
         self._apply_async_completion_payload(None)
 
     def _apply_async_empty_result(self) -> None:
         """Apply an empty async result without surfacing an error."""
+        self._set_async_busy_state(False)
         self._cancel_message_bar_popup()
         if not self._reported_error_during_run:
             self._last_error_exc = None
@@ -762,12 +821,14 @@ class ZugWidget(OWWidget, openclass=True):
 
     def _handle_async_preflight_error(self, exc: Exception) -> None:
         """Handle request-building failures before work reaches the worker."""
+        self._set_async_busy_state(False)
         if not self._reported_error_during_run:
             self._show_exception("general", exc)
         self._apply_async_completion_payload(None)
 
     def _handle_async_worker_unavailable(self) -> None:
         """Handle attempts to dispatch work after the runtime is unavailable."""
+        self._set_async_busy_state(False)
         self._show_error_message("general", "worker is unavailable")
         self._apply_async_completion_payload(None)
 
@@ -813,7 +874,18 @@ class ZugWidget(OWWidget, openclass=True):
 
     def _shutdown_async_executor(self) -> None:
         """Stop the per-widget worker pool."""
+        self._set_async_busy_state(False)
         self._execution_runtime.shutdown()
+
+    def _set_async_busy_state(self, busy: bool) -> None:
+        """Mirror async execution into Orange's standard loading indicators."""
+        if self._async_busy_state == bool(busy):
+            return
+        self._async_busy_state = bool(busy)
+        if busy:
+            self.progressBarInit()
+        else:
+            self.progressBarFinished()
 
     def onDeleteWidget(self) -> None:
         """Release widget-owned worker resources before teardown."""

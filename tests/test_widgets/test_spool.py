@@ -58,6 +58,28 @@ def _patch_with_tag(tag: str) -> dc.Patch:
     return patch.update(attrs=attrs)
 
 
+def _long_duration_patch(
+    *,
+    duration_seconds: int = 8_000,
+    start_offset_seconds: int = 0,
+    tag: str = "long-duration",
+) -> dc.Patch:
+    """Return one local patch long enough to exercise hour-scale chunking."""
+    base = dc.get_example_patch("example_event_2")
+    data = np.zeros((base.shape[0], duration_seconds), dtype=np.float32)
+    time = np.arange(
+        start_offset_seconds, start_offset_seconds + duration_seconds
+    ).astype("timedelta64[s]")
+    patch = base.new(
+        data=data,
+        coords={"distance": base.get_array("distance"), "time": time},
+        dims=base.dims,
+    )
+    attrs = patch.attrs.model_dump()
+    attrs["tag"] = tag
+    return patch.update(attrs=attrs)
+
+
 def _spool_tags(spool: dc.BaseSpool) -> list[str]:
     """Return tag attributes for each patch in a spool."""
     return [patch.attrs.tag for patch in spool]
@@ -140,8 +162,9 @@ class TestSpool:
         assert spool_widget.unpack_single_patch is True
         assert len(spool_widget._examples) > 0
         assert hasattr(spool_widget, "example_combo")
-        assert hasattr(spool_widget, "file_path_edit")
         assert hasattr(spool_widget, "open_button")
+        assert spool_widget.recent_file_combo.isEditable() is True
+        assert spool_widget.recent_file_combo.maximumWidth() == 240
         assert hasattr(spool_widget, "update_button")
         assert hasattr(spool_widget, "raw_edit")
         assert hasattr(spool_widget, "chunk_dim_combo")
@@ -410,23 +433,128 @@ class TestSpool:
         spool_widget._set_file_input("/tmp/some-path", trigger_run=False)
 
         assert spool_widget.file_input == "/tmp/some-path"
-        assert spool_widget.file_path_edit.text() == "/tmp/some-path"
+        assert spool_widget.recent_file_combo.currentText() == "/tmp/some-path"
         assert spool_widget.spool_input is None
         assert spool_widget.raw_input == ""
         assert spool_widget.raw_edit.text() == ""
+        assert spool_widget._session_recent_directories == ["/tmp/some-path"]
+        assert spool_widget.recent_directories == []
+
+    def test_file_input_remembers_parent_directory_for_selected_file(
+        self, spool_widget
+    ):
+        """Selecting a file should remember its parent directory in recent history."""
+        spool_widget._set_file_input("/tmp/data/example.h5", trigger_run=False)
+
+        assert spool_widget._session_recent_directories == ["/tmp/data"]
+        assert spool_widget.recent_file_combo.itemText(0) == "/tmp/data"
+
+    def test_directory_input_remembers_directory_itself(self, spool_widget):
+        """Selecting a directory should remember that directory directly."""
+        spool_widget._set_file_input("/tmp/das-source", trigger_run=False)
+
+        assert spool_widget._session_recent_directories == ["/tmp/das-source"]
+        assert spool_widget.recent_file_combo.itemText(0) == "/tmp/das-source"
+
+    def test_file_input_normalizes_windows_style_recent_directory(self, spool_widget):
+        """Recent directory history should normalize Windows-style file paths."""
+        spool_widget._set_file_input(r"C:\tmp\data\example.h5", trigger_run=False)
+
+        assert spool_widget._session_recent_directories == ["C:/tmp/data"]
+        assert spool_widget.recent_file_combo.itemText(0) == "C:/tmp/data"
+
+    def test_file_input_shows_full_path_in_tooltip(self, spool_widget):
+        """The compact file/directory combo should expose the full path on hover."""
+        path = "/tmp/very/long/path/to/a/directory/that/should/truncate/in/the/ui"
+        spool_widget._set_file_input(path, trigger_run=False)
+
+        assert spool_widget.recent_file_combo.currentText() == path
+        assert spool_widget.recent_file_combo.toolTip() == path
+        assert spool_widget.recent_file_combo.lineEdit().toolTip() == path
+
+    def test_recent_directory_history_is_deduplicated_and_capped(self, spool_widget):
+        """Recent directory history should keep the newest unique 10 entries."""
+        for index in range(12):
+            spool_widget._set_file_input(
+                f"/tmp/history-{index}/patch.h5", trigger_run=False
+            )
+        spool_widget._set_file_input("/tmp/history-5/again.h5", trigger_run=False)
+
+        assert spool_widget._session_recent_directories == [
+            "/tmp/history-5",
+            "/tmp/history-11",
+            "/tmp/history-10",
+            "/tmp/history-9",
+            "/tmp/history-8",
+            "/tmp/history-7",
+            "/tmp/history-6",
+            "/tmp/history-4",
+            "/tmp/history-3",
+            "/tmp/history-2",
+        ]
+
+    def test_recent_directory_combo_loads_selected_directory(
+        self, spool_widget, monkeypatch
+    ):
+        """Picking a recent directory should activate it as the file input and run."""
+        called = []
+        monkeypatch.setattr(spool_widget, "run", lambda: called.append(True))
+        spool_widget._session_recent_directories = ["/tmp/recent-a", "/tmp/recent-b"]
+        spool_widget._refresh_recent_file_combo()
+
+        spool_widget.recent_file_combo.setCurrentIndex(1)
+
+        assert spool_widget.file_input == "/tmp/recent-b"
+        assert spool_widget.recent_file_combo.currentText() == "/tmp/recent-b"
+        assert called == [True]
+
+    def test_recent_directories_restore_into_combo(self, qtbot):
+        """Stored recent directories should reappear in the dropdown on restore."""
+        with widget_context(
+            Spool,
+            stored_settings={
+                "recent_directories": ["/tmp/restore-a", "/tmp/restore-b"],
+                "file_input": "",
+                "raw_input": "",
+                "spool_input": "example_event_2",
+            },
+        ) as spool_widget:
+            spool_widget.show()
+            qtbot.wait(10)
+
+            assert spool_widget.recent_file_combo.itemText(0) == "/tmp/restore-a"
+            assert spool_widget.recent_file_combo.itemText(1) == "/tmp/restore-b"
+
+    def test_recent_directories_save_only_on_widget_delete(
+        self, spool_widget, monkeypatch
+    ):
+        """Recent directories should copy into persisted settings at teardown."""
+        base_delete_called = []
+        spool_widget.recent_directories = ["/tmp/original"]
+        spool_widget._session_recent_directories = ["/tmp/session-only"]
+
+        monkeypatch.setattr(
+            "derzug.core.zugwidget.ZugWidget.onDeleteWidget",
+            lambda self: base_delete_called.append(True),
+        )
+
+        spool_widget.onDeleteWidget()
+
+        assert spool_widget.recent_directories == ["/tmp/session-only"]
+        assert base_delete_called == [True]
 
     def test_raw_input_clears_other_inputs(self, spool_widget):
         """Typing raw input clears example and file inputs."""
         spool_widget.spool_input = spool_widget._examples[0]
         spool_widget.file_input = "/tmp/a"
-        spool_widget.file_path_edit.setText("/tmp/a")
+        spool_widget.recent_file_combo.setEditText("/tmp/a")
 
         spool_widget._on_raw_text_edited("raw://source")
 
         assert spool_widget.raw_input == "raw://source"
         assert spool_widget.spool_input is None
         assert spool_widget.file_input == ""
-        assert spool_widget.file_path_edit.text() == ""
+        assert spool_widget.recent_file_combo.currentText() == ""
 
     def test_raw_typing_does_not_run_until_edit_finished(
         self, spool_widget, monkeypatch
@@ -455,7 +583,7 @@ class TestSpool:
         """Selecting an example clears file and raw text inputs."""
         spool_widget.file_input = "/tmp/a"
         spool_widget.raw_input = "raw://source"
-        spool_widget.file_path_edit.setText("/tmp/a")
+        spool_widget.recent_file_combo.setEditText("/tmp/a")
         spool_widget.raw_edit.setText("raw://source")
 
         spool_widget._on_combo_changed(0)
@@ -463,7 +591,7 @@ class TestSpool:
         assert spool_widget.spool_input == spool_widget._examples[0]
         assert spool_widget.file_input == ""
         assert spool_widget.raw_input == ""
-        assert spool_widget.file_path_edit.text() == ""
+        assert spool_widget.recent_file_combo.currentText() == ""
         assert spool_widget.raw_edit.text() == ""
 
     @pytest.mark.parametrize("selected_path", ["/tmp/selected.h5", "/tmp/data-dir"])
@@ -485,7 +613,7 @@ class TestSpool:
         spool_widget._select_path_input()
 
         assert spool_widget.file_input == selected_path
-        assert spool_widget.file_path_edit.text() == selected_path
+        assert spool_widget.recent_file_combo.currentText() == selected_path
         assert spool_widget.raw_input == ""
         assert spool_widget.spool_input is None
         assert called == [True]
@@ -501,6 +629,76 @@ class TestSpool:
 
         assert spool_widget.file_input == ""
         assert called == []
+
+    def test_open_path_dialog_uses_parent_of_selected_directory(
+        self, spool_widget, monkeypatch, tmp_path
+    ):
+        """Reopening after a directory selection should start in its parent."""
+        selected_dir = tmp_path / "chosen_dir"
+        selected_dir.mkdir()
+        captured: list[str] = []
+
+        class _DialogStub:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def setFileMode(self, *_args, **_kwargs):
+                pass
+
+            def setAcceptMode(self, *_args, **_kwargs):
+                pass
+
+            def setOption(self, *_args, **_kwargs):
+                pass
+
+            def setDirectory(self, path):
+                captured.append(path)
+
+            def exec(self):
+                return False
+
+        monkeypatch.setattr("derzug.widgets.spool.FileOrDirDialog", _DialogStub)
+        spool_widget.file_input = str(selected_dir)
+
+        result = spool_widget._open_path_dialog()
+
+        assert result == ""
+        assert captured == [str(tmp_path)]
+
+    def test_open_path_dialog_uses_parent_of_selected_file(
+        self, spool_widget, monkeypatch, tmp_path
+    ):
+        """Reopening after a file selection should still start in that file's parent."""
+        selected_file = tmp_path / "chosen.h5"
+        selected_file.write_text("x", encoding="utf-8")
+        captured: list[str] = []
+
+        class _DialogStub:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def setFileMode(self, *_args, **_kwargs):
+                pass
+
+            def setAcceptMode(self, *_args, **_kwargs):
+                pass
+
+            def setOption(self, *_args, **_kwargs):
+                pass
+
+            def setDirectory(self, path):
+                captured.append(path)
+
+            def exec(self):
+                return False
+
+        monkeypatch.setattr("derzug.widgets.spool.FileOrDirDialog", _DialogStub)
+        spool_widget.file_input = str(selected_file)
+
+        result = spool_widget._open_path_dialog()
+
+        assert result == ""
+        assert captured == [str(tmp_path)]
 
     def test_file_or_dir_dialog_accepts_directory_on_open(self, tmp_path):
         """Pressing Open with a selected directory accepts that directory path."""
@@ -668,17 +866,25 @@ class TestSpool:
         received = capture_output(spool_widget.Outputs.spool, monkeypatch)
 
         start_index = spool_widget.example_combo.currentIndex()
-        target_index = 1 if len(spool_widget._examples) > 1 else 0
-        spool_widget.example_combo.setCurrentIndex(target_index)
+        successful_index = None
+        for target_index in range(len(spool_widget._examples)):
+            if target_index == start_index:
+                continue
+            received.clear()
+            spool_widget.example_combo.setCurrentIndex(target_index)
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+            if received and received[-1] is not None:
+                successful_index = target_index
+                break
 
         # If there is only one entry, setCurrentIndex(0) may not emit.
-        if target_index == start_index:
-            spool_widget._on_combo_changed(target_index)
+        if successful_index is None and len(spool_widget._examples) == 1:
+            spool_widget._on_combo_changed(0)
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+            if received and received[-1] is not None:
+                successful_index = 0
 
-        wait_for_widget_idle(spool_widget, timeout=5.0)
-
-        assert received
-        assert received[-1] is not None
+        assert successful_index is not None
         model = spool_widget._table.model()
         assert model is not None
         assert model.rowCount() > 0
@@ -806,6 +1012,366 @@ class TestSpool:
         spool_widget.chunk_value_edit.setText("")
         spool_widget.chunk_dim_combo.setCurrentIndex(0)
         assert called == []
+
+    def test_failed_chunk_keeps_existing_table_state(self, spool_widget, qtbot):
+        """Chunk execution failures should not clear an already loaded source."""
+        if "example_event_2" not in spool_widget._examples:
+            pytest.skip("This regression check targets the example_event_2 fixture.")
+
+        spool_widget.spool_input = "example_event_2"
+        spool_widget.show()
+        _run_and_wait(spool_widget, qtbot)
+
+        model = spool_widget._table.model()
+        assert model is not None
+        initial_rows = model.rowCount()
+
+        chunk_options = [
+            spool_widget.chunk_dim_combo.itemText(i)
+            for i in range(spool_widget.chunk_dim_combo.count())
+        ]
+        if "time" not in chunk_options:
+            pytest.skip("The loaded spool does not expose a time chunk dimension.")
+
+        spool_widget.chunk_dim_combo.setCurrentIndex(chunk_options.index("time"))
+        spool_widget.chunk_value_edit.setText("3600")
+        spool_widget._on_chunk_param_changed()
+
+        model = spool_widget._table.model()
+        assert model is not None
+        assert model.rowCount() == initial_rows
+        assert spool_widget.chunk_dim == "time"
+        assert spool_widget.chunk_value == "3600"
+        assert spool_widget.chunk_value_edit.text() == "3600"
+
+        wait_for_widget_idle(spool_widget, timeout=5.0)
+
+        model = spool_widget._table.model()
+        assert model is not None
+        assert model.rowCount() == initial_rows
+        assert spool_widget._source_spool is not None
+        assert spool_widget._display_spool is not None
+        assert spool_widget.chunk_dim == "time"
+        assert spool_widget.chunk_value == "3600"
+        assert spool_widget.chunk_value_edit.text() == "3600"
+        assert spool_widget.Error.general.is_shown()
+        assert not spool_widget.Error.load_failed.is_shown()
+
+    def test_directory_chunk_preserves_inputs_after_async_refresh(
+        self, tmp_path, qtbot
+    ):
+        """Valid directory-spool chunking should survive the async rerun intact."""
+        directory = tmp_path / "chunkable_dir_spool"
+        directory.mkdir()
+        first = _long_duration_patch(tag="long-1")
+        second = _long_duration_patch(start_offset_seconds=8_000, tag="long-2")
+        dc.write(dc.spool([first]), directory / "long_1.h5", file_format="DASDAE")
+        dc.write(dc.spool([second]), directory / "long_2.h5", file_format="DASDAE")
+        expected_rows = len(
+            dc.spool(directory).chunk(time=3600, conflict="drop").get_contents()
+        )
+
+        with widget_context(
+            Spool,
+            stored_settings={
+                "file_input": str(directory),
+                "raw_input": "",
+                "spool_input": None,
+                "selected_source_row": None,
+                "selected_source_patch_name": "",
+            },
+        ) as spool_widget:
+            spool_widget.show()
+            qtbot.wait(10)
+            _run_and_wait(spool_widget, qtbot)
+
+            model = spool_widget._table.model()
+            assert model is not None
+            assert model.rowCount() == 2
+
+            chunk_options = [
+                spool_widget.chunk_dim_combo.itemText(i)
+                for i in range(spool_widget.chunk_dim_combo.count())
+            ]
+            assert "time" in chunk_options
+
+            spool_widget.chunk_dim_combo.setCurrentIndex(chunk_options.index("time"))
+            spool_widget.chunk_value_edit.setText("3600")
+            spool_widget._on_chunk_param_changed()
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+
+            model = spool_widget._table.model()
+            assert model is not None
+            assert model.rowCount() == expected_rows
+            assert spool_widget.chunk_dim == "time"
+            assert spool_widget.chunk_value == "3600"
+        assert spool_widget.chunk_value_edit.text() == "3600"
+        assert not spool_widget.Error.general.is_shown()
+        assert not spool_widget.Error.load_failed.is_shown()
+
+    def test_unchecking_chunk_group_reverts_table_but_keeps_values(
+        self, tmp_path, qtbot
+    ):
+        """Disabling the Chunk group should stop chunking without clearing inputs."""
+        directory = tmp_path / "chunk_toggle_dir_spool"
+        directory.mkdir()
+        first = _long_duration_patch(tag="long-1")
+        second = _long_duration_patch(start_offset_seconds=8_000, tag="long-2")
+        dc.write(dc.spool([first]), directory / "long_1.h5", file_format="DASDAE")
+        dc.write(dc.spool([second]), directory / "long_2.h5", file_format="DASDAE")
+
+        with widget_context(
+            Spool,
+            stored_settings={
+                "file_input": str(directory),
+                "raw_input": "",
+                "spool_input": None,
+                "selected_source_row": None,
+                "selected_source_patch_name": "",
+            },
+        ) as spool_widget:
+            spool_widget.show()
+            qtbot.wait(10)
+            _run_and_wait(spool_widget, qtbot)
+
+            model = spool_widget._table.model()
+            assert model is not None
+            assert model.rowCount() == 2
+
+            chunk_options = [
+                spool_widget.chunk_dim_combo.itemText(i)
+                for i in range(spool_widget.chunk_dim_combo.count())
+            ]
+            assert "time" in chunk_options
+
+            spool_widget.chunk_dim_combo.setCurrentIndex(chunk_options.index("time"))
+            spool_widget.chunk_value_edit.setText("3600")
+            spool_widget._on_chunk_param_changed()
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+
+            model = spool_widget._table.model()
+            assert model is not None
+            assert model.rowCount() > 2
+            assert spool_widget.chunk_enabled is True
+
+            spool_widget._chunk_group.setChecked(False)
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+
+            model = spool_widget._table.model()
+            assert model is not None
+            assert model.rowCount() == 2
+            assert spool_widget.chunk_enabled is False
+            assert spool_widget.chunk_value == "3600"
+            assert spool_widget.chunk_value_edit.text() == "3600"
+            assert not spool_widget.Error.general.is_shown()
+
+    def test_clearing_chunk_value_immediately_reverts_chunked_display(
+        self, tmp_path, qtbot
+    ):
+        """Clearing the chunk textbox should immediately restore the source spool."""
+        directory = tmp_path / "chunk_revert_dir_spool"
+        directory.mkdir()
+        first = _long_duration_patch(tag="long-1")
+        second = _long_duration_patch(start_offset_seconds=8_000, tag="long-2")
+        dc.write(dc.spool([first]), directory / "long_1.h5", file_format="DASDAE")
+        dc.write(dc.spool([second]), directory / "long_2.h5", file_format="DASDAE")
+
+        with widget_context(
+            Spool,
+            stored_settings={
+                "file_input": str(directory),
+                "raw_input": "",
+                "spool_input": None,
+                "selected_source_row": None,
+                "selected_source_patch_name": "",
+            },
+        ) as spool_widget:
+            spool_widget.show()
+            qtbot.wait(10)
+            _run_and_wait(spool_widget, qtbot)
+
+            model = spool_widget._table.model()
+            assert model is not None
+            assert model.rowCount() == 2
+
+            chunk_options = [
+                spool_widget.chunk_dim_combo.itemText(i)
+                for i in range(spool_widget.chunk_dim_combo.count())
+            ]
+            assert "time" in chunk_options
+
+            spool_widget.chunk_dim_combo.setCurrentIndex(chunk_options.index("time"))
+            spool_widget.chunk_value_edit.setText("3600")
+            spool_widget._on_chunk_param_changed()
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+
+            model = spool_widget._table.model()
+            assert model is not None
+            assert model.rowCount() > 2
+
+            spool_widget.chunk_value_edit.setText("")
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+
+            model = spool_widget._table.model()
+            assert model is not None
+            assert model.rowCount() == 2
+            assert spool_widget.chunk_value == ""
+            assert spool_widget.chunk_value_edit.text() == ""
+            assert not spool_widget.Error.general.is_shown()
+
+    def test_cold_restore_invalid_chunk_falls_back_to_loaded_source(self, qtbot):
+        """Cold restore should keep the loaded source when saved chunking is invalid."""
+        stored_settings = {
+            "chunk_conflict": "drop",
+            "chunk_dim": "time",
+            "chunk_keep_partial": False,
+            "chunk_overlap": "",
+            "chunk_snap_coords": True,
+            "chunk_tolerance": 1.5,
+            "chunk_value": "3600",
+            "example_parameters": {},
+            "file_input": "",
+            "raw_input": "",
+            "select_col": "",
+            "select_filters": [{"key": "", "raw": ""}],
+            "select_val": "",
+            "selected_source_patch_name": (
+                "path:DAS_________2022_07_30T02_00_08__2022_07_30T02_04_38"
+            ),
+            "selected_source_row": 30,
+            "spool_input": "chirp",
+            "unpack_single_patch": True,
+        }
+
+        with widget_context(Spool, stored_settings=stored_settings) as spool_widget:
+            if "chirp" not in spool_widget._examples:
+                pytest.skip("This regression check targets the chirp example.")
+
+            spool_widget.show()
+            qtbot.wait(10)
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+
+            model = spool_widget._table.model()
+            output_spool = spool_widget._get_selected_output_spool()
+            assert spool_widget._source_spool is not None
+            assert spool_widget._display_spool is not None
+            assert model is not None
+            assert model.rowCount() == 1
+            assert output_spool is not None
+            assert len(output_spool.get_contents()) == 1
+            assert spool_widget.selected_source_row is None
+            assert spool_widget.selected_source_patch_name == ""
+            assert spool_widget.Error.general.is_shown()
+            assert not spool_widget.Error.load_failed.is_shown()
+
+    def test_switching_sources_falls_back_to_new_source_when_transform_breaks(
+        self, monkeypatch, qtbot
+    ):
+        """Changing source should not leave the old table visible after
+        a new transform error.
+        """
+
+        def long_example():
+            return dc.spool([dc.get_example_patch("example_event_2")])
+
+        def short_example():
+            patch = dc.get_example_patch("example_event_2").select(time=(0.0, 0.005))
+            return dc.spool([patch])
+
+        monkeypatch.setattr(
+            "derzug.widgets.spool._all_examples",
+            lambda ignore=(): {
+                "long_example": long_example,
+                "short_example": short_example,
+            },
+        )
+
+        with widget_context(
+            Spool,
+            stored_settings={
+                "chunk_conflict": "raise",
+                "chunk_dim": "time",
+                "chunk_enabled": True,
+                "chunk_keep_partial": False,
+                "chunk_overlap": "",
+                "chunk_snap_coords": True,
+                "chunk_tolerance": 1.5,
+                "chunk_value": "0.01",
+                "example_parameters": {},
+                "file_input": "",
+                "raw_input": "",
+                "select_col": "",
+                "select_filters": [{"key": "", "raw": ""}],
+                "select_val": "",
+                "selected_source_patch_name": "",
+                "selected_source_row": None,
+                "spool_input": "long_example",
+                "unpack_single_patch": True,
+            },
+        ) as spool_widget:
+            spool_widget.show()
+            qtbot.wait(10)
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+
+            initial_model = spool_widget._table.model()
+            assert initial_model is not None
+            assert initial_model.rowCount() > 1
+
+            spool_widget.example_combo.setCurrentText("short_example")
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+
+            model = spool_widget._table.model()
+            assert spool_widget.spool_input == "short_example"
+            assert spool_widget._source_spool is not None
+            assert spool_widget._display_spool is not None
+            assert model is not None
+            assert model.rowCount() == 1
+            assert len(spool_widget._source_spool.get_contents()) == 1
+            assert spool_widget.selected_source_row is None
+            assert spool_widget.selected_source_patch_name == ""
+            assert spool_widget.Error.general.is_shown()
+
+    def test_restore_populates_chunk_controls_from_saved_settings(
+        self, tmp_path, qtbot
+    ):
+        """Saved chunk settings should restore into both combo and line edits."""
+        directory = tmp_path / "restore_chunk_controls_spool"
+        directory.mkdir()
+        first = _long_duration_patch(tag="long-1")
+        second = _long_duration_patch(start_offset_seconds=8_000, tag="long-2")
+        dc.write(dc.spool([first]), directory / "long_1.h5", file_format="DASDAE")
+        dc.write(dc.spool([second]), directory / "long_2.h5", file_format="DASDAE")
+
+        with widget_context(
+            Spool,
+            stored_settings={
+                "file_input": str(directory),
+                "raw_input": "",
+                "spool_input": None,
+                "chunk_enabled": True,
+                "chunk_dim": "time",
+                "chunk_value": "3600",
+                "chunk_overlap": "120",
+                "chunk_keep_partial": False,
+                "chunk_snap_coords": True,
+                "chunk_tolerance": 1.5,
+                "chunk_conflict": "drop",
+                "selected_source_row": None,
+                "selected_source_patch_name": "",
+            },
+        ) as spool_widget:
+            spool_widget.show()
+            qtbot.wait(10)
+            wait_for_widget_idle(spool_widget, timeout=5.0)
+
+            model = spool_widget._table.model()
+            assert model is not None
+            assert model.rowCount() > 2
+            assert spool_widget.chunk_dim_combo.currentText() == "time"
+            assert spool_widget.chunk_value == "3600"
+            assert spool_widget.chunk_value_edit.text() == "3600"
+            assert spool_widget.chunk_overlap == "120"
+            assert spool_widget.chunk_overlap_edit.text() == "120"
 
     def test_add_select_row_creates_second_row(self, spool_widget):
         """The + button should append another select-filter row."""

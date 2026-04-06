@@ -3002,6 +3002,54 @@ class TestWaterfall:
             expected_levels
         )
 
+    def test_reset_on_new_resets_for_patch_with_different_coordinates(
+        self, waterfall_widget
+    ):
+        """Coordinate-changing replacement patches should also drop prior extents."""
+        first_patch = dc.get_example_patch("example_event_2")
+        second_patch = first_patch.select(
+            time=(first_patch.coords["time"][0], first_patch.coords["time"][400])
+        )
+
+        waterfall_widget.set_patch(first_patch)
+        axes = waterfall_widget._axes
+        narrowed_x = (
+            float(axes.x_plot[10]),
+            float(axes.x_plot[20]),
+        )
+        narrowed_y = (
+            float(axes.y_plot[10]),
+            float(axes.y_plot[20]),
+        )
+        waterfall_widget._plot_item.vb.setRange(
+            xRange=narrowed_x,
+            yRange=narrowed_y,
+            padding=0,
+        )
+        waterfall_widget._hist_lut.item.setLevels(-0.25, 0.5)
+
+        before_view = waterfall_widget._plot_item.vb.viewRange()
+        waterfall_widget.set_patch(second_patch)
+        after_view = waterfall_widget._plot_item.vb.viewRange()
+        expected_x = waterfall_widget._axis_bounds(waterfall_widget._axes.x_plot)
+        expected_y = waterfall_widget._axis_bounds(waterfall_widget._axes.y_plot)
+        expected_levels = get_dascore_waterfall_scale(
+            None,
+            "relative",
+            np.asarray(second_patch.data),
+        )
+
+        assert before_view[0] == pytest.approx(narrowed_x)
+        assert before_view[1] == pytest.approx(narrowed_y)
+        assert after_view[0] != pytest.approx(narrowed_x)
+        assert after_view[1] != pytest.approx(narrowed_y)
+        assert waterfall_widget._range_contains_range(after_view[0], expected_x)
+        assert waterfall_widget._range_contains_range(after_view[1], expected_y)
+        assert waterfall_widget.color_limits is None
+        assert waterfall_widget._hist_lut.item.getLevels() == pytest.approx(
+            expected_levels
+        )
+
     def test_reset_on_new_false_preserves_plot_and_colorbar_extents(
         self, waterfall_widget
     ):

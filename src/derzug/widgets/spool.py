@@ -8,7 +8,7 @@ import ast
 import datetime
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, ClassVar
 
 import dascore as dc
@@ -73,6 +73,7 @@ _DISPLAY_COLUMNS = (
     "distance_step",
 )
 _DEFAULT_EXAMPLE = "example_event_2"
+_RECENT_DIRECTORY_LIMIT = 10
 
 # Examples that aren't terribly interesting so we dont include them in the
 # the drop down menu.
@@ -301,6 +302,44 @@ class _SpoolExecutionResult:
     output_patch: dc.Patch | None
 
 
+class _SettingsSourceLoadError(Exception):
+    """Wrapper for settings-backed source load failures."""
+
+
+class _SettingsTransformError(Exception):
+    """Wrapper for transform failures after a settings-backed source loaded."""
+
+    def __init__(self, message: str, *, source_spool: dc.BaseSpool | None = None):
+        super().__init__(message)
+        self.source_spool = source_spool
+
+
+def _settings_source_identity_from_task(task: SpoolTask) -> tuple[object, ...]:
+    """Return a stable identity for one settings-backed source request."""
+    example_name = str(task.spool_input or "")
+    example_parameters = (
+        task.example_parameters if isinstance(task.example_parameters, dict) else {}
+    )
+    return (
+        str(task.file_input or ""),
+        str(task.raw_input or ""),
+        example_name,
+        tuple(
+            sorted(
+                (
+                    str(key),
+                    repr(value),
+                )
+                for key, value in (
+                    example_parameters.get(example_name, {})
+                    if isinstance(example_parameters.get(example_name, {}), dict)
+                    else {}
+                ).items()
+            )
+        ),
+    )
+
+
 def _load_spool_from_settings(
     *,
     spool_input: str | None,
@@ -355,6 +394,7 @@ def _apply_select_rows(
 def _apply_chunk_settings(
     spool: dc.BaseSpool,
     *,
+    chunk_enabled: bool,
     chunk_dim: str,
     chunk_value: str,
     chunk_overlap: str,
@@ -364,6 +404,8 @@ def _apply_chunk_settings(
     chunk_conflict: str,
 ) -> dc.BaseSpool:
     """Apply persisted chunk settings to a spool."""
+    if not bool(chunk_enabled):
+        return spool
     dim = chunk_dim.strip()
     raw_value = chunk_value.strip()
     if not dim or not raw_value:
@@ -395,33 +437,43 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
     task = snapshot.task
     if snapshot.source_mode == "settings":
         assert isinstance(task, SpoolTask)
-        source_spool = _load_spool_from_settings(
-            spool_input=task.spool_input,
-            example_parameters=task.example_parameters,
-            file_input=task.file_input,
-            raw_input=task.raw_input,
-        )
-        source_spool = source_spool.update()
-        display_spool = _apply_select_rows(source_spool, task.select_filters)
-        display_spool = _apply_chunk_settings(
-            display_spool,
-            chunk_dim=task.chunk_dim,
-            chunk_value=task.chunk_value,
-            chunk_overlap=task.chunk_overlap,
-            chunk_keep_partial=task.chunk_keep_partial,
-            chunk_snap_coords=task.chunk_snap_coords,
-            chunk_tolerance=task.chunk_tolerance,
-            chunk_conflict=task.chunk_conflict,
-        )
-        visible_row_count = snapshot.visible_row_count
-        if visible_row_count is None:
-            visible_row_count = _spool_row_count(display_spool)
-        output_spool, output_patch = _emit_task(
-            display_spool,
-            snapshot.selected_source_rows,
-            task.unpack_single_patch,
-            visible_row_count,
-        )
+        try:
+            source_spool = _load_spool_from_settings(
+                spool_input=task.spool_input,
+                example_parameters=task.example_parameters,
+                file_input=task.file_input,
+                raw_input=task.raw_input,
+            )
+            source_spool = source_spool.update()
+        except Exception as exc:
+            raise _SettingsSourceLoadError(str(exc)) from exc
+        try:
+            display_spool = _apply_select_rows(source_spool, task.select_filters)
+            display_spool = _apply_chunk_settings(
+                display_spool,
+                chunk_enabled=task.chunk_enabled,
+                chunk_dim=task.chunk_dim,
+                chunk_value=task.chunk_value,
+                chunk_overlap=task.chunk_overlap,
+                chunk_keep_partial=task.chunk_keep_partial,
+                chunk_snap_coords=task.chunk_snap_coords,
+                chunk_tolerance=task.chunk_tolerance,
+                chunk_conflict=task.chunk_conflict,
+            )
+            visible_row_count = snapshot.visible_row_count
+            if visible_row_count is None:
+                visible_row_count = _spool_row_count(display_spool)
+            output_spool, output_patch = _emit_task(
+                display_spool,
+                snapshot.selected_source_rows,
+                task.unpack_single_patch,
+                visible_row_count,
+            )
+        except Exception as exc:
+            raise _SettingsTransformError(
+                str(exc),
+                source_spool=source_spool,
+            ) from exc
         return _SpoolExecutionResult(
             source_spool=source_spool,
             display_spool=display_spool,
@@ -435,6 +487,7 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
     display_spool = _apply_select_rows(source_spool, task.select_filters)
     display_spool = _apply_chunk_settings(
         display_spool,
+        chunk_enabled=task.chunk_enabled,
         chunk_dim=task.chunk_dim,
         chunk_value=task.chunk_value,
         chunk_overlap=task.chunk_overlap,
@@ -472,6 +525,7 @@ class SpoolTask(Task):
     example_parameters: dict[str, object] = Field(default_factory=dict)
     file_input: str = ""
     raw_input: str = ""
+    chunk_enabled: bool = True
     chunk_dim: str = ""
     chunk_value: str = ""
     chunk_overlap: str = ""
@@ -494,6 +548,7 @@ class SpoolTask(Task):
         spool = _apply_select_rows(spool, self.select_filters)
         spool = _apply_chunk_settings(
             spool,
+            chunk_enabled=self.chunk_enabled,
             chunk_dim=self.chunk_dim,
             chunk_value=self.chunk_value,
             chunk_overlap=self.chunk_overlap,
@@ -517,6 +572,7 @@ class SpoolTransformTask(Task):
         "patch": object,
     }
 
+    chunk_enabled: bool = True
     chunk_dim: str = ""
     chunk_value: str = ""
     chunk_overlap: str = ""
@@ -533,6 +589,7 @@ class SpoolTransformTask(Task):
         spool = _apply_select_rows(spool, self.select_filters)
         spool = _apply_chunk_settings(
             spool,
+            chunk_enabled=self.chunk_enabled,
             chunk_dim=self.chunk_dim,
             chunk_value=self.chunk_value,
             chunk_overlap=self.chunk_overlap,
@@ -645,8 +702,10 @@ class Spool(ZugWidget):
     # functions are now configurable from a generated dialog.
     example_parameters = Setting({})
     file_input = Setting("")
+    recent_directories = Setting([], schema_only=False)
     raw_input = Setting("")
     chunk_dim = Setting("")
+    chunk_enabled = Setting(True)
     chunk_value = Setting("")
     chunk_overlap = Setting("")
     chunk_keep_partial = Setting(False)
@@ -708,7 +767,13 @@ class Spool(ZugWidget):
         )
         self._source_spool: dc.BaseSpool | None = None
         self._display_spool: dc.BaseSpool | None = None
+        self._session_recent_directories: list[str] = list(
+            self.recent_directories or []
+        )
+        self._loaded_settings_source_identity: tuple[object, ...] | None = None
+        self._pending_error_source_identity: tuple[object, ...] | None = None
         self._pending_restore_emit: bool = False
+        self._preserve_state_on_next_empty_result: bool = False
         self._table_selection_model = None
         self._select_options: tuple[str, ...] = ()
         self._source_mode = "settings"
@@ -722,7 +787,7 @@ class Spool(ZugWidget):
         self._build_inputs_section(params_box)
         self._build_chunk_section(params_box)
         self._build_select_section(params_box)
-        self._restore_initial_source_state()
+        self._apply_settings_to_controls()
         self._connect_control_signals()
         self._build_table_view()
         # Load and display the persisted/default source immediately.
@@ -748,10 +813,19 @@ class Spool(ZugWidget):
         file_row_layout = QHBoxLayout(file_row)
         file_row_layout.setContentsMargins(0, 0, 0, 0)
         file_row_layout.setSpacing(4)
-        self.file_path_edit = QLineEdit(file_row)
-        self.file_path_edit.setReadOnly(True)
+        self.recent_file_combo = QComboBox(file_row)
+        self.recent_file_combo.setEditable(True)
+        self.recent_file_combo.lineEdit().setReadOnly(True)
+        self.recent_file_combo.setMinimumContentsLength(18)
+        self.recent_file_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.recent_file_combo.setMaximumWidth(240)
+        # Compatibility alias for older callers/tests that still expect a
+        # dedicated file-path widget.
+        self.file_path_edit = self.recent_file_combo
         self.open_button = QPushButton("Open...", file_row)
-        file_row_layout.addWidget(self.file_path_edit, 1)
+        file_row_layout.addWidget(self.recent_file_combo, 1)
         file_row_layout.addWidget(self.open_button)
         box.layout().addWidget(file_row)
         self.raw_edit = gui.lineEdit(
@@ -764,7 +838,7 @@ class Spool(ZugWidget):
     def _set_source_controls_enabled(self, enabled: bool) -> None:
         """Enable or disable the source-entry controls."""
         self.example_combo.setEnabled(enabled)
-        self.file_path_edit.setEnabled(enabled)
+        self.recent_file_combo.setEnabled(enabled)
         self.open_button.setEnabled(enabled)
         self.raw_edit.setEnabled(enabled)
 
@@ -782,9 +856,16 @@ class Spool(ZugWidget):
         self._set_source_spool(spool)
         self.run()
 
+    def onDeleteWidget(self) -> None:
+        """Persist staged recent directories only when the widget is deleted."""
+        self.recent_directories = list(self._session_recent_directories)
+        super().onDeleteWidget()
+
     def _build_chunk_section(self, parent: QWidget) -> None:
         """Build the chunking controls."""
         chunk_box = _collapsible_section(parent, "Chunk")
+        self._chunk_group = chunk_box.parent()
+        self._chunk_group.setChecked(bool(self.chunk_enabled))
         chunk_row = QWidget(chunk_box)
         chunk_row_layout = QHBoxLayout(chunk_row)
         chunk_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -871,31 +952,86 @@ class Spool(ZugWidget):
             "Unpack len1 spool",
         )
 
-    def _restore_initial_source_state(self) -> None:
-        """Restore the persisted active source selection."""
+    def _apply_settings_to_controls(self) -> None:
+        """Hydrate visible controls from persisted widget settings."""
         if self.file_input:
-            self._clear_other_inputs("file")
-            self.file_path_edit.setText(self.file_input)
+            active_source = "file"
         elif self.raw_input:
-            self._clear_other_inputs("raw")
+            active_source = "raw"
         else:
             if self.spool_input not in self._examples:
                 if _DEFAULT_EXAMPLE in self._examples:
                     self.spool_input = _DEFAULT_EXAMPLE
                 else:
                     self.spool_input = self._examples[0] if self._examples else None
-            if self._examples and self.spool_input is not None:
-                self.example_combo.setCurrentText(self.spool_input)
-            elif self._examples:
-                self.example_combo.setCurrentIndex(-1)
+            active_source = "example"
+
+        self._clear_other_inputs(active_source)
+        self._refresh_recent_file_combo()
+        self.recent_file_combo.setEditText(str(self.file_input or ""))
+        self._update_recent_file_combo_tooltip()
+        self._set_line_edit_value(self.raw_edit, self.raw_input)
+        self._set_combo_value(self.example_combo, self.spool_input)
+        self._set_checkbox_value(self._chunk_group, self.chunk_enabled)
+        self.chunk_dim_combo.blockSignals(True)
+        self.chunk_dim_combo.clear()
+        if self.chunk_dim:
+            self.chunk_dim_combo.addItem(self.chunk_dim)
+            self.chunk_dim_combo.setCurrentText(self.chunk_dim)
+        else:
+            self.chunk_dim_combo.setCurrentIndex(-1)
+        self.chunk_dim_combo.blockSignals(False)
+        self._set_line_edit_value(self.chunk_value_edit, self.chunk_value)
+        self._set_line_edit_value(self.chunk_overlap_edit, self.chunk_overlap)
+        self._set_checkbox_value(
+            self.chunk_keep_partial_cb,
+            self.chunk_keep_partial,
+        )
+        self._set_checkbox_value(
+            self.chunk_snap_coords_cb,
+            self.chunk_snap_coords,
+        )
+        self.chunk_tolerance_spin.blockSignals(True)
+        self.chunk_tolerance_spin.setValue(float(self.chunk_tolerance))
+        self.chunk_tolerance_spin.blockSignals(False)
+        self._set_combo_value(self.chunk_conflict_combo, self.chunk_conflict)
+        self._refresh_select_rows()
+        self._set_checkbox_value(self.unpack_checkbox, self.unpack_single_patch)
+
+    def _sync_settings_from_controls(self) -> None:
+        """Persist current control values back into widget settings."""
+        self.chunk_enabled = bool(self._chunk_group.isChecked())
+        self.chunk_dim = self.chunk_dim_combo.currentText().strip()
+        self.chunk_value = self.chunk_value_edit.text().strip()
+        self.chunk_overlap = self.chunk_overlap_edit.text().strip()
+        self.chunk_keep_partial = bool(self.chunk_keep_partial_cb.isChecked())
+        self.chunk_snap_coords = bool(self.chunk_snap_coords_cb.isChecked())
+        self.chunk_tolerance = float(self.chunk_tolerance_spin.value())
+        self.chunk_conflict = self.chunk_conflict_combo.currentText().strip() or "raise"
+        self.unpack_single_patch = bool(self.unpack_checkbox.isChecked())
+        self._sync_select_filters_from_ui()
+
+    def _rebind_dynamic_controls(self) -> None:
+        """Rebuild option-dependent controls from the current source spool."""
+        if self._source_spool is None:
+            self._reset_dynamic_controls()
+            return
+        source_df = self._ordered_contents_df(self._source_spool)
+        self._set_chunk_dims_from_contents(source_df)
+        self._set_select_cols_from_contents(source_df)
 
     def _connect_control_signals(self) -> None:
         """Connect widget signals to their handlers."""
         self.example_combo.currentIndexChanged.connect(self._on_combo_changed)
+        self.recent_file_combo.currentIndexChanged.connect(
+            self._on_recent_file_combo_changed
+        )
         self.open_button.clicked.connect(self._select_path_input)
         self.raw_edit.textEdited.connect(self._on_raw_text_edited)
         self.raw_edit.editingFinished.connect(self._on_raw_edit_finished)
+        self._chunk_group.toggled.connect(self._on_chunk_group_toggled)
         self.chunk_dim_combo.currentIndexChanged.connect(self._on_chunk_dim_changed)
+        self.chunk_value_edit.textChanged.connect(self._on_chunk_value_text_changed)
         self.chunk_value_edit.editingFinished.connect(self._on_chunk_param_changed)
         self.chunk_overlap_edit.editingFinished.connect(self._on_chunk_param_changed)
         self.chunk_keep_partial_cb.toggled.connect(self._on_chunk_param_changed)
@@ -1031,6 +1167,12 @@ class Spool(ZugWidget):
         self._pending_error_source_name = (
             snapshot.source_name if snapshot.source_mode == "settings" else None
         )
+        self._pending_error_source_identity = (
+            _settings_source_identity_from_task(snapshot.task)
+            if snapshot.source_mode == "settings"
+            and isinstance(snapshot.task, SpoolTask)
+            else None
+        )
         return WidgetExecutionRequest(
             execute=lambda snapshot=snapshot: _execute_spool_snapshot(snapshot)
         )
@@ -1072,12 +1214,12 @@ class Spool(ZugWidget):
 
     def _current_source_task(self) -> SpoolTask:
         """Return the current bound-source workflow task."""
-        self._sync_select_filters_from_ui()
         return SpoolTask(
             spool_input=self.spool_input,
             example_parameters=dict(self.example_parameters or {}),
             file_input=str(self.file_input or ""),
             raw_input=str(self.raw_input or ""),
+            chunk_enabled=bool(self.chunk_enabled),
             chunk_dim=str(self.chunk_dim or ""),
             chunk_value=str(self.chunk_value or ""),
             chunk_overlap=str(self.chunk_overlap or ""),
@@ -1092,8 +1234,8 @@ class Spool(ZugWidget):
 
     def _current_transform_task(self) -> SpoolTransformTask:
         """Return the current transform-only task for input-backed spool state."""
-        self._sync_select_filters_from_ui()
         return SpoolTransformTask(
+            chunk_enabled=bool(self.chunk_enabled),
             chunk_dim=str(self.chunk_dim or ""),
             chunk_value=str(self.chunk_value or ""),
             chunk_overlap=str(self.chunk_overlap or ""),
@@ -1109,6 +1251,9 @@ class Spool(ZugWidget):
     def _on_result(self, result) -> None:
         """Apply one completed spool execution result."""
         if result is None:
+            if self._preserve_state_on_next_empty_result:
+                self._preserve_state_on_next_empty_result = False
+                return
             self._apply_execution_result(
                 _SpoolExecutionResult(
                     source_spool=None,
@@ -1120,12 +1265,17 @@ class Spool(ZugWidget):
             return
         if not isinstance(result, _SpoolExecutionResult):
             raise TypeError(f"unexpected spool execution result {result!r}")
+        self._preserve_state_on_next_empty_result = False
         self._apply_execution_result(result)
 
     def _apply_execution_result(self, result: _SpoolExecutionResult) -> None:
         """Apply preview and final output state from one worker result."""
         self._source_spool = result.source_spool
         self._display_spool = result.display_spool
+        if self._source_mode == "settings" and result.source_spool is not None:
+            self._loaded_settings_source_identity = self._pending_error_source_identity
+        elif result.source_spool is None:
+            self._loaded_settings_source_identity = None
         self._pending_restore_emit = (
             result.display_spool is not None
             and self.selected_source_row is not None
@@ -1139,9 +1289,29 @@ class Spool(ZugWidget):
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route source-load and transform failures to the right UI banner."""
         if self._source_mode == "settings":
+            underlying = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+            # Keep the current loaded/displayed spool when a post-load transform
+            # fails (for example, an invalid chunk request). Clearing the widget
+            # state in that case discards the user's current table and makes a
+            # transient transform error look like the source disappeared.
+            if isinstance(exc, _SettingsTransformError):
+                source_changed = (
+                    self._pending_error_source_identity
+                    != self._loaded_settings_source_identity
+                )
+                if exc.source_spool is not None and (
+                    self._source_spool is None or source_changed
+                ):
+                    self._fallback_to_loaded_source_spool(exc.source_spool)
+                    self._preserve_state_on_next_empty_result = True
+                    self._show_exception("general", underlying)
+                    return
+                self._preserve_state_on_next_empty_result = True
+                self._show_exception("general", underlying)
+                return
             self._show_exception(
                 "load_failed",
-                exc,
+                underlying,
                 self._pending_error_source_name or "",
             )
             self._apply_execution_result(
@@ -1154,6 +1324,26 @@ class Spool(ZugWidget):
             )
             return
         self._show_exception("general", exc)
+
+    def _fallback_to_loaded_source_spool(self, spool: dc.BaseSpool) -> None:
+        """Display a newly loaded source spool when downstream transforms fail."""
+        self.selected_source_row = None
+        self.selected_source_patch_name = ""
+        visible_row_count = _spool_row_count(spool)
+        output_spool, output_patch = _emit_task(
+            spool,
+            frozenset(),
+            bool(self.unpack_single_patch),
+            visible_row_count,
+        )
+        self._apply_execution_result(
+            _SpoolExecutionResult(
+                source_spool=spool,
+                display_spool=spool,
+                output_spool=output_spool,
+                output_patch=output_patch,
+            )
+        )
 
     def _schedule_emit(self) -> None:
         """Re-run execution after a UI selection or option change."""
@@ -1190,14 +1380,108 @@ class Spool(ZugWidget):
             self.spool_input = self._examples[index]
         self.run()
 
+    def _refresh_recent_file_combo(self) -> None:
+        """Rebuild the recent-directory dropdown from persisted paths."""
+        current = self._directory_for_recent_file_input(self.file_input)
+        items = self._normalized_recent_directories(current)
+        self.recent_file_combo.blockSignals(True)
+        self.recent_file_combo.clear()
+        for directory in items:
+            self.recent_file_combo.addItem(directory)
+            index = self.recent_file_combo.count() - 1
+            self.recent_file_combo.setItemData(
+                index,
+                directory,
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        self.recent_file_combo.setCurrentIndex(
+            items.index(current) if current and current in items else -1
+        )
+        self.recent_file_combo.setEditText(str(self.file_input or ""))
+        self.recent_file_combo.blockSignals(False)
+        self._update_recent_file_combo_tooltip()
+
+    def _update_recent_file_combo_tooltip(self) -> None:
+        """Show the full current path in the combo tooltip when available."""
+        text = self.recent_file_combo.currentText().strip()
+        tooltip = text or "Select a recently opened directory"
+        self.recent_file_combo.setToolTip(tooltip)
+        self.recent_file_combo.lineEdit().setToolTip(tooltip)
+
+    @staticmethod
+    def _normalized_path_text(path: str) -> str:
+        """Return one path string in a stable cross-platform text form."""
+        cleaned = str(path or "").strip()
+        if not cleaned:
+            return ""
+        if "\\" in cleaned:
+            return PureWindowsPath(cleaned).as_posix()
+        return Path(cleaned).as_posix()
+
+    @staticmethod
+    def _directory_for_recent_file_input(path: str) -> str:
+        """Return the directory to remember for one chosen file or directory path."""
+        cleaned = str(path or "").strip()
+        if not cleaned:
+            return ""
+        is_windows_style = "\\" in cleaned or (
+            len(cleaned) >= 2 and cleaned[1] == ":" and cleaned[0].isalpha()
+        )
+        if is_windows_style:
+            candidate = PureWindowsPath(cleaned)
+            suffix = candidate.suffix.lower()
+            if suffix:
+                return candidate.parent.as_posix()
+            return candidate.as_posix()
+        normalized = Spool._normalized_path_text(cleaned)
+        candidate = PurePosixPath(normalized)
+        existing_path = Path(normalized)
+        if existing_path.exists():
+            resolved = existing_path if existing_path.is_dir() else existing_path.parent
+            return resolved.as_posix()
+        suffix = candidate.suffix.lower()
+        if suffix:
+            return candidate.parent.as_posix()
+        return candidate.as_posix()
+
+    def _normalized_recent_directories(self, first: str = "") -> list[str]:
+        """Return recent directories with one optional path promoted to the front."""
+        out: list[str] = []
+        seen: set[str] = set()
+        for candidate in [first, *self._session_recent_directories]:
+            directory = self._normalized_path_text(candidate)
+            if not directory or directory in seen:
+                continue
+            seen.add(directory)
+            out.append(directory)
+        return out[:_RECENT_DIRECTORY_LIMIT]
+
+    def _remember_recent_directory(self, path: str) -> None:
+        """Persist one recent directory in most-recent-first order."""
+        directory = self._directory_for_recent_file_input(path)
+        if not directory:
+            return
+        self._session_recent_directories = self._normalized_recent_directories(
+            directory
+        )
+        self._refresh_recent_file_combo()
+
+    def _on_recent_file_combo_changed(self, index: int) -> None:
+        """Load one directory path from the recent-path dropdown."""
+        if index < 0:
+            return
+        self._set_file_input(self.recent_file_combo.currentText(), trigger_run=True)
+
     def _set_file_input(self, path: str, *, trigger_run: bool) -> None:
         """Set file input path, clear other inputs, and optionally run."""
         cleaned = path.strip()
         if not cleaned:
             return
         self.file_input = cleaned
-        self.file_path_edit.setText(cleaned)
         self._clear_other_inputs("file")
+        self._remember_recent_directory(cleaned)
+        self.recent_file_combo.setEditText(cleaned)
+        self._update_recent_file_combo_tooltip()
         self._source_mode = "settings"
         self._set_source_controls_enabled(True)
         if trigger_run:
@@ -1220,9 +1504,7 @@ class Spool(ZugWidget):
         if self.file_input:
             existing = Path(self.file_input)
             if existing.exists():
-                dialog.setDirectory(
-                    str(existing if existing.is_dir() else existing.parent)
-                )
+                dialog.setDirectory(str(existing.parent))
 
         if dialog.exec():
             return dialog.chosen_path()
@@ -1250,7 +1532,7 @@ class Spool(ZugWidget):
 
         if active != "file":
             self.file_input = ""
-            self.file_path_edit.clear()
+            self._refresh_recent_file_combo()
         if active != "raw":
             self.raw_input = ""
             self.raw_edit.blockSignals(True)
@@ -1429,37 +1711,38 @@ class Spool(ZugWidget):
             out_path = directory / f"{patch_name}.{extension}"
             patch.io.write(out_path, file_format=file_format)
 
-    def _reset_chunk_controls(self) -> None:
-        """Disable and clear chunk and select controls when no spool is available."""
-        self.chunk_dim = ""
-        self.chunk_value = ""
-        self.chunk_overlap = ""
-        self.select_filters = [self._blank_select_filter()]
-        self.select_col = ""
-        self.select_val = ""
+    def _reset_dynamic_controls(self) -> None:
+        """Disable dynamic controls without discarding persisted values."""
         self._select_options = ()
         self.chunk_dim_combo.blockSignals(True)
         self.chunk_dim_combo.clear()
+        if self.chunk_dim:
+            self.chunk_dim_combo.addItem(self.chunk_dim)
+            self.chunk_dim_combo.setCurrentText(self.chunk_dim)
+        else:
+            self.chunk_dim_combo.setCurrentIndex(-1)
         self.chunk_dim_combo.setEnabled(False)
         self.chunk_dim_combo.blockSignals(False)
-        self.chunk_value_edit.blockSignals(True)
-        self.chunk_value_edit.clear()
+        self._set_line_edit_value(self.chunk_value_edit, self.chunk_value)
         self.chunk_value_edit.setEnabled(False)
-        self.chunk_value_edit.blockSignals(False)
-        self.chunk_overlap_edit.blockSignals(True)
-        self.chunk_overlap_edit.clear()
+        self._set_line_edit_value(self.chunk_overlap_edit, self.chunk_overlap)
         self.chunk_overlap_edit.setEnabled(False)
-        self.chunk_overlap_edit.blockSignals(False)
+        self._set_checkbox_value(self.chunk_keep_partial_cb, self.chunk_keep_partial)
         self.chunk_keep_partial_cb.setEnabled(False)
+        self._set_checkbox_value(self.chunk_snap_coords_cb, self.chunk_snap_coords)
         self.chunk_snap_coords_cb.setEnabled(False)
+        self.chunk_tolerance_spin.blockSignals(True)
+        self.chunk_tolerance_spin.setValue(float(self.chunk_tolerance))
+        self.chunk_tolerance_spin.blockSignals(False)
         self.chunk_tolerance_spin.setEnabled(False)
+        self._set_combo_value(self.chunk_conflict_combo, self.chunk_conflict)
         self.chunk_conflict_combo.setEnabled(False)
         self._refresh_select_rows()
 
     def _set_chunk_dims_from_contents(self, df) -> None:
         """Populate chunk dimension choices from the contents DataFrame."""
         if "dims" not in df.columns:
-            self._reset_chunk_controls()
+            self._reset_dynamic_controls()
             return
         options: list[str] = []
         seen: set[str] = set()
@@ -1472,24 +1755,57 @@ class Spool(ZugWidget):
         self.chunk_dim_combo.blockSignals(True)
         self.chunk_dim_combo.clear()
         if not options:
-            self.chunk_dim = ""
+            if self.chunk_dim:
+                self.chunk_dim_combo.addItem(self.chunk_dim)
+                self.chunk_dim_combo.setCurrentText(self.chunk_dim)
+            else:
+                self.chunk_dim_combo.setCurrentIndex(-1)
             self.chunk_dim_combo.setEnabled(False)
+            self._set_line_edit_value(self.chunk_value_edit, self.chunk_value)
             self.chunk_value_edit.setEnabled(False)
+            self._set_line_edit_value(self.chunk_overlap_edit, self.chunk_overlap)
+            self.chunk_overlap_edit.setEnabled(False)
+            self._set_checkbox_value(
+                self.chunk_keep_partial_cb,
+                self.chunk_keep_partial,
+            )
+            self.chunk_keep_partial_cb.setEnabled(False)
+            self._set_checkbox_value(
+                self.chunk_snap_coords_cb,
+                self.chunk_snap_coords,
+            )
+            self.chunk_snap_coords_cb.setEnabled(False)
+            self.chunk_tolerance_spin.blockSignals(True)
+            self.chunk_tolerance_spin.setValue(float(self.chunk_tolerance))
+            self.chunk_tolerance_spin.blockSignals(False)
+            self.chunk_tolerance_spin.setEnabled(False)
+            self._set_combo_value(self.chunk_conflict_combo, self.chunk_conflict)
+            self.chunk_conflict_combo.setEnabled(False)
             self.chunk_dim_combo.blockSignals(False)
             return
         options = sorted(options, key=str.casefold)
         self.chunk_dim_combo.addItems(options)
         self.chunk_dim_combo.setEnabled(True)
+        self._set_line_edit_value(self.chunk_value_edit, self.chunk_value)
         self.chunk_value_edit.setEnabled(True)
+        self._set_line_edit_value(self.chunk_overlap_edit, self.chunk_overlap)
         self.chunk_overlap_edit.setEnabled(True)
+        self._set_checkbox_value(self.chunk_keep_partial_cb, self.chunk_keep_partial)
         self.chunk_keep_partial_cb.setEnabled(True)
+        self._set_checkbox_value(self.chunk_snap_coords_cb, self.chunk_snap_coords)
         self.chunk_snap_coords_cb.setEnabled(True)
+        self.chunk_tolerance_spin.blockSignals(True)
+        self.chunk_tolerance_spin.setValue(float(self.chunk_tolerance))
+        self.chunk_tolerance_spin.blockSignals(False)
         self.chunk_tolerance_spin.setEnabled(True)
+        self._set_combo_value(self.chunk_conflict_combo, self.chunk_conflict)
         self.chunk_conflict_combo.setEnabled(True)
         if self.chunk_dim in options:
             self.chunk_dim_combo.setCurrentText(self.chunk_dim)
+        elif self.chunk_dim:
+            self.chunk_dim_combo.addItem(self.chunk_dim)
+            self.chunk_dim_combo.setCurrentText(self.chunk_dim)
         else:
-            self.chunk_dim = ""
             self.chunk_dim_combo.setCurrentIndex(-1)
         self.chunk_dim_combo.blockSignals(False)
 
@@ -1545,6 +1861,23 @@ class Spool(ZugWidget):
         self._recompute_display_spool()
         self._schedule_emit()
 
+    def _on_chunk_group_toggled(self, checked: bool) -> None:
+        """Enable or disable applying chunk settings without clearing them."""
+        self.chunk_enabled = bool(checked)
+        if self._source_spool is None:
+            return
+        self._recompute_display_spool()
+        self._schedule_emit()
+
+    def _on_chunk_value_text_changed(self, text: str) -> None:
+        """Drop chunking immediately when the chunk-value edit is cleared."""
+        self.chunk_value = text.strip()
+        if self.chunk_value or self._source_spool is None:
+            return
+        self.chunk_overlap = self.chunk_overlap_edit.text().strip()
+        self._recompute_display_spool()
+        self._schedule_emit()
+
     def _set_source_spool(self, spool: dc.BaseSpool | None) -> None:
         """Store the source spool and refresh derived display state."""
         self._source_mode = "snapshot"
@@ -1558,6 +1891,7 @@ class Spool(ZugWidget):
 
     def _recompute_display_spool(self) -> None:
         """Rebuild the displayed spool from the base source spool and transforms."""
+        self._sync_settings_from_controls()
         source = self._source_spool
         if source is None:
             self._display_spool = None
@@ -1569,7 +1903,6 @@ class Spool(ZugWidget):
             display = self._apply_select_transform(source)
             display = self._apply_chunk_transform(display)
         except Exception as exc:
-            self._display_spool = source
             self._show_exception("general", exc)
             return
         self._display_spool = display
@@ -1581,12 +1914,14 @@ class Spool(ZugWidget):
 
     def _apply_chunk_transform(self, spool: dc.BaseSpool) -> dc.BaseSpool:
         """Return the source spool or a chunked derivative based on current controls."""
+        if not bool(self.chunk_enabled):
+            return spool
         dim = (self.chunk_dim or "").strip()
-        value = self._parse_chunk_scalar(self.chunk_value_edit.text())
+        value = self._parse_chunk_scalar(self.chunk_value)
         if not dim or value is None:
             return spool
 
-        overlap = self._parse_chunk_scalar(self.chunk_overlap_edit.text())
+        overlap = self._parse_chunk_scalar(self.chunk_overlap)
         kwargs = {
             dim: value,
             "overlap": overlap,
@@ -1740,17 +2075,11 @@ class Spool(ZugWidget):
             self._table.setModel(None)
             self.selected_source_row = None
             self.selected_source_patch_name = ""
-            self._reset_chunk_controls()
+            self._rebind_dynamic_controls()
             return
         try:
             df = self._ordered_contents_df(spool)
-            self._set_chunk_dims_from_contents(df)
-            select_df = (
-                self._ordered_contents_df(self._source_spool)
-                if self._source_spool is not None
-                else df
-            )
-            self._set_select_cols_from_contents(select_df)
+            self._rebind_dynamic_controls()
             table_model = self._build_table_model(df)
             self._disconnect_table_selection_model()
             self._table.setModel(table_model)
@@ -1858,6 +2187,7 @@ class Spool(ZugWidget):
 
     def get_task(self) -> Task:
         """Return the current bound-source workflow semantics."""
+        self._sync_settings_from_controls()
         if self._source_mode == "snapshot":
             return self._current_transform_task()
         return self._current_source_task()
