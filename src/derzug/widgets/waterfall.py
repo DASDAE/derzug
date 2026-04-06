@@ -329,6 +329,8 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     saved_selection_has_roi = Setting(None, schema_only=True)
     saved_annotation_set = Setting(None, schema_only=True)
     saved_view_range = Setting(None, schema_only=True)
+    saved_plot_y_dim = Setting("", schema_only=True)
+    saved_plot_x_dim = Setting("", schema_only=True)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -384,11 +386,16 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
             self.colormap = self._COLORMAPS[0]
         self._set_combo_value(self._cmap_combo, self.colormap)
         self._set_checkbox_value(self._reset_on_new_checkbox, self.reset_on_new)
+        saved_y = self.saved_plot_y_dim
+        saved_x = self.saved_plot_x_dim
+        self._plot_y_dim = saved_y if isinstance(saved_y, str) and saved_y else None
+        self._plot_x_dim = saved_x if isinstance(saved_x, str) and saved_x else None
 
     def _sync_settings_from_controls(self) -> None:
         """Persist visible controls and saved view/selection state."""
         self.colormap = self._cmap_combo.currentText().strip() or self._COLORMAPS[0]
         self.reset_on_new = bool(self._reset_on_new_checkbox.isChecked())
+        self._persist_nd_plot_settings()
         self._persist_selection_settings()
         self._persist_annotation_settings()
         self._persist_view_range_settings()
@@ -759,10 +766,16 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         self._annotation_controller.active_annotation_id = None
         self._annotation_controller.selected_annotation_ids.clear()
         self._update_annotation_slice_coords()
+        self._persist_nd_plot_settings()
         self._update_axis_state_from_patch(self._patch)
         if kind == "slice":
             self._pending_view_range = self._get_view_range()
         self._request_ui_refresh()
+
+    def _persist_nd_plot_settings(self) -> None:
+        """Mirror current ND Y/X dimension choices into workflow settings."""
+        self.saved_plot_y_dim = self._plot_y_dim or ""
+        self.saved_plot_x_dim = self._plot_x_dim or ""
 
     def _update_annotation_slice_coords(self) -> None:
         """Push current slice position into the annotation controller."""

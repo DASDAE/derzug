@@ -4672,6 +4672,37 @@ class TestWaterfallSliceDims:
         assert waterfall_widget._selection_patch_basis == "relative"
         assert not waterfall_widget.Error.invalid_patch.is_shown()
 
+    def test_selected_nd_plot_dims_restore_after_saved_settings_reload(self, qtbot):
+        """Saved ND Y/X plot-dim choices should restore after reopening Waterfall."""
+        patch = _make_relative_distance_lag_patch()
+
+        with widget_context(Waterfall) as first:
+            first.show()
+            qtbot.wait(10)
+            first.set_patch(patch)
+            first._y_dim_combo.setCurrentText("lag_time")
+            first._x_dim_combo.setCurrentText("relative_distance")
+
+            assert first._plot_y_dim == "lag_time"
+            assert first._plot_x_dim == "relative_distance"
+            assert first.saved_plot_y_dim == "lag_time"
+            assert first.saved_plot_x_dim == "relative_distance"
+
+            saved = first.settingsHandler.pack_data(first)
+
+        with widget_context(Waterfall, stored_settings=saved) as second:
+            second.show()
+            qtbot.wait(10)
+            second.set_patch(patch)
+
+            assert second.saved_plot_y_dim == "lag_time"
+            assert second.saved_plot_x_dim == "relative_distance"
+            assert second._plot_y_dim == "lag_time"
+            assert second._plot_x_dim == "relative_distance"
+            assert second._axes is not None
+            assert second._axes.y_dim == "lag_time"
+            assert second._axes.x_dim == "relative_distance"
+
     def test_slice_index_persists_across_compatible_patches(self, waterfall_widget):
         """Slider position is preserved when a new patch has the same slice dim."""
         waterfall_widget.set_patch(_make_3d_patch(3))

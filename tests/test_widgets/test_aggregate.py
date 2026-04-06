@@ -28,8 +28,11 @@ class TestAggregate:
         """Widget creates with expected defaults and controls."""
         assert isinstance(aggregate_widget, Aggregate)
         assert aggregate_widget.selected_dim == ""
+        assert aggregate_widget.transform_dim == ""
         assert aggregate_widget.method == "mean"
         assert aggregate_widget.dim_reduce == "empty"
+        assert aggregate_widget._transform_dim_label.isHidden()
+        assert aggregate_widget._transform_dim_combo.isHidden()
 
     def test_patch_none_emits_none(self, aggregate_widget, monkeypatch, qtbot):
         """A None patch clears output."""
@@ -102,11 +105,104 @@ class TestAggregate:
         wait_for_widget_idle(aggregate_widget)
 
         out = received[-1]
-        expected = patch.phase_weighted_stack("distance", dim_reduce="empty")
+        expected = patch.phase_weighted_stack(
+            "distance",
+            transform_dim="time",
+            dim_reduce="empty",
+        )
         assert out is not None
         assert out.shape == expected.shape
         assert out.dims == expected.dims
         assert out.data == pytest.approx(expected.data)
+
+    def test_phase_weighted_stack_shows_transform_dim_control(
+        self, aggregate_widget, qtbot
+    ):
+        """Selecting phase-weighted stack should expose the transform selector."""
+        patch = dc.get_example_patch("example_event_2")
+        aggregate_widget.set_patch(patch)
+        wait_for_widget_idle(aggregate_widget)
+
+        aggregate_widget._method_combo.setCurrentText("phase_weighted_stack")
+        wait_for_widget_idle(aggregate_widget)
+
+        assert not aggregate_widget._transform_dim_label.isHidden()
+        assert not aggregate_widget._transform_dim_combo.isHidden()
+        assert aggregate_widget._transform_dim_combo.currentText() == "time"
+
+    def test_phase_weighted_stack_uses_selected_transform_dim(
+        self, aggregate_widget, monkeypatch, qtbot
+    ):
+        """Phase-weighted stack should honor the chosen secondary dimension."""
+        received = capture_output(aggregate_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2").append_dims(lag_time=[0, 1])
+        aggregate_widget.set_patch(patch)
+        wait_for_widget_idle(aggregate_widget)
+
+        aggregate_widget._dim_combo.setCurrentText("distance")
+        wait_for_widget_idle(aggregate_widget)
+        aggregate_widget._method_combo.setCurrentText("phase_weighted_stack")
+        wait_for_widget_idle(aggregate_widget)
+        aggregate_widget._transform_dim_combo.setCurrentText("lag_time")
+        wait_for_widget_idle(aggregate_widget)
+
+        out = received[-1]
+        expected = patch.phase_weighted_stack(
+            "distance",
+            transform_dim="lag_time",
+            dim_reduce="empty",
+        )
+        assert aggregate_widget.transform_dim == "lag_time"
+        assert out is not None
+        assert out.shape == expected.shape
+        assert out.dims == expected.dims
+        assert out.data == pytest.approx(expected.data)
+
+    def test_phase_weighted_stack_prefers_time_for_multidim_patch(
+        self, aggregate_widget, monkeypatch, qtbot
+    ):
+        """Phase-weighted stack should default the transform selector to time."""
+        received = capture_output(aggregate_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2").append_dims(
+            lag_time=[0],
+            patch_number=[0],
+        )
+        aggregate_widget.selected_dim = "distance"
+        aggregate_widget.method = "phase_weighted_stack"
+        aggregate_widget.dim_reduce = "empty"
+
+        aggregate_widget.set_patch(patch)
+        wait_for_widget_idle(aggregate_widget)
+
+        out = received[-1]
+        assert aggregate_widget.transform_dim == "time"
+        expected = patch.phase_weighted_stack(
+            "distance",
+            transform_dim="time",
+            dim_reduce="empty",
+        )
+        assert out is not None
+        assert out.shape == expected.shape
+        assert out.dims == expected.dims
+        assert out.data == pytest.approx(expected.data)
+
+    def test_phase_weighted_stack_requires_selected_dim(
+        self, aggregate_widget, monkeypatch, qtbot
+    ):
+        """Phase-weighted stack should fail clearly when no stack dim is selected."""
+        received = capture_output(aggregate_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        aggregate_widget.selected_dim = ""
+        aggregate_widget.method = "phase_weighted_stack"
+
+        aggregate_widget.set_patch(patch)
+        wait_for_widget_idle(aggregate_widget)
+
+        assert received[-1] is None
+        assert aggregate_widget.Error.aggregate_failed.is_shown()
+        assert "requires selecting one stack dimension" in (
+            aggregate_widget.Error.aggregate_failed.formatted
+        )
 
     def test_dim_change_triggers_rerun(self, aggregate_widget, monkeypatch, qtbot):
         """Changing dimension reruns and emits a fresh output."""

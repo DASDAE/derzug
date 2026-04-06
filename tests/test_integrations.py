@@ -526,6 +526,43 @@ class TestConnections:
             assert wiggle_widget._render_state.mode == "time series"
 
     @pytest.mark.integration
+    def test_aggregate_empty_output_renders_in_waterfall(self, monkeypatch):
+        """A reduced axis with a non-finite coord should still render in Waterfall."""
+        with (
+            widget_context(Aggregate) as aggregate_widget,
+            widget_context(Waterfall) as waterfall_widget,
+        ):
+            aggregate_received = _capture_output(
+                aggregate_widget.Outputs.patch, monkeypatch
+            )
+            waterfall_received = _capture_output(
+                waterfall_widget.Outputs.patch, monkeypatch
+            )
+
+            patch = dc.get_example_patch("example_event_2")
+            aggregate_widget.selected_dim = "distance"
+            aggregate_widget.method = "mean"
+            aggregate_widget.dim_reduce = "empty"
+
+            aggregate_widget.set_patch(patch)
+            wait_for_widget_idle(aggregate_widget)
+            assert aggregate_received
+            aggregated = aggregate_received[-1]
+            assert aggregated is not None
+            assert aggregated.data.ndim == 2
+            assert np.isnan(aggregated.get_array("distance")).all()
+
+            waterfall_widget.set_patch(aggregated)
+
+            assert waterfall_received
+            assert waterfall_received[-1] is aggregated
+            assert not waterfall_widget.Error.invalid_patch.is_shown()
+            assert waterfall_widget._axes is not None
+            assert waterfall_widget._axis_kinds["left"] == "index"
+            rect = waterfall_widget._image_item.boundingRect()
+            assert np.isfinite([rect.left(), rect.top(), rect.width(), rect.height()]).all()
+
+    @pytest.mark.integration
     def test_story_crop_an_event_window(self, monkeypatch):
         """A source patch can be cropped in Select and rendered downstream."""
         with (
