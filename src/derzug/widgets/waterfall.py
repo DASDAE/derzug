@@ -377,10 +377,31 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
     def get_task(self) -> Task:
         """Return the compiled patch-only semantics for the current widget state."""
+        self._sync_settings_from_controls()
         payload = self._load_saved_selection_state()
         if payload is None:
             return PatchPassThroughTask()
         return PatchSelectionTask(selection_payload=payload)
+
+    def _apply_settings_to_controls(self) -> None:
+        """Hydrate visible controls from persisted widget settings."""
+        if self.colormap not in self._COLORMAPS:
+            self.colormap = self._COLORMAPS[0]
+        self._set_combo_value(self._cmap_combo, self.colormap)
+        self._set_checkbox_value(self._reset_on_new_checkbox, self.reset_on_new)
+
+    def _sync_settings_from_controls(self) -> None:
+        """Persist visible controls and saved view/selection state."""
+        self.colormap = self._cmap_combo.currentText().strip() or self._COLORMAPS[0]
+        self.reset_on_new = bool(self._reset_on_new_checkbox.isChecked())
+        self._persist_selection_settings()
+        self._persist_annotation_settings()
+        self._persist_view_range_settings()
+
+    def _rebind_dynamic_controls(self) -> None:
+        """Rebuild patch-dependent axis and slice controls from the current patch."""
+        self._rebuild_slice_panel(self._patch)
+        self._update_axis_state_from_patch(self._patch)
 
     def widget_shortcuts(self) -> list[tuple[str, str]]:
         """Return Waterfall-specific keyboard and pointer shortcuts."""
@@ -435,12 +456,6 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._reset_on_new_checkbox.setToolTip(
             "reset plot and color bar extents when receiving a new patch"
         )
-
-        if self.colormap in self._COLORMAPS:
-            self._cmap_combo.setCurrentText(self.colormap)
-        else:
-            self.colormap = self._COLORMAPS[0]
-            self._cmap_combo.setCurrentIndex(0)
 
         self._build_selection_panel(box)
         self._add_selection_button = QToolButton(box)
@@ -568,6 +583,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         )
         self._plot_item.vb.menu.viewAll.triggered.connect(self._delete_active_roi)
         self._plot_item.vb.sigRangeChanged.connect(self._on_view_range_changed)
+        self._apply_settings_to_controls()
         self._apply_colormap(self.colormap)
         self._set_overlay_mode("select")
         self._install_view_menu_actions()
@@ -713,8 +729,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             for dim in tuple(self._selection_state.patch.ranges)
         }
         self._patch = patch
-        self._rebuild_slice_panel(patch)
-        self._update_axis_state_from_patch(patch)
+        self._rebind_dynamic_controls()
         prepared = self._prepared_render
         if prepared is not None:
             x_dim = prepared.axes.x_dim
@@ -1138,6 +1153,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
     def _refresh_ui(self) -> None:
         """Render the current patch and synchronize visible controls."""
         self._selection_refresh_panel()
+        self._apply_settings_to_controls()
         if self._colormap_dirty:
             self._apply_colormap(self.colormap)
             self._colormap_dirty = False
@@ -2249,12 +2265,14 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         new_patch: dc.Patch,
     ) -> bool:
         """Return True when a replacement patch should drop prior view/levels."""
+        if previous_patch is new_patch:
+            return False
         previous_data = np.asarray(previous_patch.data)
         new_data = np.asarray(new_patch.data)
         if previous_data.ndim != 2 or new_data.ndim != 2:
             return False
         if previous_patch.dims != new_patch.dims:
-            return False
+            return True
         if not all(
             np.array_equal(
                 np.asarray(previous_patch.get_array(dim)),
@@ -2262,11 +2280,14 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             )
             for dim in previous_patch.dims
         ):
-            return False
+            return True
         try:
-            return previous_patch.attrs == new_patch.attrs
+            attrs_equal = previous_patch.attrs == new_patch.attrs
         except Exception:
-            return False
+            attrs_equal = False
+        if attrs_equal and not np.array_equal(previous_data, new_data):
+            return True
+        return False
 
     @staticmethod
     def _ranges_overlap(
