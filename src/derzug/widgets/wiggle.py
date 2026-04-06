@@ -24,6 +24,7 @@ from derzug.utils.plot_axes import (
     nearest_axis_index,
     set_cursor_label_text,
 )
+from derzug.widgets.ndim_controls import MultiDimPlotControlsMixin
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchPassThroughTask
 
@@ -113,7 +114,7 @@ class _ExpandableGainSlider(QSlider):
             self._last_edge_direction = direction
 
 
-class Wiggle(ZugWidget):
+class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     """Display DASCore patches as wiggle or time-series plots."""
 
     _AUTO_STRIDE_TRACE_CAP = 300
@@ -175,6 +176,8 @@ class Wiggle(ZugWidget):
     def __init__(self) -> None:
         super().__init__()
         self._patch: dc.Patch | None = None
+        self._display_patch: dc.Patch | None = None
+        self._init_nd_plot_controls_state()
         self._render_state: _WiggleRenderState | None = None
         self._auto_stride_initialized = False
         self._preserve_view_on_refresh = False
@@ -235,7 +238,12 @@ class Wiggle(ZugWidget):
         self._sync_gain_control()
         self._update_gain_label()
 
-        plot_panel = QWidget(self.mainArea)
+        main_container = QWidget(self.mainArea)
+        main_layout = QVBoxLayout(main_container)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        plot_panel = QWidget(main_container)
         panel_layout = QVBoxLayout(plot_panel)
         panel_layout.setContentsMargins(0, 0, 0, 0)
         panel_layout.setSpacing(4)
@@ -249,7 +257,9 @@ class Wiggle(ZugWidget):
         self._cursor_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         panel_layout.addWidget(self._plot_widget)
         panel_layout.addWidget(self._cursor_label)
-        self.mainArea.layout().addWidget(plot_panel)
+        main_layout.addWidget(plot_panel, 1)
+        main_layout.addWidget(self._build_nd_plot_controls(main_container), 0)
+        self.mainArea.layout().addWidget(main_container)
 
         self._curve = pg.PlotCurveItem(pen=pg.mkPen(color=(15, 15, 15, 255), width=2))
         self._plot_item.addItem(self._curve)
@@ -286,25 +296,40 @@ class Wiggle(ZugWidget):
         self._patch = patch
         if patch is not None and np.asarray(patch.data).ndim == 1:
             self.mode = "time series"
+        self._refresh_nd_plot_controls(patch)
         self._initialize_stride_from_first_patch()
+        self._request_ui_refresh()
+        self._emit_current_patch()
+
+    def _current_display_patch(self) -> dc.Patch | None:
+        """Return the current patch reduced to the plotted dimensions."""
+        try:
+            return self._nd_display_patch(self._patch)
+        except Exception:
+            return self._patch
+
+    def _on_nd_plot_state_changed(self, *, kind: str) -> None:
+        """Re-render after shared ND plot/slice controls change."""
+        self._preserve_view_on_refresh = True
         self._request_ui_refresh()
         self._emit_current_patch()
 
     def _initialize_stride_from_first_patch(self) -> None:
         """Choose a one-time default stride from the first 2D patch."""
-        if self._auto_stride_initialized or self._patch is None:
+        patch = self._current_display_patch()
+        if self._auto_stride_initialized or patch is None:
             return
-        data = np.asarray(self._patch.data)
+        data = np.asarray(patch.data)
         if data.ndim != 2:
             return
         self._auto_stride_initialized = True
-        dims = tuple(self._patch.dims)
+        dims = tuple(patch.dims)
         trace_dim = (
             self.selected_trace_dim
             if self.selected_trace_dim in dims
             else ("distance" if "distance" in dims else dims[0])
         )
-        trace_count = self._trace_count_for_dim(self._patch, trace_dim)
+        trace_count = self._trace_count_for_dim(patch, trace_dim)
         stride = self._auto_stride_for_trace_count(trace_count)
         self.stride = stride
         if not self._is_ui_visible():
@@ -330,9 +355,10 @@ class Wiggle(ZugWidget):
 
     def _patch_ndim(self) -> int | None:
         """Return the dimensionality of the current patch data, if any."""
-        if self._patch is None:
+        patch = self._current_display_patch()
+        if patch is None:
             return None
-        return int(np.asarray(self._patch.data).ndim)
+        return int(np.asarray(patch.data).ndim)
 
     def _available_modes(self) -> tuple[str, ...]:
         """Return the mode options supported by the current patch."""
@@ -364,7 +390,8 @@ class Wiggle(ZugWidget):
 
     def _refresh_controls(self) -> None:
         """Refresh mode and axis controls from the current patch."""
-        dims = tuple(self._patch.dims) if self._patch is not None else ()
+        display_patch = self._current_display_patch()
+        dims = tuple(display_patch.dims) if display_patch is not None else ()
         modes = self._available_modes()
 
         self._mode_combo.blockSignals(True)
@@ -575,7 +602,9 @@ class Wiggle(ZugWidget):
         self._clear_curves()
         self._hide_color_bar()
 
-        if self._patch is None:
+        display_patch = self._current_display_patch()
+        self._display_patch = display_patch
+        if display_patch is None:
             self._render_state = None
             self._axis_kinds = {"bottom": "numeric", "left": "numeric"}
             self._axis_dims = {"bottom": "Sample", "left": "Trace"}
@@ -585,15 +614,15 @@ class Wiggle(ZugWidget):
             return
 
         try:
-            data = np.asarray(self._patch.data)
+            data = np.asarray(display_patch.data)
             if data.ndim == 1:
                 self.mode = "time series"
                 self._refresh_controls()
-                state = self._build_time_series_state_1d(self._patch)
+                state = self._build_time_series_state_1d(display_patch)
                 self._apply_time_series_state(state)
             elif data.ndim == 2 and self.mode == "time series":
                 state = self._build_time_series_state_2d(
-                    self._patch,
+                    display_patch,
                     selected_x_dim=self.selected_x_dim,
                     percentiles_enabled=bool(self.percentiles),
                     color_limits=self.series_color_limits,
@@ -601,7 +630,7 @@ class Wiggle(ZugWidget):
                 self._apply_time_series_state(state)
             elif data.ndim == 2:
                 state = self._build_offset_state_2d(
-                    self._patch,
+                    display_patch,
                     selected_trace_dim=self.selected_trace_dim,
                     stride=self.stride,
                     gain=self.gain,
@@ -622,6 +651,7 @@ class Wiggle(ZugWidget):
                     padding=0,
                 )
         except Exception as exc:
+            self._display_patch = None
             self._render_state = None
             self._clear_curves()
             self._hide_color_bar()
@@ -967,10 +997,10 @@ class Wiggle(ZugWidget):
 
     def _update_cursor_readout(self, *, plot_x: float, plot_y: float) -> None:
         """Show the plotted cursor position and nearest raw sample amplitude."""
-        if self._patch is None or self._render_state is None:
+        if self._display_patch is None or self._render_state is None:
             self._set_cursor_readout(None)
             return
-        data = np.asarray(self._patch.data)
+        data = np.asarray(self._display_patch.data)
         if data.size == 0:
             self._set_cursor_readout(None)
             return
@@ -1062,7 +1092,8 @@ class Wiggle(ZugWidget):
 
     def _raw_trace_value(self, data: np.ndarray, *, x_index: int, trace_index: int):
         """Return the raw patch amplitude nearest the cursor."""
-        _dim0, dim1 = self._patch.dims
+        assert self._display_patch is not None
+        _dim0, dim1 = self._display_patch.dims
         if self.selected_trace_dim == dim1:
             # When dim1 is the trace dimension, each trace lives in
             # data[:, trace_index].

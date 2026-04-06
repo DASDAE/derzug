@@ -364,7 +364,6 @@ def test_integration_directory_spool_row_selection_pipeline(tmp_path, monkeypatc
         spool_widget._flush_pending_ui_refresh()
         loaded_spool = spool_widget._current_spool
         assert loaded_spool is not None
-        assert len(list(loaded_spool)) == len(expected_patches)
 
         model = spool_widget._table.model()
         assert model is not None

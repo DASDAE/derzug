@@ -115,6 +115,7 @@ zug = "derzug.dascore.namespace:ZugSpoolNameSpace"
 
 test = [
     "coverage>=7.4,<8",
+    "duckdb",
     "pytest-cov>=4",
     "prek",
     "pytest",

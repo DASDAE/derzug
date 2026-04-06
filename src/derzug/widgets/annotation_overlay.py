@@ -1093,7 +1093,11 @@ class AnnotationOverlayController:
         axes = self._host._axes
         if axes is None:
             return None
-        return (axes.x_dim, axes.y_dim, *tuple(self._slice_coords.keys()))
+        dims: list[str] = []
+        for dim in (axes.x_dim, axes.y_dim, *tuple(self._slice_coords.keys())):
+            if dim not in dims:
+                dims.append(dim)
+        return tuple(dims)
 
     @property
     def slice_coords(self) -> dict[str, Any]:
