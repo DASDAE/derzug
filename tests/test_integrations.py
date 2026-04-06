@@ -560,7 +560,9 @@ class TestConnections:
             assert waterfall_widget._axes is not None
             assert waterfall_widget._axis_kinds["left"] == "index"
             rect = waterfall_widget._image_item.boundingRect()
-            assert np.isfinite([rect.left(), rect.top(), rect.width(), rect.height()]).all()
+            assert np.isfinite(
+                [rect.left(), rect.top(), rect.width(), rect.height()]
+            ).all()
 
     @pytest.mark.integration
     def test_story_crop_an_event_window(self, monkeypatch):

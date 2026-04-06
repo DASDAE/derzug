@@ -63,7 +63,10 @@ class AggregateTask(Task):
                 else self._infer_phase_weighted_stack_transform_dim(patch, dim)
             )
             if transform_dim == dim:
-                msg = "Phase-weighted stack transform dimension must differ from stack dimension."
+                msg = (
+                    "Phase-weighted stack transform dimension must differ from "
+                    "stack dimension."
+                )
                 raise ValueError(msg)
             return patch.phase_weighted_stack(
                 stack_dim=dim,
@@ -211,13 +214,23 @@ class Aggregate(ZugWidget):
 
     def _refresh_transform_dims(self) -> None:
         """Sync transform-dimension choices from the current patch and stack dim."""
-        stack_dim = self.selected_dim if self.selected_dim in self._available_dims else ""
-        dims = tuple(dim for dim in self._available_dims if dim != stack_dim)
-        inferred = (
-            AggregateTask._infer_phase_weighted_stack_transform_dim(self._patch, stack_dim)
-            if self._patch is not None and stack_dim in self._available_dims and dims
-            else ""
+        stack_dim = (
+            self.selected_dim if self.selected_dim in self._available_dims else ""
         )
+        dims = tuple(dim for dim in self._available_dims if dim != stack_dim)
+        inferred = ""
+        if (
+            self.transform_dim not in dims
+            and self._patch is not None
+            and stack_dim in self._available_dims
+            and dims
+        ):
+            try:
+                inferred = AggregateTask._infer_phase_weighted_stack_transform_dim(
+                    self._patch, stack_dim
+                )
+            except ValueError:
+                inferred = ""
 
         self._transform_dim_combo.blockSignals(True)
         self._transform_dim_combo.clear()

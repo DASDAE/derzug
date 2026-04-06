@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Callable
 from contextlib import contextmanager
-from typing import Callable
 
 import dascore as dc
 import numpy as np

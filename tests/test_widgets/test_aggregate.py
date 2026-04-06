@@ -186,6 +186,43 @@ class TestAggregate:
         assert out.dims == expected.dims
         assert out.data == pytest.approx(expected.data)
 
+    def test_phase_weighted_stack_preserves_valid_transform_dim_for_time_stack(
+        self, aggregate_widget, monkeypatch, qtbot
+    ):
+        """A valid transform dim should remain selectable for ambiguous time stacks."""
+        received = capture_output(aggregate_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2").append_dims(
+            lag_time=[0, 1],
+            patch_number=[0, 1],
+            relative_distance=[0, 1],
+        )
+        aggregate_widget.selected_dim = "time"
+        aggregate_widget.transform_dim = "lag_time"
+        aggregate_widget.method = "phase_weighted_stack"
+        aggregate_widget.dim_reduce = "squeeze"
+
+        aggregate_widget.set_patch(patch)
+        wait_for_widget_idle(aggregate_widget)
+
+        combo_items = [
+            aggregate_widget._transform_dim_combo.itemText(i)
+            for i in range(aggregate_widget._transform_dim_combo.count())
+        ]
+        out = received[-1]
+        expected = patch.phase_weighted_stack(
+            "time",
+            transform_dim="lag_time",
+            dim_reduce="squeeze",
+        )
+
+        assert aggregate_widget.transform_dim == "lag_time"
+        assert aggregate_widget._transform_dim_combo.currentText() == "lag_time"
+        assert "lag_time" in combo_items
+        assert out is not None
+        assert out.shape == expected.shape
+        assert out.dims == expected.dims
+        assert out.data == pytest.approx(expected.data)
+
     def test_phase_weighted_stack_requires_selected_dim(
         self, aggregate_widget, monkeypatch, qtbot
     ):

@@ -386,10 +386,11 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
             self.colormap = self._COLORMAPS[0]
         self._set_combo_value(self._cmap_combo, self.colormap)
         self._set_checkbox_value(self._reset_on_new_checkbox, self.reset_on_new)
-        saved_y = self.saved_plot_y_dim
-        saved_x = self.saved_plot_x_dim
-        self._plot_y_dim = saved_y if isinstance(saved_y, str) and saved_y else None
-        self._plot_x_dim = saved_x if isinstance(saved_x, str) and saved_x else None
+        if self._plot_y_dim is None and self._plot_x_dim is None:
+            saved_y = self.saved_plot_y_dim
+            saved_x = self.saved_plot_x_dim
+            self._plot_y_dim = saved_y if isinstance(saved_y, str) and saved_y else None
+            self._plot_x_dim = saved_x if isinstance(saved_x, str) and saved_x else None
 
     def _sync_settings_from_controls(self) -> None:
         """Persist visible controls and saved view/selection state."""
