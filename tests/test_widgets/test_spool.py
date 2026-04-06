@@ -67,10 +67,9 @@ def _long_duration_patch(
     """Return one local patch long enough to exercise hour-scale chunking."""
     base = dc.get_example_patch("example_event_2")
     data = np.zeros((base.shape[0], duration_seconds), dtype=np.float32)
-    time = (
-        np.arange(start_offset_seconds, start_offset_seconds + duration_seconds)
-        .astype("timedelta64[s]")
-    )
+    time = np.arange(
+        start_offset_seconds, start_offset_seconds + duration_seconds
+    ).astype("timedelta64[s]")
     patch = base.new(
         data=data,
         coords={"distance": base.get_array("distance"), "time": time},
@@ -441,7 +440,9 @@ class TestSpool:
         assert spool_widget._session_recent_directories == ["/tmp/some-path"]
         assert spool_widget.recent_directories == []
 
-    def test_file_input_remembers_parent_directory_for_selected_file(self, spool_widget):
+    def test_file_input_remembers_parent_directory_for_selected_file(
+        self, spool_widget
+    ):
         """Selecting a file should remember its parent directory in recent history."""
         spool_widget._set_file_input("/tmp/data/example.h5", trigger_run=False)
 
@@ -455,6 +456,13 @@ class TestSpool:
         assert spool_widget._session_recent_directories == ["/tmp/das-source"]
         assert spool_widget.recent_file_combo.itemText(0) == "/tmp/das-source"
 
+    def test_file_input_normalizes_windows_style_recent_directory(self, spool_widget):
+        """Recent directory history should normalize Windows-style file paths."""
+        spool_widget._set_file_input(r"C:\tmp\data\example.h5", trigger_run=False)
+
+        assert spool_widget._session_recent_directories == ["C:/tmp/data"]
+        assert spool_widget.recent_file_combo.itemText(0) == "C:/tmp/data"
+
     def test_file_input_shows_full_path_in_tooltip(self, spool_widget):
         """The compact file/directory combo should expose the full path on hover."""
         path = "/tmp/very/long/path/to/a/directory/that/should/truncate/in/the/ui"
@@ -467,7 +475,9 @@ class TestSpool:
     def test_recent_directory_history_is_deduplicated_and_capped(self, spool_widget):
         """Recent directory history should keep the newest unique 10 entries."""
         for index in range(12):
-            spool_widget._set_file_input(f"/tmp/history-{index}/patch.h5", trigger_run=False)
+            spool_widget._set_file_input(
+                f"/tmp/history-{index}/patch.h5", trigger_run=False
+            )
         spool_widget._set_file_input("/tmp/history-5/again.h5", trigger_run=False)
 
         assert spool_widget._session_recent_directories == [
@@ -518,7 +528,7 @@ class TestSpool:
     def test_recent_directories_save_only_on_widget_delete(
         self, spool_widget, monkeypatch
     ):
-        """Recent directories should copy into the persisted setting only at teardown."""
+        """Recent directories should copy into persisted settings at teardown."""
         base_delete_called = []
         spool_widget.recent_directories = ["/tmp/original"]
         spool_widget._session_recent_directories = ["/tmp/session-only"]
@@ -623,7 +633,7 @@ class TestSpool:
     def test_open_path_dialog_uses_parent_of_selected_directory(
         self, spool_widget, monkeypatch, tmp_path
     ):
-        """Reopening after a directory selection should start in that directory's parent."""
+        """Reopening after a directory selection should start in its parent."""
         selected_dir = tmp_path / "chosen_dir"
         selected_dir.mkdir()
         captured: list[str] = []
@@ -1257,7 +1267,9 @@ class TestSpool:
     def test_switching_sources_falls_back_to_new_source_when_transform_breaks(
         self, monkeypatch, qtbot
     ):
-        """Changing source should not leave the old table visible after a new transform error."""
+        """Changing source should not leave the old table visible after
+        a new transform error.
+        """
 
         def long_example():
             return dc.spool([dc.get_example_patch("example_event_2")])

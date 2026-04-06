@@ -8,7 +8,7 @@ import ast
 import datetime
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, ClassVar
 
 import dascore as dc
@@ -317,7 +317,9 @@ class _SettingsTransformError(Exception):
 def _settings_source_identity_from_task(task: SpoolTask) -> tuple[object, ...]:
     """Return a stable identity for one settings-backed source request."""
     example_name = str(task.spool_input or "")
-    example_parameters = task.example_parameters if isinstance(task.example_parameters, dict) else {}
+    example_parameters = (
+        task.example_parameters if isinstance(task.example_parameters, dict) else {}
+    )
     return (
         str(task.file_input or ""),
         str(task.raw_input or ""),
@@ -1407,25 +1409,47 @@ class Spool(ZugWidget):
         self.recent_file_combo.lineEdit().setToolTip(tooltip)
 
     @staticmethod
+    def _normalized_path_text(path: str) -> str:
+        """Return one path string in a stable cross-platform text form."""
+        cleaned = str(path or "").strip()
+        if not cleaned:
+            return ""
+        if "\\" in cleaned:
+            return PureWindowsPath(cleaned).as_posix()
+        return Path(cleaned).as_posix()
+
+    @staticmethod
     def _directory_for_recent_file_input(path: str) -> str:
         """Return the directory to remember for one chosen file or directory path."""
         cleaned = str(path or "").strip()
         if not cleaned:
             return ""
-        candidate = Path(cleaned)
-        if candidate.exists():
-            return str(candidate if candidate.is_dir() else candidate.parent)
+        is_windows_style = "\\" in cleaned or (
+            len(cleaned) >= 2 and cleaned[1] == ":" and cleaned[0].isalpha()
+        )
+        if is_windows_style:
+            candidate = PureWindowsPath(cleaned)
+            suffix = candidate.suffix.lower()
+            if suffix:
+                return candidate.parent.as_posix()
+            return candidate.as_posix()
+        normalized = Spool._normalized_path_text(cleaned)
+        candidate = PurePosixPath(normalized)
+        existing_path = Path(normalized)
+        if existing_path.exists():
+            resolved = existing_path if existing_path.is_dir() else existing_path.parent
+            return resolved.as_posix()
         suffix = candidate.suffix.lower()
         if suffix:
-            return str(candidate.parent)
-        return str(candidate)
+            return candidate.parent.as_posix()
+        return candidate.as_posix()
 
     def _normalized_recent_directories(self, first: str = "") -> list[str]:
         """Return recent directories with one optional path promoted to the front."""
         out: list[str] = []
         seen: set[str] = set()
         for candidate in [first, *self._session_recent_directories]:
-            directory = str(candidate or "").strip()
+            directory = self._normalized_path_text(candidate)
             if not directory or directory in seen:
                 continue
             seen.add(directory)
@@ -1437,7 +1461,9 @@ class Spool(ZugWidget):
         directory = self._directory_for_recent_file_input(path)
         if not directory:
             return
-        self._session_recent_directories = self._normalized_recent_directories(directory)
+        self._session_recent_directories = self._normalized_recent_directories(
+            directory
+        )
         self._refresh_recent_file_combo()
 
     def _on_recent_file_combo_changed(self, index: int) -> None:

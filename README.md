@@ -49,4 +49,3 @@ patch = dc.get_example_patch("example_event_2")
 # Launches a waterfall window for viewing a patch 
 patch.zug.waterfall()
 ```
-
