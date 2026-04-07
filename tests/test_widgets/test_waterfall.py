@@ -11,7 +11,7 @@ import pytest
 from AnyQt.QtCore import QEvent, QPointF, Qt
 from AnyQt.QtGui import QKeyEvent
 from AnyQt.QtTest import QTest
-from AnyQt.QtWidgets import QMenu
+from AnyQt.QtWidgets import QMenu, QToolButton
 from dascore.viz.waterfall import _get_scale as get_dascore_waterfall_scale
 from derzug.annotations_config import AnnotationConfig, save_annotation_config
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
@@ -3002,6 +3002,54 @@ class TestWaterfall:
             expected_levels
         )
 
+    def test_reset_on_new_resets_for_patch_with_different_coordinates(
+        self, waterfall_widget
+    ):
+        """Coordinate-changing replacement patches should also drop prior extents."""
+        first_patch = dc.get_example_patch("example_event_2")
+        second_patch = first_patch.select(
+            time=(first_patch.coords["time"][0], first_patch.coords["time"][400])
+        )
+
+        waterfall_widget.set_patch(first_patch)
+        axes = waterfall_widget._axes
+        narrowed_x = (
+            float(axes.x_plot[10]),
+            float(axes.x_plot[20]),
+        )
+        narrowed_y = (
+            float(axes.y_plot[10]),
+            float(axes.y_plot[20]),
+        )
+        waterfall_widget._plot_item.vb.setRange(
+            xRange=narrowed_x,
+            yRange=narrowed_y,
+            padding=0,
+        )
+        waterfall_widget._hist_lut.item.setLevels(-0.25, 0.5)
+
+        before_view = waterfall_widget._plot_item.vb.viewRange()
+        waterfall_widget.set_patch(second_patch)
+        after_view = waterfall_widget._plot_item.vb.viewRange()
+        expected_x = waterfall_widget._axis_bounds(waterfall_widget._axes.x_plot)
+        expected_y = waterfall_widget._axis_bounds(waterfall_widget._axes.y_plot)
+        expected_levels = get_dascore_waterfall_scale(
+            None,
+            "relative",
+            np.asarray(second_patch.data),
+        )
+
+        assert before_view[0] == pytest.approx(narrowed_x)
+        assert before_view[1] == pytest.approx(narrowed_y)
+        assert after_view[0] != pytest.approx(narrowed_x)
+        assert after_view[1] != pytest.approx(narrowed_y)
+        assert waterfall_widget._range_contains_range(after_view[0], expected_x)
+        assert waterfall_widget._range_contains_range(after_view[1], expected_y)
+        assert waterfall_widget.color_limits is None
+        assert waterfall_widget._hist_lut.item.getLevels() == pytest.approx(
+            expected_levels
+        )
+
     def test_reset_on_new_false_preserves_plot_and_colorbar_extents(
         self, waterfall_widget
     ):
@@ -4387,6 +4435,88 @@ def _make_3d_patch(n_shots: int = 3) -> dc.Patch:
     )
 
 
+def _make_lag_time_patch(count: int = 5) -> dc.Patch:
+    """Return a 3D patch with timedelta lag_time as one plot-selectable dim."""
+    base = dc.get_example_patch()
+    data3d = np.stack([base.data * (i + 1) for i in range(count)], axis=0)
+    lag_time = (np.arange(count) - (count // 2)).astype("timedelta64[s]")
+    return dc.Patch(
+        data=data3d,
+        coords={
+            **{k: base.get_array(k) for k in base.dims},
+            "lag_time": lag_time,
+        },
+        dims=("lag_time", *base.dims),
+        attrs=base.attrs,
+    )
+
+
+def _make_multi_slice_lag_time_patch(
+    lag_count: int = 4, patch_count: int = 2
+) -> dc.Patch:
+    """Return a 4D patch where distance becomes a non-final slice dim."""
+    base = dc.get_example_patch().transpose("time", "distance")
+    data4d = np.stack(
+        [
+            np.stack(
+                [
+                    base.data * (lag_index + 1) * (patch_index + 1)
+                    for patch_index in range(patch_count)
+                ],
+                axis=-1,
+            )
+            for lag_index in range(lag_count)
+        ],
+        axis=-2,
+    )
+    lag_time = (np.arange(lag_count) - (lag_count // 2)).astype("timedelta64[s]")
+    return dc.Patch(
+        data=data4d,
+        coords={
+            "time": base.get_array("time"),
+            "distance": base.get_array("distance"),
+            "lag_time": lag_time,
+            "patch_number": np.arange(patch_count),
+        },
+        dims=("time", "distance", "lag_time", "patch_number"),
+        attrs=base.attrs,
+    )
+
+
+def _make_relative_distance_lag_patch() -> dc.Patch:
+    """Return a 5D patch with numeric relative_distance and timedelta lag_time."""
+    time = np.arange(4, dtype=float) * 0.1
+    distance = np.array([10.0, 20.0, 30.0], dtype=float)
+    lag_time = np.array([-2, -1, 0, 1], dtype="timedelta64[s]")
+    relative_distance = np.array([0.0, 5.0], dtype=float)
+    patch_number = np.array([0], dtype=int)
+    data = np.arange(
+        time.size
+        * distance.size
+        * lag_time.size
+        * relative_distance.size
+        * patch_number.size,
+        dtype=float,
+    ).reshape(
+        time.size,
+        distance.size,
+        lag_time.size,
+        relative_distance.size,
+        patch_number.size,
+    )
+    return dc.Patch(
+        data=data,
+        coords={
+            "time": time,
+            "distance": distance,
+            "lag_time": lag_time,
+            "relative_distance": relative_distance,
+            "patch_number": patch_number,
+        },
+        dims=("time", "distance", "lag_time", "relative_distance", "patch_number"),
+    )
+
+
 class TestWaterfallSliceDims:
     """Tests for the bottom dim-selector strip on >2D patches."""
 
@@ -4467,6 +4597,111 @@ class TestWaterfallSliceDims:
         assert waterfall_widget._axes is not None
         assert waterfall_widget._axes.y_dim == "time"
         assert waterfall_widget._axes.x_dim == "distance"
+
+    def test_changing_plot_dim_to_lag_time_does_not_error(self, waterfall_widget):
+        """Switching one plotted dim to lag_time should rerender without errors."""
+        waterfall_widget.set_patch(_make_lag_time_patch())
+
+        waterfall_widget._y_dim_combo.setCurrentText("lag_time")
+
+        assert not waterfall_widget.Error.invalid_patch.is_shown()
+        assert waterfall_widget._axes is not None
+        assert waterfall_widget._axes.y_dim == "lag_time"
+        assert waterfall_widget._axes.x_dim == "time"
+        assert waterfall_widget._annotation_controller.annotation_set is not None
+        assert waterfall_widget._annotation_controller.annotation_set.dims == (
+            "time",
+            "lag_time",
+            "distance",
+        )
+
+    def test_distance_step_buttons_work_after_lag_time_axis_switch(
+        self, waterfall_widget, qtbot
+    ):
+        """Distance arrows should keep controlling distance after axis switching."""
+        waterfall_widget.set_patch(_make_multi_slice_lag_time_patch())
+        waterfall_widget._y_dim_combo.setCurrentText("lag_time")
+        qtbot.wait(20)
+
+        slider = waterfall_widget._slice_sliders["distance"]
+        row = slider.parentWidget()
+        btn_next = next(
+            button for button in row.findChildren(QToolButton) if button.text() == "▶"
+        )
+
+        assert row.isVisible()
+        assert slider.isVisible()
+        assert waterfall_widget._slice_indices["distance"] == 0
+        assert waterfall_widget._slice_indices["patch_number"] == 0
+
+        QTest.mousePress(btn_next, Qt.MouseButton.LeftButton)
+        QTest.mouseRelease(btn_next, Qt.MouseButton.LeftButton)
+        qtbot.wait(20)
+
+        assert row.isVisible()
+        assert slider.isVisible()
+        assert waterfall_widget._slice_indices["distance"] == 1
+        assert slider.value() == 1
+        assert waterfall_widget._slice_indices["patch_number"] == 0
+
+    def test_singleton_slice_dims_do_not_render_slider_rows(
+        self, waterfall_widget, qtbot
+    ):
+        """Singleton slice dims stay in slice state but do not render a slider row."""
+        waterfall_widget.set_patch(_make_multi_slice_lag_time_patch(patch_count=1))
+        waterfall_widget._y_dim_combo.setCurrentText("lag_time")
+        qtbot.wait(20)
+
+        assert waterfall_widget._slice_dims == ("distance", "patch_number")
+        assert "distance" in waterfall_widget._slice_sliders
+        assert "patch_number" not in waterfall_widget._slice_sliders
+        assert waterfall_widget._slice_indices["patch_number"] == 0
+
+    def test_relative_basis_works_for_lag_time_and_relative_distance_axes(
+        self, waterfall_widget
+    ):
+        """Relative basis should not error with timedelta and numeric plot dims."""
+        waterfall_widget.set_patch(_make_relative_distance_lag_patch())
+        waterfall_widget._y_dim_combo.setCurrentText("lag_time")
+        waterfall_widget._x_dim_combo.setCurrentText("relative_distance")
+        waterfall_widget._selection_panel.patch_basis_combo.setCurrentText("Relative")
+
+        assert waterfall_widget._axes is not None
+        assert waterfall_widget._axes.y_dim == "lag_time"
+        assert waterfall_widget._axes.x_dim == "relative_distance"
+        assert waterfall_widget._selection_patch_basis == "relative"
+        assert not waterfall_widget.Error.invalid_patch.is_shown()
+
+    def test_selected_nd_plot_dims_restore_after_saved_settings_reload(self, qtbot):
+        """Saved ND Y/X plot-dim choices should restore after reopening Waterfall."""
+        patch = _make_relative_distance_lag_patch()
+
+        with widget_context(Waterfall) as first:
+            first.show()
+            qtbot.wait(10)
+            first.set_patch(patch)
+            first._y_dim_combo.setCurrentText("lag_time")
+            first._x_dim_combo.setCurrentText("relative_distance")
+
+            assert first._plot_y_dim == "lag_time"
+            assert first._plot_x_dim == "relative_distance"
+            assert first.saved_plot_y_dim == "lag_time"
+            assert first.saved_plot_x_dim == "relative_distance"
+
+            saved = first.settingsHandler.pack_data(first)
+
+        with widget_context(Waterfall, stored_settings=saved) as second:
+            second.show()
+            qtbot.wait(10)
+            second.set_patch(patch)
+
+            assert second.saved_plot_y_dim == "lag_time"
+            assert second.saved_plot_x_dim == "relative_distance"
+            assert second._plot_y_dim == "lag_time"
+            assert second._plot_x_dim == "relative_distance"
+            assert second._axes is not None
+            assert second._axes.y_dim == "lag_time"
+            assert second._axes.x_dim == "relative_distance"
 
     def test_slice_index_persists_across_compatible_patches(self, waterfall_widget):
         """Slider position is preserved when a new patch has the same slice dim."""
@@ -4684,6 +4919,10 @@ class TestFormatCoordValue:
         val = np.datetime64("2020-01-03T12:00:00.000000000")
         result = _format_coord_value(val)
         assert result == "2020-01-03T12:00:00"
+
+    def test_timedelta_formats_without_crashing(self):
+        """Timedelta-like values should render as strings for slider labels."""
+        assert _format_coord_value(np.timedelta64(5, "s")) == "5 seconds"
 
 
 class TestWaterfallDefaults(TestPatchInputStateDefaults):

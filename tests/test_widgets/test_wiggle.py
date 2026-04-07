@@ -114,6 +114,36 @@ def _with_data_units(patch: dc.Patch, value) -> dc.Patch:
     return patch.update_attrs(data_units=value)
 
 
+def _make_nd_wiggle_patch(*, lag_count: int = 3, patch_count: int = 2) -> dc.Patch:
+    """Return a 4D patch for ND wiggle plot/slice tests."""
+    base = dc.get_example_patch("example_event_2").transpose("distance", "time")
+    data4d = np.stack(
+        [
+            np.stack(
+                [
+                    base.data * (lag_index + 1) * (patch_index + 1)
+                    for patch_index in range(patch_count)
+                ],
+                axis=-1,
+            )
+            for lag_index in range(lag_count)
+        ],
+        axis=-2,
+    )
+    lag_time = (np.arange(lag_count) - (lag_count // 2)).astype("timedelta64[s]")
+    return dc.Patch(
+        data=data4d,
+        coords={
+            "distance": base.get_array("distance"),
+            "time": base.get_array("time"),
+            "lag_time": lag_time,
+            "patch_number": np.arange(patch_count),
+        },
+        dims=("distance", "time", "lag_time", "patch_number"),
+        attrs=base.attrs,
+    )
+
+
 def _first_trace_peak_excursion(widget: Wiggle) -> float:
     """Return the peak excursion of the first rendered wiggle trace."""
     state = widget._render_state
@@ -1033,6 +1063,71 @@ class TestWiggle:
         assert wiggle_widget._render_state.x_dim == "distance"
         assert wiggle_widget._render_state.series_dim == "time"
         assert wiggle_widget._color_bar.getAxis("left").labelText == "time"
+
+    def test_nd_patch_shows_dim_strip_and_renders_default_slice(self, wiggle_widget):
+        """ND patches should render a sliced 2D display with the shared dim strip."""
+        patch = _make_nd_wiggle_patch()
+
+        wiggle_widget.set_patch(patch)
+
+        assert wiggle_widget._dim_strip.isVisible()
+        assert wiggle_widget._display_patch is not None
+        assert wiggle_widget._display_patch.dims == ("distance", "time")
+        assert set(wiggle_widget._slice_dims) == {"lag_time", "patch_number"}
+        assert set(wiggle_widget._slice_sliders) == {"lag_time", "patch_number"}
+        assert wiggle_widget.Error.invalid_patch.is_shown() is False
+
+    def test_nd_slice_slider_updates_display_patch(self, wiggle_widget):
+        """Changing an ND slice slider should update the 2D display patch."""
+        patch = _make_nd_wiggle_patch()
+        wiggle_widget.set_patch(patch)
+
+        lag_slider = wiggle_widget._slice_sliders["lag_time"]
+        lag_slider.setValue(1)
+        lag_slider.sliderReleased.emit()
+
+        expected = (
+            patch.select(
+                lag_time=np.array([patch.get_array("lag_time")[1]]),
+                patch_number=np.array([patch.get_array("patch_number")[0]]),
+            )
+            .squeeze("lag_time")
+            .squeeze("patch_number")
+        )
+        assert wiggle_widget._display_patch is not None
+        assert np.allclose(wiggle_widget._display_patch.data, expected.data)
+
+    def test_nd_time_series_mode_limits_x_axis_choices_to_plotted_dims(
+        self, wiggle_widget
+    ):
+        """ND time-series mode should offer only the sliced 2D plot dims
+        as X choices.
+        """
+        patch = _make_nd_wiggle_patch()
+        wiggle_widget.set_patch(patch)
+
+        wiggle_widget._y_dim_combo.setCurrentText("lag_time")
+        wiggle_widget._mode_combo.setCurrentText("time series")
+
+        combo_items = [
+            wiggle_widget._x_axis_combo.itemText(index)
+            for index in range(wiggle_widget._x_axis_combo.count())
+        ]
+
+        assert wiggle_widget._display_patch is not None
+        assert wiggle_widget._display_patch.dims == ("lag_time", "time")
+        assert combo_items == ["lag_time", "time"]
+        assert wiggle_widget.Error.invalid_patch.is_shown() is False
+
+    def test_nd_singleton_slice_dim_does_not_render_slider_row(self, wiggle_widget):
+        """Singleton non-plotted dims should stay fixed without rendering sliders."""
+        patch = _make_nd_wiggle_patch(patch_count=1)
+        wiggle_widget.set_patch(patch)
+
+        assert set(wiggle_widget._slice_dims) == {"lag_time", "patch_number"}
+        assert "lag_time" in wiggle_widget._slice_sliders
+        assert "patch_number" not in wiggle_widget._slice_sliders
+        assert wiggle_widget._slice_indices["patch_number"] == 0
 
     def test_time_series_cursor_readout_includes_series_coordinate(
         self, wiggle_widget, small_patch_2d

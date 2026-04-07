@@ -9,7 +9,11 @@ from derzug.workflow import Pipe, Task
 
 
 class PatchDimWidget(ZugWidget, openclass=True):
-    """Base for non-visual widgets that act on one patch along one dimension."""
+    """Base for non-visual widgets that act on one patch along one dimension.
+
+    ``PatchDimWidget`` owns the common dynamic-control rebinding for the dim
+    combo so descendants only need to restore any additional controls they add.
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -19,6 +23,10 @@ class PatchDimWidget(ZugWidget, openclass=True):
     def _set_patch_input(self, patch: dc.Patch | None) -> None:
         """Store the current patch and refresh the dimension chooser."""
         self._patch = patch
+        self._rebind_dynamic_controls()
+
+    def _rebind_dynamic_controls(self) -> None:
+        """Rebuild patch-dependent controls after a new patch arrives."""
         self._refresh_dims()
 
     def _refresh_dims(self) -> None:
@@ -36,7 +44,9 @@ class PatchDimWidget(ZugWidget, openclass=True):
         if dims:
             if self.selected_dim not in dims:
                 self.selected_dim = self._default_dim(dims)
-            self._dim_combo.setCurrentText(self.selected_dim)
+            self._set_combo_value(self._dim_combo, self.selected_dim)
+        else:
+            self._dim_combo.setCurrentIndex(-1)
         self._dim_combo.setEnabled(bool(dims))
         self._dim_combo.blockSignals(False)
 

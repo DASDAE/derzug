@@ -692,6 +692,11 @@ class SelectionState:
             ):
                 ns = int(float(value) * 1e9)
                 return coord[0] + np.timedelta64(ns, "ns")
+            if np.issubdtype(coord.dtype, np.timedelta64) and isinstance(
+                value, int | float | np.integer | np.floating
+            ):
+                ns = int(float(value) * 1e9)
+                return coord[0] + np.timedelta64(ns, "ns")
             return _coord_add_offset(coord[0], value)
         return _sample_index_to_coord(coord, value)
 

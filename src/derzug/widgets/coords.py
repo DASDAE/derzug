@@ -349,17 +349,37 @@ class Coords(ZugWidget):
         summary_layout.addRow("Output", self._output_label)
         self.mainArea.layout().addWidget(summary_panel)
 
-        operation = self._coerce_operation()
-        self._set_current_operation_ui(operation)
-        self._refresh_tables()
-        self._refresh_coord_lists()
-        self._refresh_transpose_list()
+        self._apply_settings_to_controls()
+        self._rebind_dynamic_controls()
         preview = self._build_preview_state()
         self._input_label.setText(preview.input_text)
         self._active_label.setText(preview.active_text)
         self._output_label.setText(preview.output_text)
 
         self._operation_combo.currentTextChanged.connect(self._on_operation_changed)
+
+    def _apply_settings_to_controls(self) -> None:
+        """Hydrate visible controls from persisted widget settings."""
+        operation = self._coerce_operation()
+        self._set_current_operation_ui(operation)
+        self._refresh_tables()
+        self._refresh_coord_lists()
+        self._refresh_transpose_list()
+
+    def _sync_settings_from_controls(self) -> None:
+        """Persist current control values back into widget settings.
+
+        Coords already mirrors control edits into settings through targeted
+        callbacks. Keeping this hook intentionally narrow avoids erasing invalid
+        or not-yet-available saved values during input rebinding.
+        """
+
+    def _rebind_dynamic_controls(self) -> None:
+        """Rebuild patch-dependent controls and reapply persisted values."""
+        self._sync_patch_metadata()
+        self._refresh_tables()
+        self._refresh_coord_lists()
+        self._refresh_transpose_list()
 
     def _build_rename_page(self) -> QWidget:
         """Return the page for coordinate renaming."""
@@ -547,6 +567,7 @@ class Coords(ZugWidget):
         self._patch = patch
         self._sync_patch_metadata()
         self._rehydrate_set_coords_state()
+        self._apply_settings_to_controls()
         self.run()
 
     def _sync_patch_metadata(self) -> None:
@@ -616,10 +637,8 @@ class Coords(ZugWidget):
 
     def _refresh_ui(self) -> None:
         """Refresh all visible controls and summaries from current state."""
-        self._set_current_operation_ui(self._coerce_operation())
-        self._refresh_tables()
-        self._refresh_coord_lists()
-        self._refresh_transpose_list()
+        self._apply_settings_to_controls()
+        self._rebind_dynamic_controls()
         preview = self._build_preview_state(self._last_result)
         self._input_label.setText(preview.input_text)
         self._active_label.setText(preview.active_text)
@@ -677,12 +696,14 @@ class Coords(ZugWidget):
         self._set_coords_dim_combo.clear()
         self._set_coords_dim_combo.addItems(self._available_dims)
         if self.set_coords_dim in self._available_dims:
-            self._set_coords_dim_combo.setCurrentText(self.set_coords_dim)
+            self._set_combo_value(self._set_coords_dim_combo, self.set_coords_dim)
         elif self._available_dims:
             self._set_coords_dim_combo.setCurrentIndex(0)
-        self._set_coords_start_edit.setText(str(self.set_coords_start))
-        self._set_coords_stop_edit.setText(str(self.set_coords_stop))
-        self._set_coords_step_edit.setText(str(self.set_coords_step))
+        else:
+            self._set_coords_dim_combo.setCurrentIndex(-1)
+        self._set_line_edit_value(self._set_coords_start_edit, self.set_coords_start)
+        self._set_line_edit_value(self._set_coords_stop_edit, self.set_coords_stop)
+        self._set_line_edit_value(self._set_coords_step_edit, self.set_coords_step)
         enabled = bool(self._available_dims)
         self._set_coords_dim_combo.setEnabled(enabled)
         self._set_coords_start_edit.setEnabled(enabled)
@@ -705,6 +726,15 @@ class Coords(ZugWidget):
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if option in selected_set else Qt.Unchecked)
         self._ui_sync = False
+
+    @staticmethod
+    def _checked_items(widget: QListWidget) -> list[str]:
+        """Return checked item labels from one list widget."""
+        return [
+            widget.item(index).text()
+            for index in range(widget.count())
+            if widget.item(index).checkState() == Qt.Checked
+        ]
 
     def _refresh_transpose_list(self) -> None:
         """Push the saved dimension order into the transpose list."""
@@ -1474,6 +1504,7 @@ class Coords(ZugWidget):
 
     def get_task(self) -> Task:
         """Return the current coordinate-operation semantics as a workflow task."""
+        self._sync_settings_from_controls()
         return self._task_snapshot()
 
     @classmethod

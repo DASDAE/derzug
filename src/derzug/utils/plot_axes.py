@@ -121,12 +121,30 @@ def build_plot_axis_spec(values: np.ndarray) -> PlotAxisSpec:
     arr = np.asarray(values)
     if np.issubdtype(arr.dtype, np.datetime64):
         ns = arr.astype("datetime64[ns]").astype(np.int64)
-        return PlotAxisSpec(plot_values=ns.astype(np.float64) / 1e9, kind="datetime")
+        plot_values = ns.astype(np.float64) / 1e9
+        if np.isfinite(plot_values).all():
+            return PlotAxisSpec(plot_values=plot_values, kind="datetime")
+        return PlotAxisSpec(
+            plot_values=np.arange(arr.size, dtype=np.float64),
+            kind="index",
+        )
     if np.issubdtype(arr.dtype, np.timedelta64):
         ns = arr.astype("timedelta64[ns]").astype(np.int64)
-        return PlotAxisSpec(plot_values=ns.astype(np.float64) / 1e9, kind="timedelta")
+        plot_values = ns.astype(np.float64) / 1e9
+        if np.isfinite(plot_values).all():
+            return PlotAxisSpec(plot_values=plot_values, kind="timedelta")
+        return PlotAxisSpec(
+            plot_values=np.arange(arr.size, dtype=np.float64),
+            kind="index",
+        )
     if np.issubdtype(arr.dtype, np.number):
-        return PlotAxisSpec(plot_values=arr.astype(np.float64), kind="numeric")
+        plot_values = arr.astype(np.float64)
+        if np.isfinite(plot_values).all():
+            return PlotAxisSpec(plot_values=plot_values, kind="numeric")
+        return PlotAxisSpec(
+            plot_values=np.arange(arr.size, dtype=np.float64),
+            kind="index",
+        )
     warnings.warn(
         "Non-numeric coordinates detected; using sample index for axes.",
         RuntimeWarning,

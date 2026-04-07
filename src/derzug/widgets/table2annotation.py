@@ -176,6 +176,7 @@ class Table2Annotation(ZugWidget):
     category = "Table"
     keywords = ("annotation", "table", "dataframe", "convert", "label")
     priority = 25
+    want_main_area = False
 
     # --- settings ---
     geometry_type: int = Setting(_GEOM_DOT)  # 0=dot, 1=line

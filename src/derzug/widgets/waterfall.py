@@ -51,6 +51,10 @@ from derzug.widgets.annotation_editor import (
     AnnotationEditorDialog as _AnnotationEditorDialog,
 )
 from derzug.widgets.annotation_overlay import AnnotationOverlayController
+from derzug.widgets.ndim_controls import (
+    MultiDimPlotControlsMixin,
+    format_nd_coord_value,
+)
 from derzug.widgets.selection import (
     SelectionControlsMixin,
 )
@@ -83,16 +87,7 @@ class _PreparedPatchRender:
 
 def _format_coord_value(val) -> str:
     """Format a single coordinate value for display inside a slider."""
-    if isinstance(val, np.datetime64):
-        s = str(val)
-        if "." in s:
-            s = s.rstrip("0").rstrip(".")
-        return s
-    if isinstance(val, np.floating | float):
-        return f"{float(val):.4g}"
-    if isinstance(val, np.integer | int):
-        return str(int(val))
-    return str(val)[:20]
+    return format_nd_coord_value(val)
 
 
 class _CoordSlider(QSlider):
@@ -297,7 +292,7 @@ class _WaterfallViewBox(pg.ViewBox):
                     self.state["mouseMode"] = restore_mode
 
 
-class Waterfall(SelectionControlsMixin, ZugWidget):
+class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     """
     Display a 2D DAS patch as an interactive pyqtgraph waterfall image.
 
@@ -334,6 +329,8 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
     saved_selection_has_roi = Setting(None, schema_only=True)
     saved_annotation_set = Setting(None, schema_only=True)
     saved_view_range = Setting(None, schema_only=True)
+    saved_plot_y_dim = Setting("", schema_only=True)
+    saved_plot_x_dim = Setting("", schema_only=True)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -377,10 +374,37 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
     def get_task(self) -> Task:
         """Return the compiled patch-only semantics for the current widget state."""
+        self._sync_settings_from_controls()
         payload = self._load_saved_selection_state()
         if payload is None:
             return PatchPassThroughTask()
         return PatchSelectionTask(selection_payload=payload)
+
+    def _apply_settings_to_controls(self) -> None:
+        """Hydrate visible controls from persisted widget settings."""
+        if self.colormap not in self._COLORMAPS:
+            self.colormap = self._COLORMAPS[0]
+        self._set_combo_value(self._cmap_combo, self.colormap)
+        self._set_checkbox_value(self._reset_on_new_checkbox, self.reset_on_new)
+        if self._plot_y_dim is None and self._plot_x_dim is None:
+            saved_y = self.saved_plot_y_dim
+            saved_x = self.saved_plot_x_dim
+            self._plot_y_dim = saved_y if isinstance(saved_y, str) and saved_y else None
+            self._plot_x_dim = saved_x if isinstance(saved_x, str) and saved_x else None
+
+    def _sync_settings_from_controls(self) -> None:
+        """Persist visible controls and saved view/selection state."""
+        self.colormap = self._cmap_combo.currentText().strip() or self._COLORMAPS[0]
+        self.reset_on_new = bool(self._reset_on_new_checkbox.isChecked())
+        self._persist_nd_plot_settings()
+        self._persist_selection_settings()
+        self._persist_annotation_settings()
+        self._persist_view_range_settings()
+
+    def _rebind_dynamic_controls(self) -> None:
+        """Rebuild patch-dependent axis and slice controls from the current patch."""
+        self._rebuild_slice_panel(self._patch)
+        self._update_axis_state_from_patch(self._patch)
 
     def widget_shortcuts(self) -> list[tuple[str, str]]:
         """Return Waterfall-specific keyboard and pointer shortcuts."""
@@ -404,10 +428,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._pending_saved_annotation_set = self._load_saved_annotation_state()
         self._pending_saved_view_range = self._load_saved_view_range()
         self._patch: dc.Patch | None = None
-        self._slice_dims: tuple[str, ...] = ()
-        self._slice_indices: dict[str, int] = {}
-        self._plot_y_dim: str | None = None
-        self._plot_x_dim: str | None = None
+        self._init_nd_plot_controls_state()
         self._prepared_render: _PreparedPatchRender | None = None
         self._pending_view_range: (
             tuple[tuple[float, float], tuple[float, float]] | None
@@ -435,12 +456,6 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._reset_on_new_checkbox.setToolTip(
             "reset plot and color bar extents when receiving a new patch"
         )
-
-        if self.colormap in self._COLORMAPS:
-            self._cmap_combo.setCurrentText(self.colormap)
-        else:
-            self.colormap = self._COLORMAPS[0]
-            self._cmap_combo.setCurrentIndex(0)
 
         self._build_selection_panel(box)
         self._add_selection_button = QToolButton(box)
@@ -470,8 +485,6 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._open_annotations_button.setToolTip("Show/hide the annotation toolbox (A)")
         self._open_annotations_button.setChecked(False)
         ann_box.layout().addWidget(self._open_annotations_button)
-
-        self._slice_sliders: dict[str, _CoordSlider] = {}
 
         self._plot_widget = pg.PlotWidget(
             self.mainArea,
@@ -512,29 +525,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         panel_layout.addWidget(self._cursor_label)
         main_layout.addWidget(plot_panel, 1)
 
-        # Dim-selector / slice strip — hidden until a >2D patch arrives.
-        self._dim_strip = QWidget(main_container)
-        self._dim_strip.setVisible(False)
-        strip_layout = QVBoxLayout(self._dim_strip)
-        strip_layout.setContentsMargins(4, 2, 4, 2)
-        strip_layout.setSpacing(4)
-        # Axis-selector row (always present inside the strip)
-        axis_row = QWidget(self._dim_strip)
-        axis_row_layout = QHBoxLayout(axis_row)
-        axis_row_layout.setContentsMargins(0, 0, 0, 0)
-        axis_row_layout.setSpacing(8)
-        axis_row_layout.addStretch()
-        axis_row_layout.addWidget(QLabel("Y:"))
-        self._y_dim_combo = QComboBox(axis_row)
-        self._y_dim_combo.setMinimumWidth(80)
-        axis_row_layout.addWidget(self._y_dim_combo)
-        axis_row_layout.addWidget(QLabel("X:"))
-        self._x_dim_combo = QComboBox(axis_row)
-        self._x_dim_combo.setMinimumWidth(80)
-        axis_row_layout.addWidget(self._x_dim_combo)
-        axis_row_layout.addStretch()
-        strip_layout.addWidget(axis_row)
-        main_layout.addWidget(self._dim_strip, 0)
+        main_layout.addWidget(self._build_nd_plot_controls(main_container), 0)
 
         self.mainArea.layout().addWidget(main_container)
 
@@ -555,8 +546,6 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         self._annotation_controller._editor_class = _AnnotationEditorDialog
 
         self._cmap_combo.currentTextChanged.connect(self._on_colormap_changed)
-        self._y_dim_combo.currentTextChanged.connect(self._on_y_dim_changed)
-        self._x_dim_combo.currentTextChanged.connect(self._on_x_dim_changed)
         self._add_selection_button.clicked.connect(self._add_selection_from_view)
         self._open_annotations_button.toggled.connect(self._toggle_annotation_toolbox)
         self._plot_widget.scene().sigMouseClicked.connect(self._on_plot_mouse_clicked)
@@ -568,6 +557,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         )
         self._plot_item.vb.menu.viewAll.triggered.connect(self._delete_active_roi)
         self._plot_item.vb.sigRangeChanged.connect(self._on_view_range_changed)
+        self._apply_settings_to_controls()
         self._apply_colormap(self.colormap)
         self._set_overlay_mode("select")
         self._install_view_menu_actions()
@@ -713,8 +703,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             for dim in tuple(self._selection_state.patch.ranges)
         }
         self._patch = patch
-        self._rebuild_slice_panel(patch)
-        self._update_axis_state_from_patch(patch)
+        self._rebind_dynamic_controls()
         prepared = self._prepared_render
         if prepared is not None:
             x_dim = prepared.axes.x_dim
@@ -762,152 +751,32 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
     def _rebuild_slice_panel(self, patch: dc.Patch | None) -> None:
         """Rebuild dim-axis combos and slice sliders in the bottom strip."""
-        for slider in self._slice_sliders.values():
-            slider.parentWidget().deleteLater()
-        self._slice_sliders.clear()
-
-        if patch is None or patch.ndim <= 2:
-            self._dim_strip.setVisible(False)
-            self._slice_dims = ()
-            self._slice_indices = {}
-            self._plot_y_dim = None
-            self._plot_x_dim = None
-            self._update_annotation_slice_coords()
-            return
-
-        with _block_signals(self._y_dim_combo, self._x_dim_combo):
-            self._y_dim_combo.clear()
-            self._x_dim_combo.clear()
-            for dim in patch.dims:
-                self._y_dim_combo.addItem(dim)
-                self._x_dim_combo.addItem(dim)
-
-        default_y, default_x = _default_plot_dims(patch.dims)
-        y_dim = self._plot_y_dim if self._plot_y_dim in patch.dims else default_y
-        x_dim = self._plot_x_dim if self._plot_x_dim in patch.dims else default_x
-        if y_dim == x_dim:
-            x_dim = next(d for d in patch.dims if d != y_dim)
-
-        with _block_signals(self._y_dim_combo, self._x_dim_combo):
-            self._y_dim_combo.setCurrentText(y_dim)
-            self._x_dim_combo.setCurrentText(x_dim)
-        self._plot_y_dim = y_dim
-        self._plot_x_dim = x_dim
-
-        slice_dims = tuple(d for d in patch.dims if d not in {y_dim, x_dim})
-        self._slice_dims = slice_dims
-
-        strip_layout = self._dim_strip.layout()
-        for dim in slice_dims:
-            n = patch.shape[patch.dims.index(dim)]
-            idx = min(self._slice_indices.get(dim, 0), n - 1)
-            self._slice_indices[dim] = idx
-
-            row = QWidget(self._dim_strip)
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(4)
-            coord_values = np.asarray(patch.get_array(dim))
-            label = QLabel(f"{dim}:", row)
-            slider = _CoordSlider(coord_values, Qt.Orientation.Horizontal, row)
-            slider.setRange(0, n - 1)
-            slider.setValue(idx)
-
-            _btn_style = "border: none; background: transparent;"
-            btn_prev = _StepButton(row)
-            btn_prev.setText("◀")
-            btn_prev.setStyleSheet(_btn_style)
-            btn_prev.setAutoRepeat(True)
-            btn_prev.setAutoRepeatDelay(400)
-            btn_prev.setAutoRepeatInterval(80)
-            btn_prev.setToolTip(f"Step {dim} back one index (hold to advance)")
-
-            btn_next = _StepButton(row)
-            btn_next.setText("▶")
-            btn_next.setStyleSheet(_btn_style)
-            btn_next.setAutoRepeat(True)
-            btn_next.setAutoRepeatDelay(400)
-            btn_next.setAutoRepeatInterval(80)
-            btn_next.setToolTip(f"Step {dim} forward one index (hold to advance)")
-
-            slider.setToolTip(
-                f"Drag to select a {dim} index\n"
-                f"Scroll wheel or arrow keys also work"
-            )
-
-            row_layout.addWidget(label)
-            row_layout.addWidget(btn_prev)
-            row_layout.addWidget(slider, 1)
-            row_layout.addWidget(btn_next)
-            strip_layout.addWidget(row)
-
-            def _on_drag(value, d=dim, s=slider):
-                s.update()
-                if not s.isSliderDown():
-                    # Keyboard navigation: render immediately since no release fires
-                    self._slice_indices[d] = value
-                    self._update_annotation_slice_coords()
-                    self._update_axis_state_from_patch(self._patch)
-                    self._pending_view_range = self._get_view_range()
-                    self._request_ui_refresh()
-
-            def _on_release(d=dim, s=slider):
-                self._slice_indices[d] = s.value()
-                self._update_annotation_slice_coords()
-                self._update_axis_state_from_patch(self._patch)
-                self._pending_view_range = self._get_view_range()
-                self._request_ui_refresh()
-
-            # clicked fires on every auto-repeat tick — only update slider position,
-            # suppress signals so _on_drag does not trigger a render mid-hold
-            def _btn_step(delta, s=slider):
-                s.blockSignals(True)
-                s.setValue(s.value() + delta)
-                s.blockSignals(False)
-                s.update()
-
-            btn_prev.clicked.connect(lambda checked=False: _btn_step(-1))
-            btn_next.clicked.connect(lambda checked=False: _btn_step(1))
-            # commit_step fires only on physical mouse release, not auto-repeat ticks
-            btn_prev.commit_step.connect(_on_release)
-            btn_next.commit_step.connect(_on_release)
-
-            slider.valueChanged.connect(_on_drag)
-            slider.sliderReleased.connect(_on_release)
-            self._slice_sliders[dim] = slider
-
-        self._dim_strip.setVisible(True)
+        self._refresh_nd_plot_controls(patch)
         self._update_annotation_slice_coords()
 
     def _on_y_dim_changed(self, dim: str) -> None:
         """Handle Y-axis dim combo change; auto-swap X if collision."""
-        if self._patch is None or not dim:
-            return
-        self._annotation_controller.active_annotation_id = None
-        self._annotation_controller.selected_annotation_ids.clear()
-        if dim == self._plot_x_dim:
-            with _block_signals(self._x_dim_combo):
-                self._x_dim_combo.setCurrentText(self._plot_y_dim)
-            self._plot_x_dim = self._plot_y_dim
-        self._plot_y_dim = dim
-        self._rebuild_slice_panel(self._patch)
-        self._update_axis_state_from_patch(self._patch)
-        self._request_ui_refresh()
+        self._on_nd_y_dim_changed(dim)
 
     def _on_x_dim_changed(self, dim: str) -> None:
         """Handle X-axis dim combo change; auto-swap Y if collision."""
-        if self._patch is None or not dim:
-            return
+        self._on_nd_x_dim_changed(dim)
+
+    def _on_nd_plot_state_changed(self, *, kind: str) -> None:
+        """Refresh Waterfall state after shared ND controls change."""
         self._annotation_controller.active_annotation_id = None
         self._annotation_controller.selected_annotation_ids.clear()
-        if dim == self._plot_y_dim:
-            with _block_signals(self._y_dim_combo):
-                self._y_dim_combo.setCurrentText(self._plot_x_dim)
-            self._plot_y_dim = self._plot_x_dim
-        self._plot_x_dim = dim
-        self._rebuild_slice_panel(self._patch)
+        self._update_annotation_slice_coords()
+        self._persist_nd_plot_settings()
         self._update_axis_state_from_patch(self._patch)
+        if kind == "slice":
+            self._pending_view_range = self._get_view_range()
         self._request_ui_refresh()
+
+    def _persist_nd_plot_settings(self) -> None:
+        """Mirror current ND Y/X dimension choices into workflow settings."""
+        self.saved_plot_y_dim = self._plot_y_dim or ""
+        self.saved_plot_x_dim = self._plot_x_dim or ""
 
     def _update_annotation_slice_coords(self) -> None:
         """Push current slice position into the annotation controller."""
@@ -922,13 +791,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
 
     def _apply_slice_dims(self, patch: dc.Patch) -> dc.Patch:
         """Select a single index along each slice dimension to produce a 2D patch."""
-        for dim in self._slice_dims:
-            if dim not in patch.dims:
-                continue
-            coord_values = patch.get_array(dim)
-            idx = min(self._slice_indices.get(dim, 0), len(coord_values) - 1)
-            patch = patch.select(**{dim: np.array([coord_values[idx]])}).squeeze(dim)
-        return patch
+        return self._apply_nd_slice_dims(patch)
 
     def _update_axis_state_from_patch(self, patch: dc.Patch | None) -> None:
         """Precompute axis metadata without forcing an immediate render."""
@@ -939,14 +802,8 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             return
 
         try:
-            if patch.ndim > 2:
-                patch = self._apply_slice_dims(patch)
-            if (
-                self._plot_y_dim
-                and self._plot_x_dim
-                and patch.dims != (self._plot_y_dim, self._plot_x_dim)
-            ):
-                patch = patch.transpose(self._plot_y_dim, self._plot_x_dim)
+            patch = self._nd_display_patch(patch)
+            assert patch is not None
             data = np.asarray(patch.data)
             if data.ndim != 2:
                 raise ValueError(f"expected 2D data, got shape {data.shape}")
@@ -1138,6 +995,7 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
     def _refresh_ui(self) -> None:
         """Render the current patch and synchronize visible controls."""
         self._selection_refresh_panel()
+        self._apply_settings_to_controls()
         if self._colormap_dirty:
             self._apply_colormap(self.colormap)
             self._colormap_dirty = False
@@ -2249,12 +2107,14 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
         new_patch: dc.Patch,
     ) -> bool:
         """Return True when a replacement patch should drop prior view/levels."""
+        if previous_patch is new_patch:
+            return False
         previous_data = np.asarray(previous_patch.data)
         new_data = np.asarray(new_patch.data)
         if previous_data.ndim != 2 or new_data.ndim != 2:
             return False
         if previous_patch.dims != new_patch.dims:
-            return False
+            return True
         if not all(
             np.array_equal(
                 np.asarray(previous_patch.get_array(dim)),
@@ -2262,11 +2122,14 @@ class Waterfall(SelectionControlsMixin, ZugWidget):
             )
             for dim in previous_patch.dims
         ):
-            return False
+            return True
         try:
-            return previous_patch.attrs == new_patch.attrs
+            attrs_equal = previous_patch.attrs == new_patch.attrs
         except Exception:
-            return False
+            attrs_equal = False
+        if attrs_equal and not np.array_equal(previous_data, new_data):
+            return True
+        return False
 
     @staticmethod
     def _ranges_overlap(

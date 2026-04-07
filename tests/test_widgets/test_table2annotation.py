@@ -49,6 +49,12 @@ class TestTable2AnnotationDefaults(TestWidgetDefaults):
     widget = Table2Annotation
 
 
+def test_widget_uses_only_parameter_sidebar(widget):
+    """Table2Annotation should not reserve an empty main-area pane."""
+    assert widget.want_main_area is False
+    assert widget.controlArea is not None
+
+
 # ---------------------------------------------------------------------------
 # Input handling
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ channels:
 dependencies:
   - python>=3.13
   - dascore>=0.1.15
+  - duckdb
   - orange3
   - pyqt6
   - pyqtgraph

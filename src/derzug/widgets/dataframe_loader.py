@@ -28,11 +28,13 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.orange import Setting
+from derzug.utils.optional_imports import optional_import
 from derzug.workflow import Task
 
 # Display name → (reader callable, accepted extensions)
 _FORMATS: dict[str, tuple[object, tuple[str, ...]]] = {
     "CSV": (pd.read_csv, (".csv", ".tsv", ".txt")),
+    "DuckDB": (None, (".duckdb",)),
     "Excel": (pd.read_excel, (".xlsx", ".xls", ".xlsm", ".xlsb", ".ods")),
     "Feather": (pd.read_feather, (".feather",)),
     "HDF5": (pd.read_hdf, (".h5", ".hdf5", ".hdf")),
@@ -67,6 +69,50 @@ def _detect_format(path: str) -> str | None:
     return _EXT_TO_FORMAT.get(Path(path).suffix.lower())
 
 
+def _quote_sql_identifier(name: str) -> str:
+    """Return one SQL identifier quoted for direct interpolation."""
+    return f'"{name.replace(chr(34), chr(34) * 2)}"'
+
+
+def _list_duckdb_tables(path: str) -> list[str]:
+    """Return sorted user table names from one DuckDB database file."""
+    duckdb = optional_import("duckdb")
+
+    with duckdb.connect(path, read_only=True) as con:
+        rows = con.execute(
+            """
+            SELECT DISTINCT table_name
+            FROM information_schema.tables
+            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+              AND table_type = 'BASE TABLE'
+            ORDER BY table_name
+            """
+        ).fetchall()
+    return [str(name) for (name,) in rows]
+
+
+def _resolve_duckdb_table(path: str, table_name: str) -> str:
+    """Return a valid DuckDB table name, defaulting to the first sorted table."""
+    tables = _list_duckdb_tables(path)
+    if not tables:
+        raise ValueError("DuckDB file contains no user tables.")
+    chosen = table_name.strip()
+    if chosen in tables:
+        return chosen
+    return tables[0]
+
+
+def _read_duckdb_table(path: str, table_name: str) -> tuple[pd.DataFrame, str]:
+    """Read one DuckDB table into a pandas DataFrame and return the resolved name."""
+    duckdb = optional_import("duckdb")
+
+    resolved = _resolve_duckdb_table(path, table_name)
+    query = f"SELECT * FROM {_quote_sql_identifier(resolved)}"
+    with duckdb.connect(path, read_only=True) as con:
+        df = con.execute(query).fetch_df()
+    return df, resolved
+
+
 class DataFrameLoaderTask(Task):
     """Portable DataFrame loader used for compiled bound-source execution."""
 
@@ -74,6 +120,7 @@ class DataFrameLoaderTask(Task):
 
     file_path: str = ""
     format_name: str = _AUTO
+    table_name: str = ""
 
     def run(self):
         """Load the configured DataFrame and return it."""
@@ -90,6 +137,9 @@ class DataFrameLoaderTask(Task):
                     f"'{suffix}'. Select a format explicitly."
                 )
             format_name = detected
+        if format_name == "DuckDB":
+            df, _ = _read_duckdb_table(path, self.table_name)
+            return df
         reader, _ = _FORMATS[format_name]
         df = reader(path)
         if not isinstance(df, pd.DataFrame):
@@ -184,6 +234,7 @@ class DataFrameLoader(ZugWidget):
 
     file_path = Setting("")
     format_name = Setting(_AUTO)
+    table_name = Setting("")
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -267,12 +318,23 @@ class DataFrameLoader(ZugWidget):
         format_row_layout.addWidget(self.format_combo, 1)
         box.layout().addWidget(format_row)
 
+        self._table_row = QWidget(box)
+        table_row_layout = QHBoxLayout(self._table_row)
+        table_row_layout.setContentsMargins(0, 0, 0, 0)
+        table_row_layout.setSpacing(4)
+        table_row_layout.addWidget(QLabel("Table:", self._table_row))
+        self.table_combo = QComboBox(self._table_row)
+        table_row_layout.addWidget(self.table_combo, 1)
+        self._table_row.setVisible(False)
+        box.layout().addWidget(self._table_row)
+
         # Shape / detected-format info
         self._info_label = gui.widgetLabel(self._controls_panel, "")
         controls_layout.addWidget(self._info_label)
 
         self.open_button.clicked.connect(self._on_open_clicked)
         self.format_combo.currentTextChanged.connect(self._on_format_changed)
+        self.table_combo.currentTextChanged.connect(self._on_table_changed)
 
         # Restore persisted state
         if self.file_path:
@@ -300,8 +362,20 @@ class DataFrameLoader(ZugWidget):
         if self.file_path:
             self._load()
 
+    def _on_table_changed(self, text: str) -> None:
+        """Re-load when the user picks a different DuckDB table."""
+        self.table_name = text
+        if self.file_path and self._effective_format() == "DuckDB":
+            self._load()
+
     def _load(self) -> None:
         """Dispatch one background load for the current file selection."""
+        try:
+            self._refresh_table_selector()
+        except Exception as exc:
+            self._show_exception("load_failed", exc)
+            self._set_output(None)
+            return
         self.run()
 
     def _supports_async_execution(self) -> bool:
@@ -342,7 +416,37 @@ class DataFrameLoader(ZugWidget):
         return DataFrameLoaderTask(
             file_path=str(self.file_path or ""),
             format_name=str(self.format_name or _AUTO),
+            table_name=str(self.table_name or ""),
         )
+
+    def _effective_format(self) -> str | None:
+        """Return the explicitly selected or auto-detected format name."""
+        format_name = str(self.format_name or _AUTO)
+        if format_name != _AUTO:
+            return format_name
+        return _detect_format(self.file_path or "")
+
+    def _refresh_table_selector(self) -> None:
+        """Update the DuckDB table selector visibility and available choices."""
+        is_duckdb = self._effective_format() == "DuckDB" and bool(self.file_path)
+        self._table_row.setVisible(is_duckdb)
+        if not is_duckdb:
+            self.table_combo.blockSignals(True)
+            self.table_combo.clear()
+            self.table_combo.blockSignals(False)
+            return
+
+        tables = _list_duckdb_tables(self.file_path)
+        if not tables:
+            raise ValueError("DuckDB file contains no user tables.")
+        selected = self.table_name if self.table_name in tables else tables[0]
+        self.table_name = selected
+
+        self.table_combo.blockSignals(True)
+        self.table_combo.clear()
+        self.table_combo.addItems(tables)
+        self.table_combo.setCurrentText(selected)
+        self.table_combo.blockSignals(False)
 
     def _render_table(self, df: pd.DataFrame | None) -> None:
         """Populate the table view with the loaded DataFrame."""

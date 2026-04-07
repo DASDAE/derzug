@@ -169,6 +169,7 @@ class Select(SelectionControlsMixin, ZugWidget):
             callback=self._emit_selected_output,
         )
         self.unpack_checkbox.setToolTip(self.Outputs.patch.doc or "")
+        self._apply_settings_to_controls()
         self._selection_set_status("")
 
     def showEvent(self, event) -> None:
@@ -210,6 +211,19 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._pending_saved_patch_selection_payload = None
         self._persist_selection_settings()
         self._emit_selected_output()
+
+    def _apply_settings_to_controls(self) -> None:
+        """Hydrate visible controls from persisted widget settings."""
+        self._set_checkbox_value(self.unpack_checkbox, self.unpack_single_patch)
+
+    def _sync_settings_from_controls(self) -> None:
+        """Persist visible selection controls back into widget settings."""
+        self.unpack_single_patch = bool(self.unpack_checkbox.isChecked())
+        self._persist_selection_settings()
+
+    def _rebind_dynamic_controls(self) -> None:
+        """Rebuild selection controls after a new input source arrives."""
+        self._selection_refresh_panel()
 
     def _emit_selected_output(self) -> None:
         """Trigger the standard run lifecycle so _on_result is always the send site."""
@@ -257,7 +271,8 @@ class Select(SelectionControlsMixin, ZugWidget):
 
     def _refresh_ui(self) -> None:
         """Refresh the left-side selection controls and status text."""
-        self._selection_refresh_panel()
+        self._rebind_dynamic_controls()
+        self._apply_settings_to_controls()
         self.unpack_checkbox.setVisible(self._input_kind == "spool")
         self.unpack_checkbox.setEnabled(self._input_kind == "spool")
         self._selection_set_status(
