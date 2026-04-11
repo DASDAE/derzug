@@ -44,7 +44,9 @@ def is_node_disabled(node_or_properties: object) -> bool:
     return bool(properties.get(DISABLED_NODE_KEY, False))
 
 
-def set_node_disabled(properties: dict[str, object] | None, disabled: bool) -> dict[str, object]:
+def set_node_disabled(
+    properties: dict[str, object] | None, disabled: bool
+) -> dict[str, object]:
     """Return one updated properties mapping with disabled-node metadata set."""
     out = dict(properties or {})
     if disabled:
@@ -54,7 +56,9 @@ def set_node_disabled(properties: dict[str, object] | None, disabled: bool) -> d
     return out
 
 
-def disabled_passthrough_pairs(node: object, widget: object) -> tuple[DisabledPortPair, ...]:
+def disabled_passthrough_pairs(
+    node: object, widget: object
+) -> tuple[DisabledPortPair, ...]:
     """Return compatible input/output passthrough mappings for one disabled node."""
     input_names = widget_signal_name_map(widget, "Inputs")
     output_names = widget_signal_name_map(widget, "Outputs")

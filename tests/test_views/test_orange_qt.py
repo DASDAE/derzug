@@ -7,6 +7,7 @@ import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import dascore as dc
@@ -41,6 +42,7 @@ from derzug.annotations_config import (
     save_annotation_config,
 )
 from derzug.utils.display import format_display
+from derzug.utils.misc import load_widget_entrypoints
 from derzug.utils.testing import (
     build_window_workflow,
     wait_for_widget_idle,
@@ -65,12 +67,15 @@ from derzug.views.orange import (
     ensure_linux_desktop_entry,
 )
 from derzug.views.orange_errors import _build_issue_body, _build_issue_url
+from derzug.views.orange_registry import filter_registry_for_das
 from derzug.widgets.spool import Spool
 from derzug.widgets.table2annotation import Table2Annotation
 from orangecanvas.application.canvastooldock import SplitterResizer
 from orangecanvas.application.outputview import ExceptHook, TerminalTextDocument
 from orangecanvas.document.interactions import RectangleSelectionAction
 from orangecanvas.gui.windowlistmanager import WindowListManager
+from orangecanvas.registry import WidgetRegistry
+from orangecanvas.registry.description import CategoryDescription, WidgetDescription
 
 
 def _action_by_name(actions, name: str) -> QAction:
@@ -1242,19 +1247,38 @@ class TestDerZugMainWindow:
         """
         Ensure the live registry actually contains required test_widgets.
         """
+        from orangewidget.workflow.discovery import widget_desc_from_module
+
         registry = derzug_app.main.registry
         orange_widget_names = set(constants.ORANGE_WIDGETS_TO_LOAD)
+        registered_qnames = set()
+        for entry_point in load_widget_entrypoints():
+            module = getattr(entry_point, "module", "")
+            attr = getattr(entry_point, "attr", "")
+            if module and attr:
+                registered_qnames.add(f"{module}.{attr}")
+                continue
+            point = entry_point.load()
+            if hasattr(point, "__name__"):
+                registered_qnames.add(widget_desc_from_module(point).qualified_name)
         widgets = list(registry.widgets())
-        loaded = [(widget.name, widget.id, widget.package) for widget in widgets]
+        loaded = [
+            (
+                widget.name,
+                widget.id,
+                widget.package,
+                getattr(widget, "qualified_name", "") or widget.id,
+            )
+            for widget in widgets
+        ]
 
         # Ensure no outlawed widgets got in.
         invalid = [
             item
             for item in loaded
-            if not item[2].startswith(constants.PKG_NAME)
-            and item[0] not in orange_widget_names
+            if item[3] not in registered_qnames and item[0] not in orange_widget_names
         ]
-        assert not invalid, f"Loaded non-DerZug widgets: {invalid}"
+        assert not invalid, f"Loaded widgets outside allowed entry points: {invalid}"
 
         # Also make sure we have some widgets.
         assert len(widgets)
@@ -1292,6 +1316,66 @@ class TestDerZugMainWindow:
         assert Table2Annotation.category == "Table"
         if "Table to Annotations" in widget_by_name:
             assert widget_by_name["Table to Annotations"].category == "Table"
+
+    def test_filter_registry_keeps_third_party_widget_entrypoints(self, monkeypatch):
+        """Widgets in the DerZug entry-point group should survive filtering."""
+        monkeypatch.setattr(
+            "derzug.views.orange_registry.load_widget_entrypoints",
+            lambda: (
+                SimpleNamespace(
+                    module="derzug.widgets.spool",
+                    attr="Spool",
+                ),
+                SimpleNamespace(
+                    module="thirdparty.widgets.detector",
+                    attr="DetectorWidget",
+                ),
+            ),
+        )
+        registry = WidgetRegistry()
+        for name in ["IO", "External"]:
+            registry.register_category(CategoryDescription(name=name))
+        registry.register_widget(
+            WidgetDescription(
+                name="Spool",
+                id="derzug.widgets.spool.Spool",
+                qualified_name="derzug.widgets.spool.Spool",
+                category="IO",
+                package="derzug",
+            )
+        )
+        registry.register_widget(
+            WidgetDescription(
+                name="Detector",
+                id="thirdparty.widgets.detector.DetectorWidget",
+                qualified_name="thirdparty.widgets.detector.DetectorWidget",
+                category="External",
+                package="thirdparty",
+            )
+        )
+        registry.register_widget(
+            WidgetDescription(
+                name="Discard Me",
+                id="thirdparty.widgets.ignore.IgnoreWidget",
+                qualified_name="thirdparty.widgets.ignore.IgnoreWidget",
+                category="Other",
+                package="thirdparty",
+            )
+        )
+
+        filtered = filter_registry_for_das(registry)
+
+        assert [category.name for category in filtered.categories()] == [
+            "IO",
+            "External",
+        ]
+        assert [
+            (widget.name, widget.package, widget.category)
+            for widget in filtered.widgets()
+        ] == [
+            ("Spool", "derzug", "IO"),
+            ("Detector", "thirdparty", "External"),
+        ]
 
     def test_launch_only_creates_derzug_workflow_nodes(self, derzug_app, qapp):
         """Startup workflow nodes should all map to DerZug widgets."""
