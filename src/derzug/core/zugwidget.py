@@ -4,7 +4,7 @@ Base widget class for DerZug.
 
 from __future__ import annotations
 
-from AnyQt.QtCore import QEvent, QPoint, Qt, QTimer
+from AnyQt.QtCore import QPoint, Qt, QTimer
 from AnyQt.QtGui import QKeyEvent, QKeySequence, QShortcut, QShowEvent
 from AnyQt.QtWidgets import (
     QAbstractSpinBox,
@@ -22,12 +22,12 @@ from AnyQt.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 from Orange.widgets.widget import OWWidget
 
+from derzug.core.widget_execution import WorkflowExecutionMixin
+from derzug.core.widget_messages import WidgetMessageMixin
 from derzug.core.widget_runtime import WidgetExecutionRequest, WidgetExecutionRuntime
-from derzug.views.orange_errors import DerZugErrorDialog, _build_exception_report_data
 from derzug.workflow import Pipe, Task
 
 
@@ -62,7 +62,7 @@ class _WidgetKeyboardShortcutsDialog(QDialog):
         layout.setSizeConstraint(QVBoxLayout.SetFixedSize)
 
 
-class ZugWidget(OWWidget, openclass=True):
+class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=True):
     """
     Thin OWWidget base class providing a consistent run/result lifecycle.
 
@@ -153,117 +153,6 @@ class ZugWidget(OWWidget, openclass=True):
         self._close_shortcut.setContext(Qt.WindowShortcut)
         self._close_shortcut.activated.connect(self._on_close_shortcut)
         self._install_help_menu_actions()
-
-    def eventFilter(self, watched: QWidget, event: QEvent) -> bool:
-        """Open a traceback dialog when the message bar is double-clicked."""
-        if self._is_message_bar_target(watched) and self._last_error_exc is not None:
-            if (
-                event.type() == QEvent.MouseButtonPress
-                and event.button() == Qt.LeftButton
-            ):
-                self._schedule_message_bar_popup(event.globalPos())
-                event.accept()
-                return True
-            if (
-                event.type() == QEvent.MouseButtonDblClick
-                and event.button() == Qt.LeftButton
-            ):
-                self._cancel_message_bar_popup()
-                self._open_last_error_dialog()
-                event.accept()
-                return True
-        return super().eventFilter(watched, event)
-
-    def _install_message_bar_event_filters(self) -> None:
-        """Install traceback-opening filters on the message bar and its children."""
-        message_bar = getattr(self, "message_bar", None)
-        if message_bar is None:
-            return
-        message_bar.installEventFilter(self)
-        for child in message_bar.findChildren(QWidget):
-            child.installEventFilter(self)
-
-    def _is_message_bar_target(self, watched: QWidget | None) -> bool:
-        """Return True when the watched object is the message bar or its child."""
-        message_bar = getattr(self, "message_bar", None)
-        if message_bar is None or watched is None:
-            return False
-        current = watched
-        while current is not None:
-            if current is message_bar:
-                return True
-            current = current.parentWidget()
-        return False
-
-    def _schedule_message_bar_popup(self, global_pos: QPoint) -> None:
-        """Delay the default message popup long enough to allow a double-click."""
-        self._pending_message_bar_popup_pos = QPoint(global_pos)
-        interval = max(QApplication.doubleClickInterval(), 1)
-        self._message_bar_click_timer.start(interval)
-
-    def _cancel_message_bar_popup(self) -> None:
-        """Cancel any pending single-click popup action."""
-        self._message_bar_click_timer.stop()
-        self._pending_message_bar_popup_pos = None
-
-    def _show_pending_message_bar_popup(self) -> None:
-        """Display Orange's full message popup after a completed single click."""
-        message_bar = getattr(self, "message_bar", None)
-        popup_pos = self._pending_message_bar_popup_pos
-        self._pending_message_bar_popup_pos = None
-        if message_bar is None or popup_pos is None:
-            return
-        message = getattr(message_bar, "message", None)
-        if not message:
-            return
-        popup = QMenu(message_bar)
-        label = QLabel(
-            message_bar,
-            textInteractionFlags=Qt.TextBrowserInteraction,
-            openExternalLinks=message_bar.openExternalLinks(),
-        )
-        label.setContentsMargins(4, 4, 4, 4)
-        label.setText(message_bar._styled(message.asHtml()))
-        label.linkActivated.connect(message_bar.linkActivated)
-        label.linkHovered.connect(message_bar.linkHovered)
-        action = QWidgetAction(popup)
-        action.setDefaultWidget(label)
-        popup.addAction(action)
-        popup.popup(popup_pos, action)
-
-    def _error_slot(self, slot_name: str):
-        """Return the named Error slot, falling back to Error.general when present."""
-        slot = getattr(self.Error, slot_name, None)
-        if slot is not None:
-            return slot
-        return getattr(self.Error, "general", None)
-
-    def _show_error_message(self, slot_name: str, *fmt_args) -> None:
-        """Show a non-exception error banner and clear any stored traceback."""
-        self._cancel_message_bar_popup()
-        self._reported_error_during_run = True
-        self._last_error_exc = None
-        slot = self._error_slot(slot_name)
-        if slot is not None:
-            slot(*fmt_args)
-        if getattr(self, "message_bar", None) is not None:
-            self._install_message_bar_event_filters()
-
-    def _show_exception(
-        self,
-        slot_name: str,
-        exc: BaseException,
-        *fmt_args,
-    ) -> None:
-        """Show an exception-backed error banner and store traceback details."""
-        self._cancel_message_bar_popup()
-        self._reported_error_during_run = True
-        self._last_error_exc = (type(exc), exc, exc.__traceback__)
-        slot = self._error_slot(slot_name)
-        if slot is not None:
-            slot(*fmt_args, str(exc))
-        if getattr(self, "message_bar", None) is not None:
-            self._install_message_bar_event_filters()
 
     def _compact_control_area_layout(self) -> None:
         """Keep control-area content packed toward the top of the sidebar."""
@@ -701,14 +590,6 @@ class ZugWidget(OWWidget, openclass=True):
             self._last_error_exc = None
         self._on_result(result)
 
-    def _open_last_error_dialog(self) -> None:
-        """Show the stored traceback for the most recent unhandled widget error."""
-        if self._last_error_exc is None:
-            return
-        details, traceback_text = _build_exception_report_data(self._last_error_exc)
-        dialog = DerZugErrorDialog(details, traceback_text)
-        dialog.exec()
-
     def _supports_async_execution(self) -> bool:
         """Return True when this widget should dispatch execution off-thread."""
         return False
@@ -762,33 +643,6 @@ class ZugWidget(OWWidget, openclass=True):
     def _build_execution_request(self) -> WidgetExecutionRequest | None:
         """Return a worker-safe execution request or None for an empty result."""
         return None
-
-    def _build_task_execution_request(
-        self,
-        workflow_obj: Task | Pipe | None,
-        *,
-        input_values: dict[str, object],
-        output_names: tuple[str, ...],
-    ) -> WidgetExecutionRequest | None:
-        """Return a standard request for one canonical task-backed execution."""
-        if workflow_obj is None:
-            return None
-        return WidgetExecutionRequest(
-            workflow_obj=workflow_obj,
-            input_values=input_values,
-            output_names=output_names,
-        )
-
-    @staticmethod
-    def _execute_execution_request(request: WidgetExecutionRequest):
-        """Execute one captured request in a worker thread."""
-        if request.execute is not None:
-            return request.execute()
-        return ZugWidget._execute_task_or_pipe_static(
-            request.workflow_obj,
-            input_values=request.input_values or {},
-            output_names=request.output_names,
-        )
 
     def _run_async(self) -> None:
         """Dispatch one execution request to the widget's worker thread."""
@@ -851,27 +705,6 @@ class ZugWidget(OWWidget, openclass=True):
         text = str(exc)
         return "wrapped C/C++ object of type" in text and "has been deleted" in text
 
-    def _execute_workflow_object(
-        self,
-        workflow_obj: Task | Pipe | None,
-        *,
-        input_values: dict[str, object],
-        output_names: tuple[str, ...],
-    ):
-        """Execute one validated workflow object and normalize widget outputs."""
-        if workflow_obj is None:
-            return None
-        try:
-            result = self._execute_task_or_pipe(
-                workflow_obj,
-                input_values=input_values,
-                output_names=output_names,
-            )
-        except Exception as exc:
-            self._handle_execution_exception(exc)
-            return None
-        return self._unwrap_execution_result(result, output_names)
-
     def _shutdown_async_executor(self) -> None:
         """Stop the per-widget worker pool."""
         self._set_async_busy_state(False)
@@ -916,67 +749,3 @@ class ZugWidget(OWWidget, openclass=True):
     def get_task(self) -> Task | Pipe:
         """Return the current workflow representation for this widget."""
         raise TypeError(f"{type(self).__name__} does not implement get_task()")
-
-    def _execute_task_or_pipe(
-        self,
-        workflow_obj: Task | Pipe,
-        *,
-        input_values: dict[str, object],
-        output_names: tuple[str, ...],
-    ):
-        """Execute one task or sub-pipe for interactive widget use."""
-        return self._execute_task_or_pipe_static(
-            workflow_obj,
-            input_values=input_values,
-            output_names=output_names,
-        )
-
-    @staticmethod
-    def _execute_task_or_pipe_static(
-        workflow_obj: Task | Pipe,
-        *,
-        input_values: dict[str, object],
-        output_names: tuple[str, ...],
-    ):
-        """Execute one task or sub-pipe without touching widget state."""
-        if workflow_obj is None:
-            raise TypeError("workflow_obj may not be None without request.execute")
-        if isinstance(workflow_obj, Task):
-            raw = workflow_obj.run(**input_values)
-            return ZugWidget._normalize_task_outputs(workflow_obj, raw, output_names)
-        if isinstance(workflow_obj, Pipe):
-            results = workflow_obj.run(**input_values, output_keys=list(output_names))
-            return {name: results.get(name) for name in output_names}
-        raise TypeError(f"unsupported workflow object {workflow_obj!r}")
-
-    @staticmethod
-    def _unwrap_execution_result(result, output_names: tuple[str, ...]):
-        """Return the single requested output value when possible."""
-        if isinstance(result, dict) and len(output_names) == 1:
-            return result.get(output_names[0])
-        return result
-
-    @staticmethod
-    def _normalize_task_outputs(
-        task: Task,
-        raw: object,
-        output_names: tuple[str, ...],
-    ):
-        """Normalize task return values for widget `_on_result()` handlers."""
-        mapping = task.resolved_scalar_output_variables()
-        if not mapping:
-            return None
-        if len(mapping) == 1:
-            value = raw
-            if len(output_names) == 1:
-                return value
-            return {output_names[0]: value}
-        if isinstance(raw, dict):
-            return {name: raw.get(name) for name in output_names}
-        if isinstance(raw, tuple) and len(raw) == len(mapping):
-            normalized = dict(zip(mapping.keys(), raw, strict=True))
-            return {name: normalized.get(name) for name in output_names}
-        raise ValueError(
-            f"task {task.__class__.__name__} returned {raw!r} "
-            f"but outputs are {tuple(mapping)}"
-        )
