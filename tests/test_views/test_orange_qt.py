@@ -1101,6 +1101,26 @@ class TestDerZugMainWindow:
         assert menu is not None
         assert "Set Active Source" in [action.text() for action in menu.actions()]
 
+    def test_source_node_context_menu_keeps_standard_widget_actions(
+        self, derzug_app, orange_workflow
+    ):
+        """Source node menus should extend, not replace, Orange's widget menu."""
+        window = derzug_app.window
+        workflow = orange_workflow((("Spool", "Spool"),))
+        spool_node = workflow.nodes_by_title["Spool"]
+        _select_canvas_nodes(window, spool_node)
+
+        menu = window._canvas_composite_controller.context_menu_for_node(spool_node)
+        labels = [
+            action.text().replace("&", "")
+            for action in menu.actions()
+            if not action.isSeparator()
+        ]
+
+        assert "Rename" in labels
+        assert "Remove" in labels
+        assert labels[-1] == "Set Active Source"
+
     def test_non_source_node_context_menu_hides_set_active_source(
         self, derzug_app, orange_workflow
     ):

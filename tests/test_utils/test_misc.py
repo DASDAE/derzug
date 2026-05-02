@@ -20,6 +20,7 @@ class TestLoadWidgetEntrypoints:
 
         # At least one derzug widget should be registered.
         assert constants.PKG_NAME in dist_names
+        assert dist_names == {constants.PKG_NAME}
         assert groups == {constants.WIDGETS_ENTRY}
 
 

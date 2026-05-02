@@ -1836,30 +1836,52 @@ class _CanvasCompositeController(QObject):
         """Return the context menu for one clicked node, if any."""
         document = self._main_window.current_document()
         selected_nodes = list(document.selectedNodes())
-        menu = None
+        custom_actions: list[tuple[str, object]] = []
         if (
             len(selected_nodes) == 1
             and selected_nodes[0] is node
             and self._is_composite_node(node)
         ):
-            menu = QMenu(self._main_window)
-            menu.addAction("Ungroup", lambda: self.ungroup_node(node))
+            custom_actions.append(("Ungroup", lambda: self.ungroup_node(node)))
         elif (
             len(selected_nodes) >= 2
             and node in selected_nodes
             and self._can_group(selected_nodes)
         ):
-            menu = QMenu(self._main_window)
-            menu.addAction("Group", lambda: self.group_nodes(selected_nodes))
+            custom_actions.append(("Group", lambda: self.group_nodes(selected_nodes)))
 
         source_widget = self._source_widget_for_node(node)
         if source_widget is not None:
-            if menu is None:
-                menu = QMenu(self._main_window)
-            menu.addAction(
-                "Set Active Source",
-                lambda: self._set_active_source_widget(source_widget),
+            custom_actions.append(
+                (
+                    "Set Active Source",
+                    lambda: self._set_active_source_widget(source_widget),
+                )
             )
+
+        if not custom_actions:
+            return None
+
+        menu = self._standard_widget_context_menu()
+        if menu.actions():
+            menu.addSeparator()
+        for label, handler in custom_actions:
+            menu.addAction(label, handler)
+        return menu
+
+    def _standard_widget_context_menu(self) -> QMenu:
+        """Return a copy of Orange's standard widget context menu."""
+        menu = QMenu(self._main_window)
+        widget_menu = getattr(
+            self._main_window.current_document(),
+            "_SchemeEditWidget__widgetMenu",
+            None,
+        )
+        if widget_menu is None:
+            return menu
+        for action in widget_menu.actions():
+            menu.addAction(action)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
         return menu
 
     def _is_composite_node(self, node) -> bool:
