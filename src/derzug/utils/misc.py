@@ -23,15 +23,11 @@ def _parse_csv_env(name: str, *, lower: bool = False) -> set[str]:
 @cache
 def load_widget_entrypoints():
     """
-    Load DerZug widget entry points only.
+    Load DerZug widget entry points, including external providers.
     """
     return tuple(
         sorted(
-            (
-                ep
-                for ep in entry_points(group=constants.WIDGETS_ENTRY)
-                if ep.dist.name.lower() == constants.PKG_NAME
-            ),
+            entry_points(group=constants.WIDGETS_ENTRY),
             key=lambda ep: 0 if ep.dist.name.lower() == constants.PKG_NAME else 1,
         )
     )
