@@ -36,6 +36,7 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
+from derzug.models.selection import SelectParams
 from derzug.orange import Setting
 from derzug.utils.plot_axes import (
     CursorField,
@@ -55,11 +56,9 @@ from derzug.widgets.ndim_controls import (
     MultiDimPlotControlsMixin,
     format_nd_coord_value,
 )
-from derzug.widgets.selection import (
-    SelectionControlsMixin,
-)
+from derzug.widgets.selection import SelectionControlsMixin
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchPassThroughTask, PatchSelectionTask
+from derzug.workflow.widget_tasks import PatchSelectionWithParamsTask
 
 _ANNOTATION_ICON_DIR = Path(__file__).resolve().parent / "icons" / "annotations"
 
@@ -370,15 +369,15 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         """Output signal definitions."""
 
         patch = Output("Patch", dc.Patch)
+        select_params = Output("Select Params", SelectParams)
         annotation_set = Output("Annotations", AnnotationSet)
 
     def get_task(self) -> Task:
         """Return the compiled patch-only semantics for the current widget state."""
         self._sync_settings_from_controls()
-        payload = self._load_saved_selection_state()
-        if payload is None:
-            return PatchPassThroughTask()
-        return PatchSelectionTask(selection_payload=payload)
+        return PatchSelectionWithParamsTask(
+            selection_payload=self._load_saved_selection_state()
+        )
 
     def _apply_settings_to_controls(self) -> None:
         """Hydrate visible controls from persisted widget settings."""
@@ -1478,9 +1477,11 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         self.Warning.empty_selection.clear()
         if self._patch is None:
             self.Outputs.patch.send(None)
+            self.Outputs.select_params.send(None)
             return
         if self._roi is not None and not self._restore_saved_roi_after_render:
             self._update_selection_from_roi(notify=False)
+        select_params = self._selection_state.to_select_params()
         try:
             selected = self._selection_apply_to_patch(self._patch)
             if self._is_empty_patch(selected) and self._has_active_narrowed_selection():
@@ -1489,6 +1490,7 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
             self._show_exception("invalid_patch", exc)
             selected = self._patch
         self.Outputs.patch.send(selected)
+        self.Outputs.select_params.send(select_params)
 
     def _selection_on_state_changed(self) -> None:
         """Keep ROI geometry and emitted patch output in sync with left-panel edits."""

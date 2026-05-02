@@ -6,6 +6,7 @@ import dascore as dc
 import numpy as np
 import pytest
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
+from derzug.models.selection import SelectParams
 from derzug.utils.display import format_display
 from derzug.utils.testing import (
     TestPatchInputStateDefaults,
@@ -196,6 +197,34 @@ class TestSelect:
         assert select_widget._selection_mode == "patch"
         assert tuple(select_widget._selection_patch_edits) == tuple(patch.dims)
         assert tuple(select_widget._selection_patch_checkboxes) == tuple(patch.dims)
+
+    def test_select_params_input_drives_patch_controls_read_only(
+        self, select_widget, monkeypatch
+    ):
+        """External SelectParams should fill patch controls and make them read-only."""
+        received = capture_output(select_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        distance = patch.get_array("distance")
+        params = SelectParams(kwargs={"distance": (distance[10], distance[20])})
+
+        select_widget.set_select_params(params)
+        select_widget.set_patch(patch)
+
+        expected = patch.select(copy=False, distance=(distance[10], distance[20]))
+        assert received[-1].shape == expected.shape
+        selected_distance = select_widget._selection_current_patch_range("distance")
+        assert selected_distance == pytest.approx((distance[10], distance[20]))
+        low_edit, high_edit = select_widget._selection_patch_edits["distance"]
+        assert not low_edit.isEnabled()
+        assert not high_edit.isEnabled()
+        assert not select_widget._selection_panel.patch_basis_combo.isEnabled()
+
+        select_widget.set_select_params(None)
+
+        low_edit, high_edit = select_widget._selection_patch_edits["distance"]
+        assert low_edit.isEnabled()
+        assert high_edit.isEnabled()
+        assert select_widget._selection_panel.patch_basis_combo.isEnabled()
 
     def test_build_status_text_for_patch_selection(self, select_widget):
         """Patch status text should come from the compact status builder."""

@@ -110,6 +110,36 @@ class PatchSelectionTask(Task):
         return state.apply_to_patch(patch)
 
 
+class PatchSelectionWithParamsTask(Task):
+    """Apply patch-selection state and also expose public select parameters."""
+
+    input_variables: ClassVar[dict[str, object]] = {"patch": object}
+    output_variables: ClassVar[dict[str, object]] = {
+        "patch": object,
+        "select_params": object,
+    }
+
+    selection_payload: dict[str, Any] | None = None
+
+    def run(self, patch):
+        """Return the selected patch and matching SelectParams."""
+        from derzug.models.selection import SelectParams
+        from derzug.widgets.selection import SelectionState
+
+        payload = self.selection_payload
+        if not payload:
+            return {"patch": patch, "select_params": SelectParams()}
+        state = SelectionState()
+        primed = state.prime_patch_state_from_settings(payload)
+        if not primed:
+            return {"patch": patch, "select_params": SelectParams()}
+        state.set_patch_source(patch)
+        return {
+            "patch": state.apply_to_patch(patch),
+            "select_params": state.to_select_params(),
+        }
+
+
 class MultiPassThroughTask(Task):
     """Pass selected named values through unchanged."""
 

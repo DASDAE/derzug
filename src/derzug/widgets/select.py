@@ -13,6 +13,7 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
+from derzug.models.selection import SelectParams
 from derzug.orange import Setting
 from derzug.utils.spool import (
     extract_single_patch,
@@ -35,6 +36,7 @@ class SelectTask(Task):
         "patch": object,
         "spool": object,
         "annotation_set": object,
+        "select_params": object,
     }
     output_variables: ClassVar[dict[str, object]] = {
         "patch": object,
@@ -45,9 +47,11 @@ class SelectTask(Task):
     spool_filters: tuple[tuple[str, str], ...] = ()
     unpack_single_patch: bool = True
 
-    def run(self, patch=None, spool=None, annotation_set=None):
+    def run(self, patch=None, spool=None, annotation_set=None, select_params=None):
         """Apply persisted selection state to a patch or spool input."""
         if patch is not None:
+            if select_params is not None:
+                return {"patch": select_params.apply_to_patch(patch), "spool": None}
             selected = PatchSelectionTask(
                 selection_payload=self.patch_selection_payload
             ).run(patch)
@@ -130,6 +134,7 @@ class Select(SelectionControlsMixin, ZugWidget):
         patch = Input("Patch", dc.Patch)
         spool = Input("Spool", dc.BaseSpool)
         annotation_set = Input("Annotations", AnnotationSet)
+        select_params = Input("Select Params", SelectParams)
 
     class Outputs:
         """Output signal definitions."""
@@ -150,6 +155,10 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._patch: dc.Patch | None = None
         self._spool: dc.BaseSpool | None = None
         self._annotation_set: AnnotationSet | None = None
+        self._external_select_params: SelectParams | None = None
+        self._manual_patch_selection_payload_before_params: dict[str, object] | None = (
+            None
+        )
         self._input_kind: str | None = None
         self._preview_selected = None
         self._compact_width_done = False
@@ -185,7 +194,10 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._patch = patch
         self._spool = None
         self._sync_pending_saved_patch_selection_payload()
-        applied = self._restore_pending_saved_patch_selection_if_ready()
+        if self._external_select_params is not None:
+            applied = self._apply_external_select_params_if_ready()
+        else:
+            applied = self._restore_pending_saved_patch_selection_if_ready()
         if not applied:
             self._selection_set_patch_source(patch, notify=False, refresh_ui=False)
             self._queue_pending_saved_patch_selection_apply()
@@ -204,6 +216,21 @@ class Select(SelectionControlsMixin, ZugWidget):
     def set_annotation_set(self, annotation_set: AnnotationSet | None) -> None:
         """Receive annotations used to constrain spool selection by overlap."""
         self._annotation_set = annotation_set
+        self._emit_selected_output()
+
+    @Inputs.select_params
+    def set_select_params(self, select_params: SelectParams | None) -> None:
+        """Receive externally supplied patch.select parameters."""
+        if select_params is not None and self._external_select_params is None:
+            self._manual_patch_selection_payload_before_params = (
+                self._current_patch_selection_payload()
+            )
+        self._external_select_params = select_params
+        self._selection_set_patch_editable(select_params is None)
+        if select_params is None:
+            self._restore_manual_selection_after_params()
+        else:
+            self._apply_external_select_params_if_ready()
         self._emit_selected_output()
 
     def _selection_on_state_changed(self) -> None:
@@ -534,6 +561,7 @@ class Select(SelectionControlsMixin, ZugWidget):
                     "patch": self._patch,
                     "spool": None,
                     "annotation_set": None,
+                    "select_params": self._external_select_params,
                 },
             )
         if self._input_kind == "spool":
@@ -545,9 +573,34 @@ class Select(SelectionControlsMixin, ZugWidget):
                     "patch": None,
                     "spool": self._spool,
                     "annotation_set": self._annotation_set,
+                    "select_params": None,
                 },
             )
         return None, {}
+
+    def _apply_external_select_params_if_ready(self) -> bool:
+        """Apply connected SelectParams to the live patch selection state."""
+        if (
+            self._external_select_params is None
+            or self._input_kind != "patch"
+            or self._patch is None
+        ):
+            return False
+        state = SelectionState()
+        state.apply_select_params(self._external_select_params, self._patch)
+        self._selection_state = state
+        self._selection_refresh_panel()
+        return True
+
+    def _restore_manual_selection_after_params(self) -> None:
+        """Restore editable patch controls after external params disconnect."""
+        if self._input_kind != "patch" or self._patch is None:
+            return
+        payload = self._manual_patch_selection_payload_before_params
+        self._manual_patch_selection_payload_before_params = None
+        if payload is not None and self._restore_saved_patch_selection_payload(payload):
+            return
+        self._selection_set_patch_source(self._patch, notify=False, refresh_ui=False)
 
     def _selection_fallback_result(self) -> dict[str, object]:
         """Return the current unfiltered input as a safe fallback result."""
