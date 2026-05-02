@@ -17,7 +17,7 @@ class SelectParams(BaseModel):
     samples: bool = False
 
     @model_validator(mode="after")
-    def _validate_basis_flags(self) -> "SelectParams":
+    def _validate_basis_flags(self) -> SelectParams:
         """Reject mutually exclusive DASCore selection bases."""
         if self.relative and self.samples:
             raise ValueError("relative and samples cannot both be true")

@@ -156,9 +156,9 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._spool: dc.BaseSpool | None = None
         self._annotation_set: AnnotationSet | None = None
         self._external_select_params: SelectParams | None = None
-        self._manual_patch_selection_payload_before_params: (
-            dict[str, object] | None
-        ) = None
+        self._manual_patch_selection_payload_before_params: dict[str, object] | None = (
+            None
+        )
         self._input_kind: str | None = None
         self._preview_selected = None
         self._compact_width_done = False
