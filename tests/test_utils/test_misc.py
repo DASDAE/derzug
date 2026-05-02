@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import derzug.constants as constants
 from derzug.utils.misc import (
     load_example_workflow_entrypoints,
@@ -13,15 +15,43 @@ class TestLoadWidgetEntrypoints:
     """Simple tests for loading derzug entry points."""
 
     def test_expected_eps_loaded(self):
-        """Only DerZug widget entry points are loaded."""
+        """DerZug widget entry points are loaded from the widget group."""
         result = list(load_widget_entrypoints())
         dist_names = {ep.dist.name.lower() for ep in result}
         groups = {ep.group for ep in result}
 
         # At least one derzug widget should be registered.
         assert constants.PKG_NAME in dist_names
-        assert dist_names == {constants.PKG_NAME}
         assert groups == {constants.WIDGETS_ENTRY}
+
+    def test_external_widget_providers_are_loaded(self, monkeypatch):
+        """External providers registered in derzug.widgets are not filtered out."""
+        load_widget_entrypoints.cache_clear()
+
+        local = SimpleNamespace(
+            name="Spool",
+            value="derzug.widgets.spool",
+            group=constants.WIDGETS_ENTRY,
+            dist=SimpleNamespace(name=constants.PKG_NAME),
+        )
+        external = SimpleNamespace(
+            name="SlanRod",
+            value="slanrod.zug.discovery:widget_discovery",
+            group=constants.WIDGETS_ENTRY,
+            dist=SimpleNamespace(name="slanrod"),
+        )
+
+        monkeypatch.setattr(
+            "derzug.utils.misc.entry_points",
+            lambda group: (local, external) if group == constants.WIDGETS_ENTRY else (),
+        )
+        try:
+            result = list(load_widget_entrypoints())
+        finally:
+            load_widget_entrypoints.cache_clear()
+        values = {ep.value for ep in result}
+
+        assert "slanrod.zug.discovery:widget_discovery" in values
 
 
 class TestLoadExampleWorkflowEntrypoints:
