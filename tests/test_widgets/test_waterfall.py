@@ -15,6 +15,7 @@ from AnyQt.QtWidgets import QMenu, QToolButton
 from dascore.viz.waterfall import _get_scale as get_dascore_waterfall_scale
 from derzug.annotations_config import AnnotationConfig, save_annotation_config
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
+from derzug.models.selection import SelectParams
 from derzug.utils.testing import (
     TestPatchInputStateDefaults,
     widget_context,
@@ -215,6 +216,13 @@ def _capture_patch_output(waterfall_widget, monkeypatch) -> list:
         received.append(value)
 
     monkeypatch.setattr(waterfall_widget.Outputs.patch, "send", _sink)
+    return received
+
+
+def _capture_select_params_output(waterfall_widget, monkeypatch) -> list:
+    """Patch the select-params output slot and return the captured values."""
+    received: list = []
+    monkeypatch.setattr(waterfall_widget.Outputs.select_params, "send", received.append)
     return received
 
 
@@ -641,6 +649,52 @@ class TestWaterfall:
 
         assert received == [None]
         assert waterfall_widget._axes is None
+
+    def test_patch_none_clears_select_params_output(
+        self, waterfall_widget, monkeypatch
+    ):
+        """Sending None should also clear the SelectParams output."""
+        received = _capture_select_params_output(waterfall_widget, monkeypatch)
+        waterfall_widget.set_patch(dc.get_example_patch("example_event_2"))
+        received.clear()
+
+        waterfall_widget.set_patch(None)
+
+        assert received == [None]
+
+    def test_range_selection_emits_select_params(self, waterfall_widget, monkeypatch):
+        """Waterfall emits public patch.select params with selected patches."""
+        received = _capture_select_params_output(waterfall_widget, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        distance = patch.get_array("distance")
+        waterfall_widget.set_patch(patch)
+        received.clear()
+
+        waterfall_widget._selection_update_patch_range_absolute(
+            "distance", distance[10], distance[20]
+        )
+
+        params = received[-1]
+        assert isinstance(params, SelectParams)
+        assert params.kwargs["distance"] == pytest.approx((distance[10], distance[20]))
+        assert params.relative is False
+        assert params.samples is False
+
+    def test_relative_selection_emits_relative_select_params(
+        self, waterfall_widget, monkeypatch
+    ):
+        """Waterfall SelectParams preserve the active relative/sample basis flags."""
+        received = _capture_select_params_output(waterfall_widget, monkeypatch)
+        waterfall_widget.set_patch(dc.get_example_patch("example_event_2"))
+        received.clear()
+
+        waterfall_widget._selection_panel.patch_basis_combo.setCurrentText("Relative")
+        waterfall_widget._selection_update_patch_range("distance", 10.0, 20.0)
+
+        params = received[-1]
+        assert params.relative is True
+        assert params.samples is False
+        assert params.kwargs["distance"] == pytest.approx((10.0, 20.0))
 
     def test_patch_none_clears_annotation_output(self, waterfall_widget, monkeypatch):
         """Sending None should also clear the annotation-set output."""

@@ -21,6 +21,7 @@ from AnyQt.QtWidgets import (
 )
 from Orange.widgets import gui
 
+from derzug.models.selection import SelectParams
 from derzug.utils.display import format_display
 from derzug.utils.parsing import parse_coord_text_value
 from derzug.utils.spool import normalize_dims_value
@@ -593,6 +594,34 @@ class SelectionState:
             "samples": self.patch.basis is PatchSelectionBasis.SAMPLES,
         }
 
+    def to_select_params(self) -> SelectParams:
+        """Return public patch.select parameters for the current patch selection."""
+        flags = self.patch_select_flags()
+        return SelectParams(
+            kwargs=self.patch_kwargs(),
+            relative=flags["relative"],
+            samples=flags["samples"],
+        )
+
+    def apply_select_params(self, params: SelectParams, patch) -> None:
+        """Seed patch-mode selection state from public patch.select parameters."""
+        basis = PatchSelectionBasis.ABSOLUTE
+        if params.relative:
+            basis = PatchSelectionBasis.RELATIVE
+        elif params.samples:
+            basis = PatchSelectionBasis.SAMPLES
+        self.set_patch_source(patch)
+        self.set_patch_basis(basis)
+        for dim, value_range in params.kwargs.items():
+            if dim not in self.patch.ranges:
+                continue
+            try:
+                low, high = value_range
+            except (TypeError, ValueError):
+                continue
+            self.update_patch_range(dim, low, high)
+            self.patch.enabled[dim] = True
+
     def apply_to_patch(self, patch):
         """Apply the current patch-mode ranges to a patch."""
         kwargs = self.patch_kwargs()
@@ -989,6 +1018,20 @@ class SelectionPanel(QWidget):
                 low_edit.setEnabled(is_enabled)
                 high_edit.setEnabled(is_enabled)
 
+    def set_patch_editable(self, editable: bool) -> None:
+        """Set whether patch range controls are user editable."""
+        patch_mode = self.patch_widget.isVisible()
+        self.patch_basis_combo.setEnabled(patch_mode and editable)
+        self.reset_button.setEnabled(
+            self.reset_button.isEnabled() and not (patch_mode and not editable)
+        )
+        for dim, checkbox in self.patch_checkboxes.items():
+            dim_enabled = checkbox.isChecked()
+            checkbox.setEnabled(editable)
+            low_edit, high_edit = self.patch_edits[dim]
+            low_edit.setEnabled(dim_enabled and editable)
+            high_edit.setEnabled(dim_enabled and editable)
+
     def set_spool_filters(
         self,
         options: tuple[str, ...],
@@ -1115,6 +1158,7 @@ class SelectionControlsMixin:
         self._selection_panel: SelectionPanel | None = None
         self._selection_patch_checkboxes: dict[str, QCheckBox] = {}
         self._selection_patch_edits: dict[str, tuple[QLineEdit, QLineEdit]] = {}
+        self._selection_patch_editable = True
 
     @contextmanager
     def _selection_sync_guard(self):
@@ -1251,8 +1295,15 @@ class SelectionControlsMixin:
                 for filter_row in self._selection_state.spool.filters
             ],
         )
+        panel.set_patch_editable(self._selection_patch_editable)
         self._selection_patch_checkboxes = panel.patch_checkboxes
         self._selection_patch_edits = panel.patch_edits
+
+    def _selection_set_patch_editable(self, editable: bool) -> None:
+        """Set whether patch controls are editable by the user."""
+        self._selection_patch_editable = bool(editable)
+        if self._selection_panel is not None:
+            self._selection_panel.set_patch_editable(self._selection_patch_editable)
 
     def _selection_request_panel_refresh(self) -> None:
         """Request a visible selection-panel refresh through the host widget."""
@@ -1368,7 +1419,7 @@ class SelectionControlsMixin:
         high_text: str,
     ) -> None:
         """Handle user edits to a patch range row."""
-        if self._selection_is_syncing():
+        if self._selection_is_syncing() or not self._selection_patch_editable:
             return
         extent = self._selection_state.patch_extent(dim)
         if extent is None:
@@ -1386,7 +1437,7 @@ class SelectionControlsMixin:
 
     def _on_selection_patch_basis_changed(self, basis: PatchSelectionBasis) -> None:
         """Handle user changes to the patch selection basis."""
-        if self._selection_is_syncing():
+        if self._selection_is_syncing() or not self._selection_patch_editable:
             return
         self._selection_state.set_patch_basis(basis)
         self._selection_request_panel_refresh()
@@ -1394,7 +1445,7 @@ class SelectionControlsMixin:
 
     def _on_selection_patch_enabled_changed(self, dim: str, enabled: bool) -> None:
         """Handle user toggles of a patch dimension checkbox."""
-        if self._selection_is_syncing():
+        if self._selection_is_syncing() or not self._selection_patch_editable:
             return
         self._selection_state.set_patch_dim_enabled(dim, enabled)
         self._selection_request_panel_refresh()
@@ -1426,6 +1477,11 @@ class SelectionControlsMixin:
 
     def _on_selection_reset_requested(self) -> None:
         """Reset the current selection back to full extents / no filter."""
+        if (
+            not self._selection_patch_editable
+            and self._selection_state.mode is SelectionMode.PATCH
+        ):
+            return
         self._selection_state.reset()
         self._selection_request_panel_refresh()
         self._selection_on_state_changed()

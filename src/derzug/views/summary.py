@@ -9,6 +9,7 @@ import dascore as dc
 from orangewidget.utils.signals import PartialSummary, summarize
 
 from derzug.models.annotations import AnnotationSet
+from derzug.models.selection import SelectParams
 
 
 def _safe_repr(value: object) -> str:
@@ -28,8 +29,29 @@ def _format_detail_html(value: object) -> str:
 
 def _format_annotation_set_detail_html(value: AnnotationSet) -> str:
     """Return HTML-safe pretty-printed AnnotationSet details."""
-    text = json.dumps(value.model_dump(mode="json"), indent=2, sort_keys=False)
+    return _format_model_detail_html(value)
+
+
+def _format_model_detail_html(value) -> str:
+    """Return HTML-safe pretty-printed pydantic model details."""
+    text = json.dumps(
+        value.model_dump(mode="python"),
+        default=_json_default,
+        indent=2,
+        sort_keys=False,
+    )
     return f"<pre style='margin:0; white-space:pre-wrap'>{escape(text)}</pre>"
+
+
+def _json_default(value: object) -> object:
+    """Return a JSON-compatible representation for scalar-ish model values."""
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            return item()
+        except Exception:
+            pass
+    return _safe_repr(value)
 
 
 @summarize.register(dc.BaseSpool)
@@ -50,4 +72,13 @@ def summarize_annotation_set(value: AnnotationSet) -> PartialSummary:
     return PartialSummary(
         summary="Annotations",
         details=_format_annotation_set_detail_html(value),
+    )
+
+
+@summarize.register(SelectParams)
+def summarize_select_params(value: SelectParams) -> PartialSummary:
+    """Summarize public patch.select parameters for Orange signal UI."""
+    return PartialSummary(
+        summary=f"{len(value.kwargs)} select range(s)",
+        details=_format_model_detail_html(value),
     )
