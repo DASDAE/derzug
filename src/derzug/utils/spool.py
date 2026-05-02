@@ -37,6 +37,24 @@ def normalize_dims_value(value: Any) -> list[str]:
 
 def extract_single_patch(spool: dc.BaseSpool) -> dc.Patch | None:
     """Return the only patch in spool, or None when length is not exactly one."""
+    get_contents = getattr(spool, "get_contents", None)
+    if callable(get_contents):
+        try:
+            contents = get_contents()
+        except Exception:
+            pass
+        else:
+            try:
+                row_count = len(contents)
+            except Exception:
+                row_count = 1
+            if row_count != 1:
+                return None
+            try:
+                return spool[0]
+            except Exception:
+                pass
+
     iterator = iter(spool)
     try:
         first = next(iterator)

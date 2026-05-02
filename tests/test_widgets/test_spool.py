@@ -26,7 +26,7 @@ from derzug.utils.testing import (
     wait_for_widget_idle,
     widget_context,
 )
-from derzug.widgets.spool import Spool, _spool_rows_to_patches
+from derzug.widgets.spool import Spool, SpoolTransformTask, _spool_rows_to_patches
 
 
 def _default_example_name(spool_widget: Spool) -> str | None:
@@ -1984,21 +1984,37 @@ class TestSpool:
         assert len(list(updated)) == 2
         assert len(list(spool_widget._current_spool)) == 2
 
-    def test_set_spool_appends_in_memory_spool(self, spool_widget, monkeypatch, qtbot):
-        """Spool input appends all incoming patches to an in-memory spool."""
+    def test_set_spool_uses_input_as_transform_source(
+        self, spool_widget, monkeypatch, qtbot
+    ):
+        """Spool input fronts the incoming spool for select/chunk transforms."""
         first = _patch_with_tag("first")
         second = _patch_with_tag("second")
-        third = _patch_with_tag("third")
-        spool_widget._current_spool = dc.spool([first])
+        incoming = dc.spool([first, second])
         received = capture_output(spool_widget.Outputs.spool, monkeypatch)
+        monkeypatch.setattr(
+            spool_widget,
+            "_write_spool_to_directory",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("spool input should not be persisted")
+            ),
+        )
 
-        spool_widget.set_spool(dc.spool([second, third]))
+        spool_widget.set_spool(incoming)
+        wait_for_widget_idle(spool_widget, timeout=5.0)
+        first_combo, first_edit, _remove = _select_row(spool_widget, 0)
+        first_combo.setCurrentText("tag")
+        first_edit.setText("'second'")
+        first_edit.editingFinished.emit()
         wait_for_widget_idle(spool_widget, timeout=5.0)
 
+        task = spool_widget.get_task()
+        assert isinstance(task, SpoolTransformTask)
+        assert spool_widget._source_spool is incoming
+        assert spool_widget._source_mode == "snapshot"
         assert received
-        updated = received[-1]
-        assert len(list(updated)) == 3
-        assert len(list(spool_widget._current_spool)) == 3
+        assert _spool_tags(received[-1]) == ["second"]
+        assert _spool_tags(spool_widget._display_spool) == ["second"]
 
     def test_none_input_is_noop(self, spool_widget, monkeypatch):
         """None on the new inputs leaves the current spool unchanged."""
@@ -2013,8 +2029,10 @@ class TestSpool:
         assert received == []
         assert spool_widget._current_spool is current
 
-    def test_input_uses_put_when_available(self, spool_widget, monkeypatch, qtbot):
-        """Input ingestion prefers a spool's put method when it exists."""
+    def test_patch_input_uses_put_when_available(
+        self, spool_widget, monkeypatch, qtbot
+    ):
+        """Patch input ingestion prefers a spool's put method when it exists."""
         called: list[object] = []
         updated = dc.spool([_patch_with_tag("put-result")])
 
@@ -2026,11 +2044,11 @@ class TestSpool:
         spool_widget._current_spool = _PutSpool()
         received = capture_output(spool_widget.Outputs.spool, monkeypatch)
 
-        incoming = dc.spool([_patch_with_tag("incoming")])
-        spool_widget.set_spool(incoming)
+        spool_widget.set_patch(_patch_with_tag("incoming"))
         wait_for_widget_idle(spool_widget, timeout=5.0)
 
-        assert called == [incoming]
+        assert len(called) == 1
+        assert _spool_tags(called[0]) == ["incoming"]
         assert received[-1] is updated
         assert spool_widget._current_spool is updated
 
