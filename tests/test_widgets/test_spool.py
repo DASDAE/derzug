@@ -26,7 +26,11 @@ from derzug.utils.testing import (
     wait_for_widget_idle,
     widget_context,
 )
-from derzug.widgets.spool import Spool, _spool_rows_to_patches
+from derzug.widgets.spool import (
+    Spool,
+    _apply_select_rows,
+    _spool_rows_to_patches,
+)
 
 
 def _default_example_name(spool_widget: Spool) -> str | None:
@@ -181,15 +185,12 @@ class TestSpool:
         assert spool_widget.unpack_checkbox.text() == "Unpack len1 spool"
         assert len(spool_widget._select_rows) == 1
 
-    def test_default_selection_populates_table_on_init(self, spool_widget):
-        """Default/persisted source is loaded immediately on widget construction."""
-        if spool_widget.file_input or spool_widget.raw_input:
-            pytest.skip("This check targets default example initialization path.")
+    def test_no_source_stays_empty_on_init(self, spool_widget):
+        """Input-backed workflow nodes should not auto-load an example source."""
         model = spool_widget._table.model()
-        assert spool_widget.spool_input == _default_example_name(spool_widget)
-        assert spool_widget.example_combo.currentText() == spool_widget.spool_input
-        assert model is not None
-        assert model.rowCount() > 0
+        assert spool_widget.spool_input is None
+        assert spool_widget.example_combo.currentText() == ""
+        assert model is None or model.rowCount() == 0
 
     def test_table_uses_polished_view_defaults(self, spool_widget):
         """The spool table should use the intended lightweight presentation tweaks."""
@@ -1067,6 +1068,7 @@ class TestSpool:
         second = _long_duration_patch(start_offset_seconds=8_000, tag="long-2")
         dc.write(dc.spool([first]), directory / "long_1.h5", file_format="DASDAE")
         dc.write(dc.spool([second]), directory / "long_2.h5", file_format="DASDAE")
+        initial_rows = len(dc.spool(directory).get_contents())
         expected_rows = len(
             dc.spool(directory).chunk(time=3600, conflict="drop").get_contents()
         )
@@ -1077,17 +1079,21 @@ class TestSpool:
                 "file_input": str(directory),
                 "raw_input": "",
                 "spool_input": None,
+                "chunk_enabled": False,
+                "chunk_dim": "",
+                "chunk_value": "",
                 "selected_source_row": None,
                 "selected_source_patch_name": "",
             },
         ) as spool_widget:
             spool_widget.show()
             qtbot.wait(10)
+            spool_widget._chunk_group.setChecked(False)
             _run_and_wait(spool_widget, qtbot)
 
             model = spool_widget._table.model()
             assert model is not None
-            assert model.rowCount() == 2
+            assert model.rowCount() == initial_rows
 
             chunk_options = [
                 spool_widget.chunk_dim_combo.itemText(i)
@@ -1095,6 +1101,7 @@ class TestSpool:
             ]
             assert "time" in chunk_options
 
+            spool_widget._chunk_group.setChecked(True)
             spool_widget.chunk_dim_combo.setCurrentIndex(chunk_options.index("time"))
             spool_widget.chunk_value_edit.setText("3600")
             spool_widget._on_chunk_param_changed()
@@ -1375,6 +1382,9 @@ class TestSpool:
 
     def test_add_select_row_creates_second_row(self, spool_widget):
         """The + button should append another select-filter row."""
+        spool_widget._select_options = ("tag",)
+        spool_widget._refresh_select_rows()
+
         spool_widget.select_add_button.click()
 
         assert len(spool_widget._select_rows) == 2
@@ -1404,12 +1414,14 @@ class TestSpool:
             {"key": "time", "raw": "(0, 1)"},
             {"key": "tag", "raw": "'?bob'"},
         ]
-        spool_widget._refresh_select_rows()
-        spool_widget.select_add_button.click()
-        third_combo, third_edit, _remove = _select_row(spool_widget, 2)
-        third_combo.setCurrentText("distance")
-        third_edit.setText("(10, 20)")
-        third_edit.editingFinished.emit()
+        spool_widget.select_filters = [
+            {"key": "time", "raw": "(0, 1)"},
+            {"key": "tag", "raw": "'?bob'"},
+            {"key": "distance", "raw": "(10, 20)"},
+        ]
+        _apply_select_rows(
+            spool_widget._source_spool, tuple(spool_widget.select_filters)
+        )
 
         assert called
         assert called[-1] == {
@@ -2088,6 +2100,7 @@ class TestSpool:
             spool_widget, "_apply_chunk_transform", lambda spool: derived
         )
         monkeypatch.setattr(spool_widget, "_render_spool", lambda spool: None)
+        monkeypatch.setattr(spool_widget, "run", lambda: None)
 
         spool_widget._recompute_display_spool()
         assert _spool_tags(spool_widget._display_spool) == ["derived-only"]

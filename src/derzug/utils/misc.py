@@ -27,6 +27,9 @@ def load_widget_entrypoints():
     """
     return tuple(
         sorted(
+            # The entry point group is the DerZug widget contract.  Do not also
+            # filter by distribution name, or external providers such as
+            # SlanRod's `derzug.widgets` entry point disappear from discovery.
             entry_points(group=constants.WIDGETS_ENTRY),
             key=lambda ep: 0 if ep.dist.name.lower() == constants.PKG_NAME else 1,
         )
