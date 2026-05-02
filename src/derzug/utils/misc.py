@@ -27,7 +27,11 @@ def load_widget_entrypoints():
     """
     return tuple(
         sorted(
-            entry_points(group=constants.WIDGETS_ENTRY),
+            (
+                ep
+                for ep in entry_points(group=constants.WIDGETS_ENTRY)
+                if ep.dist.name.lower() == constants.PKG_NAME
+            ),
             key=lambda ep: 0 if ep.dist.name.lower() == constants.PKG_NAME else 1,
         )
     )
