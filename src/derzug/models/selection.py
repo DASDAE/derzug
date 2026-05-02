@@ -33,3 +33,16 @@ class SelectParams(BaseModel):
             samples=self.samples,
             **self.kwargs,
         )
+
+    def apply_to_spool(self, spool):
+        """Apply these parameters to a spool."""
+        if not self.kwargs:
+            return spool
+        kwargs = dict(self.kwargs)
+        if self.relative:
+            kwargs["relative"] = True
+        if self.samples:
+            kwargs["samples"] = True
+        return spool.select(
+            **kwargs,
+        )

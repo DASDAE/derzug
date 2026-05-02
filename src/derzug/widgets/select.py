@@ -59,8 +59,10 @@ class SelectTask(Task):
 
         if spool is not None:
             selected = spool
+            if select_params is not None:
+                selected = select_params.apply_to_spool(selected)
             if annotation_set is not None:
-                contents = spool.get_contents()
+                contents = selected.get_contents()
                 filtered = filter_contents_by_annotations(contents, annotation_set)
                 if len(filtered) != len(contents):
                     if filtered.empty:
@@ -70,7 +72,7 @@ class SelectTask(Task):
                         selected = dc.spool(
                             [
                                 patch_value
-                                for row, patch_value in enumerate(spool)
+                                for row, patch_value in enumerate(selected)
                                 if row in wanted_rows
                             ]
                         )
@@ -573,7 +575,7 @@ class Select(SelectionControlsMixin, ZugWidget):
                     "patch": None,
                     "spool": self._spool,
                     "annotation_set": self._annotation_set,
-                    "select_params": None,
+                    "select_params": self._external_select_params,
                 },
             )
         return None, {}

@@ -664,6 +664,23 @@ class TestSelect:
         assert patch_received[-1] is not None
         assert patch_received[-1].attrs.tag == "beta"
 
+    def test_select_params_filter_spool_patches(self, select_widget, monkeypatch):
+        """Incoming SelectParams should narrow connected spool patches."""
+        received = capture_output(select_widget.Outputs.spool, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        time = patch.get_array("time")
+        params = SelectParams(kwargs={"time": (time[10], time[20])})
+
+        select_widget.set_spool(dc.spool([patch]))
+        select_widget.set_select_params(params)
+        wait_for_widget_idle(select_widget, timeout=5.0)
+
+        selected = received[-1]
+        assert selected is not None
+        selected_patch = next(iter(selected))
+        assert selected_patch.shape == patch.select(time=(time[10], time[20])).shape
+        assert selected_patch.shape != patch.shape
+
     def test_annotation_input_filters_spool_to_matching_patches(
         self, select_widget, monkeypatch
     ):

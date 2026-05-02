@@ -13,15 +13,21 @@ class TestLoadWidgetEntrypoints:
     """Simple tests for loading derzug entry points."""
 
     def test_expected_eps_loaded(self):
-        """Only DerZug widget entry points are loaded."""
+        """DerZug widget entry points are loaded from the widget group."""
         result = list(load_widget_entrypoints())
         dist_names = {ep.dist.name.lower() for ep in result}
         groups = {ep.group for ep in result}
 
         # At least one derzug widget should be registered.
         assert constants.PKG_NAME in dist_names
-        assert dist_names == {constants.PKG_NAME}
         assert groups == {constants.WIDGETS_ENTRY}
+
+    def test_external_widget_providers_are_loaded(self):
+        """External providers registered in derzug.widgets are not filtered out."""
+        result = list(load_widget_entrypoints())
+        values = {ep.value for ep in result}
+
+        assert "slanrod.zug.discovery:widget_discovery" in values
 
 
 class TestLoadExampleWorkflowEntrypoints:
