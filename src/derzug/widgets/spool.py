@@ -958,13 +958,11 @@ class Spool(ZugWidget):
             active_source = "file"
         elif self.raw_input:
             active_source = "raw"
-        else:
-            if self.spool_input not in self._examples:
-                if _DEFAULT_EXAMPLE in self._examples:
-                    self.spool_input = _DEFAULT_EXAMPLE
-                else:
-                    self.spool_input = self._examples[0] if self._examples else None
+        elif self.spool_input in self._examples:
             active_source = "example"
+        else:
+            self.spool_input = None
+            active_source = "none"
 
         self._clear_other_inputs(active_source)
         self._refresh_recent_file_combo()

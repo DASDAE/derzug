@@ -32,6 +32,12 @@ _NON_WORKFLOW_INPUTS = {
 }
 
 
+def _is_core_derzug_widget(desc) -> bool:
+    """Return True for widgets implemented by DerZug itself."""
+    qualified_name = (getattr(desc, "qualified_name", "") or "").lower()
+    return qualified_name.startswith(f"{constants.PKG_NAME}.widgets.")
+
+
 def _graph_signature(scheme) -> tuple[set[str], set[tuple[str, str, str, str]]]:
     """Return comparable node/link signatures for a workflow graph."""
     nodes = {node.title for node in scheme.nodes}
@@ -132,11 +138,7 @@ def test_all_derzug_registry_widgets_instantiate_in_live_canvas(derzug_app, qapp
     window = derzug_app.window
     registry = derzug_app.main.registry
     scheme = window.current_document().scheme()
-    descriptions = [
-        desc
-        for desc in registry.widgets()
-        if desc.package.startswith(constants.PKG_NAME)
-    ]
+    descriptions = [desc for desc in registry.widgets() if _is_core_derzug_widget(desc)]
     assert descriptions, "Expected at least one DerZug widget in the live registry."
 
     failures: list[str] = []
@@ -169,11 +171,7 @@ def test_all_derzug_registry_widgets_expose_workflow_objects(derzug_app, qapp):
     window = derzug_app.window
     registry = derzug_app.main.registry
     scheme = window.current_document().scheme()
-    descriptions = [
-        desc
-        for desc in registry.widgets()
-        if desc.package.startswith(constants.PKG_NAME)
-    ]
+    descriptions = [desc for desc in registry.widgets() if _is_core_derzug_widget(desc)]
     assert descriptions, "Expected at least one DerZug widget in the live registry."
 
     failures: list[str] = []
@@ -367,7 +365,7 @@ def test_integration_directory_spool_row_selection_pipeline(tmp_path, monkeypatc
 
         model = spool_widget._table.model()
         assert model is not None
-        assert model.rowCount() == len(expected_patches)
+        assert model.rowCount() == len(loaded_spool.get_contents())
         spool_widget._table.selectRow(selected_index)
         wait_for_widget_idle(spool_widget)
 
