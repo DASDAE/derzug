@@ -39,7 +39,9 @@ def filter_registry_for_das(registry: WidgetRegistry) -> WidgetRegistry:
     for widget in registry.widgets():
         package = (getattr(widget, "package", "") or "").lower()
         name = widget.name
-        is_derzug_widget = package.startswith(constants.PKG_NAME)
+        is_derzug_widget = package == constants.PKG_NAME or package.startswith(
+            f"{constants.PKG_NAME}."
+        )
         if not is_derzug_widget and name not in constants.ORANGE_WIDGETS_TO_LOAD:
             continue
         if "obsolete" in widget.id:

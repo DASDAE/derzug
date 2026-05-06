@@ -11,7 +11,11 @@ from derzug.models.annotations import (
     PointGeometry,
     SpanGeometry,
 )
-from derzug.utils.spool import annotation_overlap_mask, filter_contents_by_annotations
+from derzug.utils.spool import (
+    annotation_overlap_mask,
+    extract_single_patch,
+    filter_contents_by_annotations,
+)
 
 
 def _contents_df() -> pd.DataFrame:
@@ -26,6 +30,25 @@ def _contents_df() -> pd.DataFrame:
             "tag": ["first", "second", "third"],
         }
     )
+
+
+def test_extract_single_patch_uses_metadata_for_multi_row_spool():
+    """Multi-row spools should not be iterated just to reject patch unpacking."""
+
+    class _LazyMultiRowSpool:
+        iterated = False
+
+        def get_contents(self):
+            return pd.DataFrame({"tag": ["first", "second"]})
+
+        def __iter__(self):
+            self.iterated = True
+            raise AssertionError("spool payload was materialized")
+
+    spool = _LazyMultiRowSpool()
+
+    assert extract_single_patch(spool) is None
+    assert spool.iterated is False
 
 
 def test_point_annotations_filter_contents_on_shared_dims():

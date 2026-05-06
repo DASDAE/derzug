@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dascore as dc
 import numpy as np
+import pandas as pd
 import pytest
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.models.selection import SelectParams
@@ -731,6 +732,36 @@ class TestSelect:
         select_widget.set_spool(_multi_select_spool())
 
         assert patch_received[-1] is None
+
+    def test_multi_row_lazy_spool_unpack_does_not_iterate(
+        self, select_widget, monkeypatch
+    ):
+        """
+        Unpack should reject multi-row spools from metadata without loading
+        patches.
+        """
+
+        class _LazyMultiRowSpool:
+            iterated = False
+
+            def get_contents(self):
+                return pd.DataFrame({"tag": ["first", "second"]})
+
+            def __iter__(self):
+                self.iterated = True
+                raise AssertionError("spool payload was materialized")
+
+        spool = _LazyMultiRowSpool()
+        spool_received = capture_output(select_widget.Outputs.spool, monkeypatch)
+        patch_received = capture_output(select_widget.Outputs.patch, monkeypatch)
+        select_widget.unpack_single_patch = True
+
+        select_widget.set_spool(spool)
+        wait_for_widget_idle(select_widget, timeout=5.0)
+
+        assert spool_received[-1] is spool
+        assert patch_received[-1] is None
+        assert spool.iterated is False
 
     def test_clearing_spool_input_clears_patch_output(self, select_widget, monkeypatch):
         """Clearing spool input should clear both spool and patch outputs."""

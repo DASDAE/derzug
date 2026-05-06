@@ -1642,10 +1642,15 @@ class Spool(ZugWidget):
 
     @Inputs.spool
     def set_spool(self, spool: dc.BaseSpool | None) -> None:
-        """Append an incoming spool to the current spool."""
+        """Use an incoming spool as the source for select/chunk transforms."""
         if spool is None:
             return
-        self._ingest_input(spool)
+        self.Error.general.clear()
+        self._clear_other_inputs("snapshot")
+        self._source_mode = "snapshot"
+        self._set_source_controls_enabled(False)
+        self._set_source_spool(spool)
+        self.run()
 
     def _ingest_input(self, incoming: dc.BaseSpool) -> None:
         """Merge incoming spool data into the current spool and emit it."""
