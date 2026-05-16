@@ -662,6 +662,41 @@ class TestWaterfall:
 
         assert received == [None]
 
+    def test_saved_selection_without_patch_emits_select_params(
+        self, waterfall_widget, monkeypatch
+    ):
+        """Restored Waterfall selections should drive SelectParams-only links."""
+        received = _capture_select_params_output(waterfall_widget, monkeypatch)
+        waterfall_widget.saved_selection_basis = "absolute"
+        waterfall_widget.saved_selection_ranges = [
+            {
+                "dim": "distance",
+                "enabled": True,
+                "low": {"kind": "float", "value": 643.7278839133311},
+                "high": {"kind": "float", "value": 793.7278839133311},
+            },
+            {
+                "dim": "time",
+                "enabled": True,
+                "low": {"kind": "float", "value": 0.013890560242722401},
+                "high": {"kind": "float", "value": 0.03889056024272312},
+            },
+        ]
+        waterfall_widget._pending_saved_selection_restore = True
+
+        waterfall_widget._emit_current_selection()
+
+        params = received[-1]
+        assert isinstance(params, SelectParams)
+        assert params.kwargs["distance"] == pytest.approx(
+            (643.7278839133311, 793.7278839133311)
+        )
+        assert params.kwargs["time"] == pytest.approx(
+            (0.013890560242722401, 0.03889056024272312)
+        )
+        assert params.relative is False
+        assert params.samples is False
+
     def test_range_selection_emits_select_params(self, waterfall_widget, monkeypatch):
         """Waterfall emits public patch.select params with selected patches."""
         received = _capture_select_params_output(waterfall_widget, monkeypatch)

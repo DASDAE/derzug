@@ -3018,6 +3018,60 @@ class TestDerZugCanvasWorkflow:
         assert low_edit.text() == "100"
         assert high_edit.text() == "200"
 
+    def test_loaded_waterfall_select_params_populate_params_only_select(
+        self, derzug_app, tmp_path, qapp, orange_workflow
+    ):
+        """Saved Waterfall params should populate Select without a data link."""
+        window = derzug_app.window
+        workflow = orange_workflow(
+            (
+                ("Spool", "spool-node"),
+                ("Waterfall", "waterfall-node"),
+                ("Select", "select-node"),
+            ),
+            (
+                ("spool-node", "Patch", "waterfall-node", "Patch"),
+                ("waterfall-node", "Select Params", "select-node", "Select Params"),
+            ),
+        )
+        waterfall_widget = workflow.widgets_by_title["waterfall-node"]
+        selected = {
+            "distance": (643.7278839133311, 793.7278839133311),
+            "time": (0.013890560242722401, 0.03889056024272312),
+        }
+        waterfall_widget.saved_selection_basis = "absolute"
+        waterfall_widget.saved_selection_ranges = [
+            {
+                "dim": dim,
+                "enabled": True,
+                "low": {"kind": "float", "value": low},
+                "high": {"kind": "float", "value": high},
+            }
+            for dim, (low, high) in selected.items()
+        ]
+        waterfall_widget.saved_selection_has_roi = True
+
+        workflow_path = tmp_path / "waterfall-select-params-only.ows"
+        assert window.save_scheme_to(workflow.scheme, str(workflow_path))
+
+        window.load_scheme(str(workflow_path))
+        qapp.processEvents()
+        qapp.processEvents()
+        loaded_scheme = window.current_document().scheme()
+        loaded_node = next(
+            node for node in loaded_scheme.nodes if node.title == "select-node"
+        )
+        loaded_widget = loaded_scheme.widget_for_node(loaded_node)
+
+        assert loaded_widget._selection_panel.mode_label.text() == "Range selection"
+        assert set(loaded_widget._selection_patch_edits) == set(selected)
+        for dim, (low, high) in selected.items():
+            low_edit, high_edit = loaded_widget._selection_patch_edits[dim]
+            assert low_edit.text() == format_display(low)
+            assert high_edit.text() == format_display(high)
+            assert not low_edit.isEnabled()
+            assert not high_edit.isEnabled()
+
     def test_workflow_roundtrip_preserves_select_spool_filter_values(
         self, derzug_app, tmp_path, qapp, orange_workflow
     ):

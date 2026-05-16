@@ -233,6 +233,7 @@ class Select(SelectionControlsMixin, ZugWidget):
             self._restore_manual_selection_after_params()
         else:
             self._apply_external_select_params_if_ready()
+            self._selection_refresh_panel()
         self._emit_selected_output()
 
     def _selection_on_state_changed(self) -> None:
@@ -253,6 +254,89 @@ class Select(SelectionControlsMixin, ZugWidget):
     def _rebind_dynamic_controls(self) -> None:
         """Rebuild selection controls after a new input source arrives."""
         self._selection_refresh_panel()
+
+    def _selection_refresh_panel(self) -> None:
+        """Push the current selection state into the controls."""
+        if not self._refresh_external_select_params_panel():
+            super()._selection_refresh_panel()
+
+    def _refresh_external_select_params_panel(self) -> bool:
+        """Show read-only SelectParams range controls without patch-mode input."""
+        if (
+            self._external_select_params is None
+            or self._input_kind == "patch"
+            or self._selection_panel is None
+        ):
+            return False
+        patch = self._spool_display_patch()
+        state = self._external_select_params_display_state(patch)
+        if state is None:
+            return False
+        panel = self._selection_panel
+        panel.set_mode(state.mode)
+        panel.set_patch_basis(state.patch.basis)
+        panel.rebuild_patch_rows(
+            tuple(state.patch.extents),
+            state.patch.extents,
+            self._selection_preferred_patch_dims,
+        )
+        panel.set_patch_enabled(state.patch.enabled)
+        panel.set_patch_ranges(
+            state.patch.ranges,
+            state.patch.extents,
+            tuple(self._external_select_params.kwargs),
+        )
+        panel.set_patch_editable(False)
+        self._selection_patch_checkboxes = panel.patch_checkboxes
+        self._selection_patch_edits = panel.patch_edits
+        return True
+
+    def _external_select_params_display_state(
+        self, patch: dc.Patch | None
+    ) -> SelectionState | None:
+        """Return patch-style state for displaying external SelectParams."""
+        params = self._external_select_params
+        if params is None or not params.kwargs:
+            return None
+        state = SelectionState()
+        if patch is not None:
+            state.apply_select_params(params, patch)
+            return state
+
+        basis = PatchSelectionBasis.ABSOLUTE
+        if params.relative:
+            basis = PatchSelectionBasis.RELATIVE
+        elif params.samples:
+            basis = PatchSelectionBasis.SAMPLES
+        ranges: dict[str, tuple[object, object]] = {}
+        for dim, value_range in params.kwargs.items():
+            try:
+                low, high = value_range
+            except (TypeError, ValueError):
+                continue
+            ranges[dim] = (low, high)
+        if not ranges:
+            return None
+        state.mode = SelectionMode.PATCH
+        state.patch.basis = basis
+        state.patch.extents = dict(ranges)
+        state.patch.ranges = ranges
+        state.patch.enabled = {dim: True for dim in ranges}
+        return state
+
+    def _spool_display_patch(self) -> dc.Patch | None:
+        """Return a representative spool patch for SelectParams display."""
+        spool = self._spool
+        if spool is None:
+            return None
+        try:
+            return spool[0]
+        except Exception:
+            pass
+        try:
+            return next(iter(spool))
+        except Exception:
+            return None
 
     def _emit_selected_output(self) -> None:
         """Trigger the standard run lifecycle so _on_result is always the send site."""

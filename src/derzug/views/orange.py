@@ -3444,7 +3444,9 @@ class DerZugMainWindow(OrangeMainWindow):
 
     def _reemit_restored_source_widgets(self) -> None:
         """Re-emit restored source-widget outputs after workflow reload settles."""
+        from derzug.widgets.select import Select
         from derzug.widgets.spool import Spool
+        from derzug.widgets.waterfall import Waterfall
 
         document = self.current_document()
         scheme = getattr(document, "scheme", lambda: None)()
@@ -3457,6 +3459,33 @@ class DerZugMainWindow(OrangeMainWindow):
                     widget.run()
                 else:
                     widget._emit_current_output()
+            elif (
+                isinstance(widget, Waterfall)
+                and widget._patch is None
+                and widget._pending_saved_selection_restore
+            ):
+                widget._emit_current_selection()
+        for link in scheme.links:
+            if not getattr(link, "enabled", True):
+                continue
+            if getattr(link.source_channel, "name", "") != "Select Params":
+                continue
+            if getattr(link.sink_channel, "name", "") != "Select Params":
+                continue
+            source_widget = scheme.widget_for_node(link.source_node)
+            sink_widget = scheme.widget_for_node(link.sink_node)
+            if not isinstance(source_widget, Waterfall) or not isinstance(
+                sink_widget, Select
+            ):
+                continue
+            if (
+                source_widget._patch is not None
+                or not source_widget._pending_saved_selection_restore
+            ):
+                continue
+            select_params = source_widget._saved_select_params()
+            if select_params is not None:
+                sink_widget.set_select_params(select_params)
 
     def _collect_open_widget_node_ids(self) -> list[int]:
         """Return indices of nodes whose widget windows are currently visible.

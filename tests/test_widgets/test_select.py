@@ -277,6 +277,48 @@ class TestSelect:
             assert not high_edit.isEnabled()
         assert not select_widget._selection_panel.patch_basis_combo.isEnabled()
 
+    def test_select_params_only_show_all_param_values(self, select_widget, monkeypatch):
+        """Waterfall params should display even without a data input link."""
+        received = capture_output(select_widget.Outputs.patch, monkeypatch)
+        selected = {
+            "distance": (643.7278839133311, 793.7278839133311),
+            "time": (0.013890560242722401, 0.03889056024272312),
+        }
+        params = SelectParams(kwargs=selected)
+
+        select_widget.set_select_params(params)
+
+        assert received[-1] is None
+        assert select_widget._selection_panel.mode_label.text() == "Range selection"
+        assert set(select_widget._selection_patch_edits) == set(selected)
+        for dim, (low, high) in selected.items():
+            low_edit, high_edit = select_widget._selection_patch_edits[dim]
+            assert low_edit.text() == format_display(low)
+            assert high_edit.text() == format_display(high)
+            assert not low_edit.isEnabled()
+            assert not high_edit.isEnabled()
+        assert not select_widget._selection_panel.patch_basis_combo.isEnabled()
+
+    def test_hidden_select_params_only_refreshes_range_controls(self, qtbot):
+        """Params-only workflows should populate Select before its window opens."""
+        selected = {
+            "distance": (643.7278839133311, 793.7278839133311),
+            "time": (0.013890560242722401, 0.03889056024272312),
+        }
+
+        with widget_context(Select) as widget:
+            widget.set_select_params(SelectParams(kwargs=selected))
+            qtbot.wait(10)
+
+            assert widget._selection_panel.mode_label.text() == "Range selection"
+            assert set(widget._selection_patch_edits) == set(selected)
+            for dim, (low, high) in selected.items():
+                low_edit, high_edit = widget._selection_patch_edits[dim]
+                assert low_edit.text() == format_display(low)
+                assert high_edit.text() == format_display(high)
+                assert not low_edit.isEnabled()
+                assert not high_edit.isEnabled()
+
     def test_build_status_text_for_patch_selection(self, select_widget):
         """Patch status text should come from the compact status builder."""
         patch = dc.get_example_patch("example_event_2")
@@ -731,6 +773,36 @@ class TestSelect:
         selected_patch = next(iter(selected))
         assert selected_patch.shape == patch.select(time=(time[10], time[20])).shape
         assert selected_patch.shape != patch.shape
+
+    def test_spool_select_params_show_waterfall_range_controls(
+        self, select_widget, monkeypatch
+    ):
+        """Spool inputs should still display Waterfall SelectParams ranges."""
+        received = capture_output(select_widget.Outputs.spool, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        time = patch.get_array("time")
+        distance = patch.get_array("distance")
+        selected = {
+            "time": (time[10], time[20]),
+            "distance": (distance[30], distance[40]),
+        }
+        params = SelectParams(kwargs=selected)
+
+        select_widget.set_spool(dc.spool([patch]))
+        select_widget.set_select_params(params)
+        wait_for_widget_idle(select_widget, timeout=5.0)
+
+        expected = dc.spool([patch]).select(**selected)
+        assert len(received[-1].get_contents()) == len(expected.get_contents())
+        assert select_widget._selection_panel.mode_label.text() == "Range selection"
+        assert set(selected).issubset(select_widget._selection_patch_edits)
+        for dim, (low, high) in selected.items():
+            low_edit, high_edit = select_widget._selection_patch_edits[dim]
+            assert low_edit.text() == format_display(low)
+            assert high_edit.text() == format_display(high)
+            assert not low_edit.isEnabled()
+            assert not high_edit.isEnabled()
+        assert not select_widget._selection_panel.patch_basis_combo.isEnabled()
 
     def test_annotation_input_filters_spool_to_matching_patches(
         self, select_widget, monkeypatch
