@@ -56,7 +56,11 @@ from derzug.widgets.ndim_controls import (
     MultiDimPlotControlsMixin,
     format_nd_coord_value,
 )
-from derzug.widgets.selection import SelectionControlsMixin
+from derzug.widgets.selection import (
+    PatchSelectionBasis,
+    SelectionControlsMixin,
+    SelectionState,
+)
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchSelectionWithParamsTask
 
@@ -1477,7 +1481,12 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         self.Warning.empty_selection.clear()
         if self._patch is None:
             self.Outputs.patch.send(None)
-            self.Outputs.select_params.send(None)
+            select_params = (
+                self._saved_select_params()
+                if self._pending_saved_selection_restore
+                else None
+            )
+            self.Outputs.select_params.send(select_params)
             return
         if self._roi is not None and not self._restore_saved_roi_after_render:
             self._update_selection_from_roi(notify=False)
@@ -1984,6 +1993,34 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         if not basis_name or not rows:
             return None
         return {"basis": basis_name, "rows": rows}
+
+    def _saved_select_params(self) -> SelectParams | None:
+        """Return saved selection settings as public SelectParams."""
+        payload = self._load_saved_selection_state()
+        if payload is None:
+            return None
+        basis_name = str(payload.get("basis", "")).strip()
+        rows = payload.get("rows")
+        if not isinstance(rows, list):
+            return None
+        kwargs: dict[str, tuple[object, object]] = {}
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("enabled", True):
+                continue
+            dim = row.get("dim")
+            if not isinstance(dim, str) or not dim:
+                continue
+            kwargs[dim] = (
+                SelectionState._deserialize_value(row.get("low")),
+                SelectionState._deserialize_value(row.get("high")),
+            )
+        if not kwargs:
+            return None
+        return SelectParams(
+            kwargs=kwargs,
+            relative=basis_name == PatchSelectionBasis.RELATIVE.value,
+            samples=basis_name == PatchSelectionBasis.SAMPLES.value,
+        )
 
     def _prime_saved_selection_state(self) -> None:
         """Seed selection state from stored workflow settings before patch input."""
