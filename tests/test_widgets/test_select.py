@@ -227,6 +227,56 @@ class TestSelect:
         assert high_edit.isEnabled()
         assert select_widget._selection_panel.patch_basis_combo.isEnabled()
 
+    def test_select_params_values_show_when_matching_patch_extents(
+        self, select_widget, monkeypatch
+    ):
+        """Waterfall-style params should display even on an already cropped patch."""
+        received = capture_output(select_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        distance = patch.get_array("distance")
+        selected = (distance[10], distance[20])
+        params = SelectParams(kwargs={"distance": selected})
+        cropped = patch.select(copy=False, distance=selected)
+
+        select_widget.set_patch(cropped)
+        select_widget.set_select_params(params)
+
+        assert received[-1].shape == cropped.shape
+        low_edit, high_edit = select_widget._selection_patch_edits["distance"]
+        assert low_edit.text() == format_display(selected[0])
+        assert high_edit.text() == format_display(selected[1])
+        assert not low_edit.isEnabled()
+        assert not high_edit.isEnabled()
+        assert not select_widget._selection_panel.patch_basis_combo.isEnabled()
+
+    def test_multi_dim_select_params_show_all_param_values(
+        self, select_widget, monkeypatch
+    ):
+        """Multiple Waterfall params should expand to visible read-only rows."""
+        received = capture_output(select_widget.Outputs.patch, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        time = patch.get_array("time")
+        distance = patch.get_array("distance")
+        selected = {
+            "time": (time[10], time[20]),
+            "distance": (distance[30], distance[40]),
+        }
+        params = SelectParams(kwargs=selected)
+        cropped = patch.select(copy=False, **selected)
+
+        select_widget.set_select_params(params)
+        select_widget.set_patch(cropped)
+
+        assert received[-1].shape == cropped.shape
+        assert set(selected).issubset(select_widget._selection_patch_edits)
+        for dim, (low, high) in selected.items():
+            low_edit, high_edit = select_widget._selection_patch_edits[dim]
+            assert low_edit.text() == format_display(low)
+            assert high_edit.text() == format_display(high)
+            assert not low_edit.isEnabled()
+            assert not high_edit.isEnabled()
+        assert not select_widget._selection_panel.patch_basis_combo.isEnabled()
+
     def test_build_status_text_for_patch_selection(self, select_widget):
         """Patch status text should come from the compact status builder."""
         patch = dc.get_example_patch("example_event_2")

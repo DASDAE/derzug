@@ -980,8 +980,10 @@ class SelectionPanel(QWidget):
         self,
         ranges: dict[str, tuple[Any, Any]],
         extents: dict[str, tuple[Any, Any]],
+        show_full_extent_dims: tuple[str, ...] = (),
     ) -> None:
         """Write current patch ranges into the visible line edits."""
+        show_full_extent = set(show_full_extent_dims)
         with self.syncing():
             for dim, edits in self.patch_edits.items():
                 if dim not in ranges:
@@ -991,12 +993,18 @@ class SelectionPanel(QWidget):
                 low_edit, high_edit = edits
                 low, high = ranges[dim]
                 full_low, full_high = extents[dim]
-                desired_low = (
-                    "" if _values_equal(low, full_low) else _format_coord_value(low)
-                )
-                desired_high = (
-                    "" if _values_equal(high, full_high) else _format_coord_value(high)
-                )
+                if dim in show_full_extent:
+                    desired_low = _format_coord_value(low)
+                    desired_high = _format_coord_value(high)
+                else:
+                    desired_low = (
+                        "" if _values_equal(low, full_low) else _format_coord_value(low)
+                    )
+                    desired_high = (
+                        ""
+                        if _values_equal(high, full_high)
+                        else _format_coord_value(high)
+                    )
                 current_low = low_edit.text()
                 current_high = high_edit.text()
                 if desired_low == "":
@@ -1287,6 +1295,7 @@ class SelectionControlsMixin:
         panel.set_patch_ranges(
             self._selection_state.patch.ranges,
             self._selection_state.patch.extents,
+            self._selection_show_full_extent_dims(),
         )
         panel.set_spool_filters(
             self._selection_state.spool.options,
@@ -1304,6 +1313,10 @@ class SelectionControlsMixin:
         self._selection_patch_editable = bool(editable)
         if self._selection_panel is not None:
             self._selection_panel.set_patch_editable(self._selection_patch_editable)
+
+    def _selection_show_full_extent_dims(self) -> tuple[str, ...]:
+        """Return dims whose full-extent ranges should be shown, not blanked."""
+        return ()
 
     def _selection_request_panel_refresh(self) -> None:
         """Request a visible selection-panel refresh through the host widget."""

@@ -594,6 +594,12 @@ class Select(SelectionControlsMixin, ZugWidget):
         self._selection_refresh_panel()
         return True
 
+    def _selection_show_full_extent_dims(self) -> tuple[str, ...]:
+        """Show incoming SelectParams values even when they match patch extents."""
+        if self._external_select_params is None:
+            return ()
+        return tuple(self._external_select_params.kwargs)
+
     def _restore_manual_selection_after_params(self) -> None:
         """Restore editable patch controls after external params disconnect."""
         if self._input_kind != "patch" or self._patch is None:
