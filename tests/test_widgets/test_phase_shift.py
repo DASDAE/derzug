@@ -5,7 +5,6 @@ from __future__ import annotations
 import dascore as dc
 import numpy as np
 import pytest
-
 from derzug.utils.testing import (
     TestWidgetDefaults,
     capture_output,
@@ -68,9 +67,7 @@ class TestPhaseShiftTransform:
         assert out.shape == (3, 15)
         assert not phase_shift_widget.Error.transform_failed.is_shown()
 
-    def test_settings_reach_patch_method(
-        self, phase_shift_widget, monkeypatch, qtbot
-    ):
+    def test_settings_reach_patch_method(self, phase_shift_widget, monkeypatch, qtbot):
         """Parsed settings should reach dispersion_phase_shift."""
         received = capture_output(phase_shift_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("dispersion_event")
