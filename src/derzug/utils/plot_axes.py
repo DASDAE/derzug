@@ -44,6 +44,28 @@ def _datetime_value_to_ns(value: Any) -> np.int64:
 class ContextDateAxisItem(pg.DateAxisItem):
     """Date axis item that can derive compact higher-level datetime context."""
 
+    def __init__(self, orientation="bottom", **kwargs):
+        """
+        Create a datetime axis for timezone-naive patch coordinates.
+
+        Pyqtgraph's default date axis places day/month ticks at local-time
+        boundaries. DerZug plots patch datetimes as naive wall-clock values, so
+        tick placement must stay in the same UTC-like numeric coordinate system
+        used by tick label formatting.
+        """
+        kwargs.setdefault("utcOffset", 0)
+        super().__init__(orientation=orientation, **kwargs)
+
+    def tickValues(self, min_val, max_val, size):
+        """Return date ticks without applying the host local timezone offset."""
+        self._ensure_font_metrics()
+        previous_offset = self.utcOffset
+        self.utcOffset = 0
+        try:
+            return super().tickValues(min_val, max_val, size)
+        finally:
+            self.utcOffset = previous_offset
+
     def tickStrings(self, values, scale, spacing):
         """
         Format tick labels from naive wall-clock timestamps without local shifts.
