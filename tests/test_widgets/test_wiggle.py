@@ -841,6 +841,34 @@ class TestWiggle:
         assert f"{patch.dims[0]}=" in text
         assert f"value={format_display(y[index])}" in text
 
+    def test_1d_cursor_coordinate_precision_tracks_view_extent(
+        self, wiggle_widget, example_patch_1d
+    ):
+        """1D cursor coordinate precision should follow the visible x range."""
+        dim = example_patch_1d.dims[0]
+        count = len(example_patch_1d.get_array(dim))
+        x_values = np.linspace(12345.0, 12346.0, count)
+        patch = example_patch_1d.update_coords(**{dim: x_values})
+        wiggle_widget.set_patch(patch)
+        state = wiggle_widget._render_state
+        index = len(state.x_plot) // 3
+        x_value = float(state.x_coord[index])
+        wiggle_widget._plot_item.vb.setRange(
+            xRange=(x_value - 0.5, x_value + 0.5),
+            padding=0.0,
+        )
+
+        wiggle_widget._update_cursor_readout(
+            plot_x=float(state.x_plot[index]),
+            plot_y=float(np.asarray(patch.data)[index]),
+        )
+
+        expected = f"{x_value:.3f}".rstrip("0").rstrip(".")
+        text = wiggle_widget._cursor_label.text()
+        assert f"{state.x_dim}={expected}" in text
+        assert f"value={format_display(np.asarray(patch.data)[index])}" in text
+        assert "1.23e+04" not in text
+
     def test_time_series_mode_renders_2d_lines_colored_by_other_axis(
         self, wiggle_widget, small_patch_2d
     ):
