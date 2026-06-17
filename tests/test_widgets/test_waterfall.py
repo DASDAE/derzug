@@ -3202,6 +3202,35 @@ class TestWaterfall:
         assert axes.y_dim in text
         assert "value=" in text
 
+    def test_cursor_readout_numeric_precision_tracks_view_extent(
+        self, waterfall_widget
+    ):
+        """Cursor coordinate precision should follow the current visible range."""
+        patch = dc.get_example_patch("example_event_2")
+        count = len(patch.get_array("time"))
+        x_values = np.linspace(12345.0, 12346.0, count)
+        patch = patch.update_coords(time=x_values)
+        waterfall_widget.set_patch(patch)
+        axes = waterfall_widget._axes
+        x_index = len(axes.x_plot) // 3
+        y_index = len(axes.y_plot) // 4
+        x_value = float(axes.x_coord[x_index])
+        waterfall_widget._plot_item.vb.setRange(
+            xRange=(x_value - 0.5, x_value + 0.5),
+            yRange=(float(axes.y_plot[0]), float(axes.y_plot[-1])),
+            padding=0.0,
+        )
+
+        waterfall_widget._update_cursor_readout(
+            plot_x=float(axes.x_plot[x_index]),
+            plot_y=float(axes.y_plot[y_index]),
+        )
+
+        expected = f"{x_value:.3f}".rstrip("0").rstrip(".")
+        text = waterfall_widget._cursor_label.text()
+        assert f"{axes.x_dim}={expected}" in text
+        assert "1.23e+04" not in text
+
     def test_cursor_readout_shows_absolute_datetime_values(self, waterfall_widget):
         """Cursor readout should preserve absolute datetime text for datetime axes."""
         patch = _with_datetime_coord(dc.get_example_patch("example_event_2"), "time")

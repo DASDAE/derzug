@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from derzug.utils.plot_axes import ContextDateAxisItem
+import numpy as np
+from derzug.utils.plot_axes import ContextDateAxisItem, format_cursor_value
 
 
 def _timestamp(year: int, month: int, day: int) -> float:
@@ -48,3 +49,36 @@ class TestContextDateAxisItem:
         assert all(tick % (24 * 60 * 60) == 0 for tick in ticks)
         assert axis.utcOffset == -(60 * 60)
 
+
+class TestFormatCursorValue:
+    """Tests for cursor-specific value formatting."""
+
+    def test_float_precision_tracks_visible_span(self):
+        """Float cursor values should use the visible extent as display context."""
+        assert format_cursor_value(12345.6789, visible_span=1.0) == "12345.679"
+        assert format_cursor_value(12345.6789, visible_span=1000.0) == "12346"
+
+    def test_invalid_visible_span_uses_generic_display_format(self):
+        """Missing or invalid extent context should preserve existing formatting."""
+        assert format_cursor_value(12345.6789) == "1.23e+04"
+        assert format_cursor_value(12345.6789, visible_span=0.0) == "1.23e+04"
+        assert format_cursor_value(12345.6789, visible_span=np.nan) == "1.23e+04"
+
+    def test_datetime_precision_tracks_visible_span(self):
+        """Datetime cursor values should omit unresolvable sub-second digits."""
+        value = np.datetime64("2024-01-02T03:04:05.006789123")
+
+        assert (
+            format_cursor_value(value, visible_span=60.0) == "2024-01-02T03:04:05.006"
+        )
+        assert (
+            format_cursor_value(value, visible_span=0.001)
+            == "2024-01-02T03:04:05.006789"
+        )
+
+    def test_timedelta_precision_tracks_visible_span(self):
+        """Timedelta cursor values should use the same extent-derived quantum."""
+        value = np.timedelta64(5_006_789_123, "ns")
+
+        assert format_cursor_value(value, visible_span=60.0) == "5.01 s"
+        assert format_cursor_value(value, visible_span=0.001) == "5.006789 s"

@@ -1340,10 +1340,16 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         x_coord = self._axes.x_coord[x_index]
         y_coord = self._axes.y_coord[y_index]
         value = data[y_index, x_index]
+        view_range = self._get_view_range()
+        if view_range is None:
+            x_span = y_span = None
+        else:
+            x_span = abs(float(view_range[0][1] - view_range[0][0]))
+            y_span = abs(float(view_range[1][1] - view_range[1][0]))
         self._set_cursor_readout(
             [
-                CursorField(self._axes.x_dim, x_coord),
-                CursorField(self._axes.y_dim, y_coord),
+                CursorField(self._axes.x_dim, x_coord, x_span),
+                CursorField(self._axes.y_dim, y_coord, y_span),
                 CursorField("value", value),
             ]
         )
