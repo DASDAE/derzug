@@ -111,6 +111,32 @@ class TestPatchZugNamespace:
         widget.close()
         qapp.processEvents()
 
+    def test_waterfall_accepts_custom_window_title(self, qapp):
+        """A custom title should name the standalone Waterfall window."""
+        patch = _test_patch()
+
+        widget = ZugPatchNameSpace(patch).waterfall(
+            show=False,
+            title="Processed patch",
+        )
+
+        assert widget.windowTitle() == "Processed patch"
+        widget.close()
+        qapp.processEvents()
+
+    def test_wiggle_accepts_custom_window_title(self, qapp):
+        """A custom title should name the standalone Wiggle window."""
+        patch = _test_patch()
+
+        widget = ZugPatchNameSpace(patch).wiggle(
+            show=False,
+            title="Trace comparison",
+        )
+
+        assert widget.windowTitle() == "Trace comparison"
+        widget.close()
+        qapp.processEvents()
+
     def test_show_true_invokes_blocking_launch_path(self, monkeypatch, qapp):
         """show=True should show the widget and use the blocking close loop."""
         patch = _test_patch()

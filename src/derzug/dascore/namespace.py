@@ -111,6 +111,7 @@ def _launch_patch_widget(
     *,
     show: bool,
     block: bool,
+    title: str | None = None,
 ) -> QWidget:
     """Instantiate a DerZug widget, load a patch, and optionally show it."""
     if _NAMESPACE_IMPORT_ERROR is not None:  # pragma: no cover - compatibility guard
@@ -122,6 +123,8 @@ def _launch_patch_widget(
     widget = _track_widget(widget_cls())
     _collapse_control_area(widget)
     widget.set_patch(patch)
+    if title is not None:
+        widget.setWindowTitle(title)
     if show:
         widget.show()
         if block:
@@ -227,17 +230,31 @@ class ZugPatchNameSpace(PatchNameSpace):
 
     name = "zug"
 
-    def waterfall(self, *, show: bool = True, block: bool = True) -> Waterfall:
+    def waterfall(
+        self,
+        *,
+        show: bool = True,
+        block: bool = True,
+        title: str | None = None,
+    ) -> Waterfall:
         """Launch the DerZug waterfall viewer for this patch."""
         from derzug.widgets.waterfall import Waterfall
 
-        return _launch_patch_widget(Waterfall, self, show=show, block=block)
+        return _launch_patch_widget(
+            Waterfall, self, show=show, block=block, title=title
+        )
 
-    def wiggle(self, *, show: bool = True, block: bool = True) -> Wiggle:
+    def wiggle(
+        self,
+        *,
+        show: bool = True,
+        block: bool = True,
+        title: str | None = None,
+    ) -> Wiggle:
         """Launch the DerZug wiggle viewer for this patch."""
         from derzug.widgets.wiggle import Wiggle
 
-        return _launch_patch_widget(Wiggle, self, show=show, block=block)
+        return _launch_patch_widget(Wiggle, self, show=show, block=block, title=title)
 
     def canvas(self, *, show: bool = True, block: bool = True) -> DerZugMainWindow:
         """Launch the full DerZug canvas seeded with this patch."""
