@@ -4,6 +4,7 @@ Interactive pyqtgraph waterfall widget for DASCore patches.
 
 from __future__ import annotations
 
+import math
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -166,6 +167,23 @@ def _default_plot_dims(dims: tuple[str, ...]) -> tuple[str, str]:
     if "distance" in dims and "time" in dims:
         return "distance", "time"
     return dims[0], dims[1]
+
+
+# Statistics over patch data (default color levels, data-change detection) are
+# computed on an evenly strided subsample of at most this many samples so their
+# cost stays bounded for very large arrays. Patches at or below this size are
+# processed exactly.
+_STAT_SAMPLE_TARGET = 1_000_000
+
+
+def _strided_subsample(data: np.ndarray, target_size: int) -> np.ndarray:
+    """Return an evenly strided 2D subsample of roughly target_size elements."""
+    if data.ndim != 2 or data.size <= target_size:
+        return data
+    factor = math.sqrt(data.size / target_size)
+    step_y = max(1, min(data.shape[0], round(factor)))
+    step_x = max(1, min(data.shape[1], round(factor)))
+    return data[::step_y, ::step_x]
 
 
 class _SelectionROI(pg.ROI):
@@ -1045,7 +1063,11 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     @staticmethod
     def _compute_default_levels(display_data: np.ndarray) -> tuple[float, float] | None:
         """Return default color levels from DASCore's waterfall helper."""
-        scale = get_dascore_waterfall_scale(None, "relative", display_data)
+        # The percentile-based default scale is statistically stable on a
+        # subsample; running it on every sample costs ~1s per render for
+        # 60M-sample patches.
+        sampled = _strided_subsample(display_data, _STAT_SAMPLE_TARGET)
+        scale = get_dascore_waterfall_scale(None, "relative", sampled)
         if scale is None or len(scale) != 2:
             return None
         low, high = float(scale[0]), float(scale[1])
@@ -1127,11 +1149,18 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
             y0, y_step = self._axis_origin_and_step(y_values)
 
             with self._suspend_level_persistence():
-                self._image_item.setImage(display_data, autoLevels=True)
+                # Levels are applied explicitly below, so skip the throwaway
+                # min/max pass setImage would otherwise run over the array.
+                self._image_item.setImage(display_data, autoLevels=False)
             if self.color_limits is None:
                 self._apply_default_levels(display_data)
             else:
                 self._apply_persisted_levels()
+            if self._image_item.getLevels() is None:
+                # Degenerate data (e.g. all-NaN) yields no default levels;
+                # float images still need a valid pair to render.
+                with self._suspend_level_persistence():
+                    self._image_item.setLevels((0.0, 1.0))
             rect = QRectF(
                 x0 - (x_step / 2),
                 y0 - (y_step / 2),
@@ -2172,9 +2201,17 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
             attrs_equal = previous_patch.attrs == new_patch.attrs
         except Exception:
             attrs_equal = False
-        if attrs_equal and not np.array_equal(previous_data, new_data):
+        if not attrs_equal:
+            return False
+        # Shapes match here (equal coords imply equal shapes), so compare a
+        # strided sample instead of every element; a full comparison costs
+        # hundreds of ms for large patches. Patches differing only outside
+        # the sample keep the previous view, which is the benign outcome.
+        if previous_data.shape != new_data.shape:
             return True
-        return False
+        previous_sample = _strided_subsample(previous_data, _STAT_SAMPLE_TARGET)
+        new_sample = _strided_subsample(new_data, _STAT_SAMPLE_TARGET)
+        return not np.array_equal(previous_sample, new_sample)
 
     @staticmethod
     def _ranges_overlap(
