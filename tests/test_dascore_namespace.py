@@ -41,6 +41,17 @@ def _test_patch() -> dc.Patch:
     return dc.Patch(data=data, coords=coords, dims=("distance", "time"), attrs=attrs)
 
 
+def _spool_widgets_by_title(window) -> dict[str, Spool]:
+    """Return public Spool widgets in the current canvas keyed by node title."""
+    scheme = window.current_document().scheme()
+    widgets = {}
+    for node in scheme.nodes:
+        widget = scheme.widget_for_node(node)
+        if isinstance(widget, Spool):
+            widgets[node.title] = widget
+    return widgets
+
+
 class TestPatchZugNamespace:
     """Tests for the Patch.zug namespace."""
 
@@ -303,6 +314,45 @@ class TestSpoolZugNamespace:
 
 class TestCanvasLaunchHelpers:
     """Tests for the shared canvas launch helpers."""
+
+    def test_canvas_loads_workflow_and_injects_title_keyed_spool_inputs(
+        self, tmp_path, qapp
+    ):
+        """Live objects should seed matching Spool widgets in a loaded workflow."""
+        source_window = dz_namespace._create_main_window()
+        scheme = source_window.current_document().scheme()
+        for node in list(scheme.nodes):
+            scheme.remove_node(node)
+        description = dz_namespace._get_canvas_spool_description(source_window)
+        scheme.new_node(description, title="Raw input", position=(0, 0))
+        scheme.new_node(description, title="Processed input", position=(200, 0))
+        workflow_path = tmp_path / "two-spools.ows"
+        assert source_window.save_scheme_to(scheme, str(workflow_path))
+        source_window.hide()
+        source_window.deleteLater()
+        qapp.processEvents()
+        first = _test_patch().update_attrs(tag="first-live-input")
+        second = _test_patch().update_attrs(tag="second-live-input")
+
+        window = first.zug.canvas(
+            workflow_path,
+            show=False,
+            inputs={
+                "Raw input": first,
+                "Processed input": second,
+            },
+        )
+        qapp.processEvents()
+
+        try:
+            spools = _spool_widgets_by_title(window)
+
+            assert list(spools["Raw input"]._source_spool) == [first]
+            assert list(spools["Processed input"]._source_spool) == [second]
+        finally:
+            window.hide()
+            window.deleteLater()
+            qapp.processEvents()
 
     def test_launch_canvas_window_show_false_returns_seeded_window(self, monkeypatch):
         """show=False should return the seeded window without showing it."""
