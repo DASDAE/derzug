@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -28,6 +29,7 @@ class CursorField:
 
     name: str
     value: Any
+    visible_span: float | None = None
 
 
 def _datetime_value_to_ns(value: Any) -> np.int64:
@@ -216,15 +218,78 @@ def set_cursor_label_text(label: QLabel, fields: list[CursorField] | None) -> No
     if not fields:
         label.setText("Cursor: --")
         return
-    parts = [f"{field.name}={format_cursor_value(field.value)}" for field in fields]
+    parts = [
+        f"{field.name}={format_cursor_value(field.value, field.visible_span)}"
+        for field in fields
+    ]
     label.setText("  ".join(parts))
 
 
-def format_cursor_value(value: Any) -> str:
+def format_cursor_value(value: Any, visible_span: float | None = None) -> str:
     """Format one cursor-readout value for display."""
     from derzug.utils.display import format_display
 
+    quantum = _cursor_display_quantum(visible_span)
+    if quantum is None:
+        return format_display(value)
+
+    arr = np.asarray(value)
+    if np.issubdtype(arr.dtype, np.datetime64):
+        unit = _time_unit_for_quantum(quantum)
+        return np.datetime_as_string(
+            arr.astype(f"datetime64[{unit}]"),
+            unit=unit,
+            timezone="naive",
+        )
+    if np.issubdtype(arr.dtype, np.timedelta64):
+        seconds = float(arr.astype("timedelta64[ns]").astype(np.int64)) / 1e9
+        return _format_cursor_float(seconds, quantum, suffix=" s")
+
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float):
+        return _format_cursor_float(value, quantum)
     return format_display(value)
+
+
+def _cursor_display_quantum(visible_span: float | None) -> float | None:
+    """Return the smallest useful cursor increment for a visible extent."""
+    if visible_span is None:
+        return None
+    try:
+        span = abs(float(visible_span))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(span) or span <= 0:
+        return None
+    return span / 1000.0
+
+
+def _decimal_places_for_quantum(quantum: float) -> int:
+    """Return fixed decimal places needed to show one display quantum."""
+    return max(0, math.ceil(-math.log10(quantum)))
+
+
+def _format_cursor_float(value: float, quantum: float, suffix: str = "") -> str:
+    """Format a cursor float using fixed decimals derived from quantum."""
+    decimals = _decimal_places_for_quantum(quantum)
+    text = f"{value:.{decimals}f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if text == "-0":
+        text = "0"
+    return f"{text}{suffix}"
+
+
+def _time_unit_for_quantum(quantum_seconds: float) -> str:
+    """Return the finest datetime unit worth showing for a seconds quantum."""
+    if quantum_seconds >= 1.0:
+        return "s"
+    if quantum_seconds >= 1e-3:
+        return "ms"
+    if quantum_seconds >= 1e-6:
+        return "us"
+    return "ns"
 
 
 def nearest_axis_index(value: float, axis_values: np.ndarray) -> int:

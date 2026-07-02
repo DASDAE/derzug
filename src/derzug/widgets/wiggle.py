@@ -1036,10 +1036,16 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
             state.x_plot,
             state.x_coord,
         )
+        view_range = self._get_view_range()
+        if view_range is None:
+            x_span = y_span = None
+        else:
+            x_span = abs(float(view_range[0][1] - view_range[0][0]))
+            y_span = abs(float(view_range[1][1] - view_range[1][0]))
         self._set_cursor_readout(
             [
-                CursorField(state.x_dim, x_value),
-                CursorField("y", plot_y),
+                CursorField(state.x_dim, x_value, x_span),
+                CursorField("y", plot_y, y_span),
                 CursorField("value", value),
             ]
         )
@@ -1055,9 +1061,15 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
             state.x_plot,
             state.x_coord,
         )
+        view_range = self._get_view_range()
+        x_span = (
+            None
+            if view_range is None
+            else abs(float(view_range[0][1] - view_range[0][0]))
+        )
         self._set_cursor_readout(
             [
-                CursorField(state.x_dim, x_value),
+                CursorField(state.x_dim, x_value, x_span),
                 CursorField("value", data[sample_index]),
             ]
         )
@@ -1079,9 +1091,15 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         line_values = state.line_values[:, sample_index]
         series_offset_index = nearest_axis_index(plot_y, line_values)
         series_coord = state.series_coord[series_offset_index]
+        view_range = self._get_view_range()
+        x_span = (
+            None
+            if view_range is None
+            else abs(float(view_range[0][1] - view_range[0][0]))
+        )
         self._set_cursor_readout(
             [
-                CursorField(state.x_dim, x_value),
+                CursorField(state.x_dim, x_value, x_span),
                 CursorField(state.series_dim, series_coord),
             ]
         )
