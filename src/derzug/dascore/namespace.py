@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from AnyQt.QtCore import QEvent, QEventLoop, QObject, Qt, QTimer
@@ -205,8 +207,60 @@ def _seed_canvas_window(
     return window
 
 
+def _load_canvas_workflow_window(workflow) -> DerZugMainWindow:
+    """Create a DerZug window and load one existing Orange workflow."""
+    window = _track_widget(_create_main_window())
+    window.load_scheme(str(workflow))
+    QApplication.processEvents()
+    return window
+
+
+def _spool_widgets_by_title(window) -> dict[str, object]:
+    """Return live public Spool widgets keyed by canvas node title."""
+    from derzug.widgets.spool import Spool
+
+    document = window.current_document()
+    scheme = document.scheme()
+    widgets = {}
+    for node in scheme.nodes:
+        widget = scheme.widget_for_node(node)
+        if isinstance(widget, Spool):
+            widgets[node.title] = widget
+    return widgets
+
+
+def _inject_canvas_spool_inputs(
+    window,
+    inputs: Mapping[str, object],
+) -> None:
+    """Inject title-keyed live objects into matching Spool widgets."""
+    spools = _spool_widgets_by_title(window)
+    missing = sorted(set(inputs) - set(spools))
+    if missing:
+        available = ", ".join(sorted(spools)) or "none"
+        raise ValueError(
+            "canvas workflow has no Spool widget titled "
+            f"{missing[0]!r}; available Spool titles: {available}"
+        )
+    for title, value in inputs.items():
+        spools[title].set_canvas_source(value)
+
+
+def _seed_loaded_canvas_window(window, value) -> None:
+    """Seed a loaded workflow with the namespace value when unambiguous."""
+    spools = _spool_widgets_by_title(window)
+    if len(spools) != 1:
+        raise ValueError(
+            "canvas workflow has multiple Spool widgets; pass title-keyed "
+            "inputs={...} to choose where live objects should be injected"
+        )
+    next(iter(spools.values())).set_canvas_source(value)
+
+
 def _launch_canvas_window(
     value,
+    workflow=None,
+    inputs: Mapping[str, object] | None = None,
     *,
     show: bool,
     block: bool,
@@ -217,7 +271,19 @@ def _launch_canvas_window(
             "DerZug Patch/Spool namespaces require a dascore build with "
             "dascore.utils.namespace support."
         ) from _NAMESPACE_IMPORT_ERROR
-    window = _seed_canvas_window(value)
+    if workflow is None:
+        if inputs is not None:
+            raise ValueError(
+                "title-keyed canvas inputs require a workflow path with Spool "
+                "widgets to target"
+            )
+        window = _seed_canvas_window(value)
+    else:
+        window = _load_canvas_workflow_window(workflow)
+        if inputs is None:
+            _seed_loaded_canvas_window(window, value)
+        else:
+            _inject_canvas_spool_inputs(window, inputs)
     if show:
         window.show()
         if block:
@@ -256,9 +322,24 @@ class ZugPatchNameSpace(PatchNameSpace):
 
         return _launch_patch_widget(Wiggle, self, show=show, block=block, title=title)
 
-    def canvas(self, *, show: bool = True, block: bool = True) -> DerZugMainWindow:
+    def canvas(
+        self,
+        workflow: str | os.PathLike[str] | None = None,
+        *,
+        show: bool = True,
+        block: bool = True,
+        inputs: Mapping[str, object] | None = None,
+    ) -> DerZugMainWindow:
         """Launch the full DerZug canvas seeded with this patch."""
-        return _launch_canvas_window(self, show=show, block=block)
+        if workflow is None and inputs is None:
+            return _launch_canvas_window(self, show=show, block=block)
+        return _launch_canvas_window(
+            self,
+            Path(workflow) if workflow is not None else None,
+            inputs=inputs,
+            show=show,
+            block=block,
+        )
 
 
 class ZugSpoolNameSpace(SpoolNameSpace):
@@ -266,9 +347,24 @@ class ZugSpoolNameSpace(SpoolNameSpace):
 
     name = "zug"
 
-    def canvas(self, *, show: bool = True, block: bool = True) -> DerZugMainWindow:
+    def canvas(
+        self,
+        workflow: str | os.PathLike[str] | None = None,
+        *,
+        show: bool = True,
+        block: bool = True,
+        inputs: Mapping[str, object] | None = None,
+    ) -> DerZugMainWindow:
         """Launch the full DerZug canvas seeded with this spool."""
-        return _launch_canvas_window(self, show=show, block=block)
+        if workflow is None and inputs is None:
+            return _launch_canvas_window(self, show=show, block=block)
+        return _launch_canvas_window(
+            self,
+            Path(workflow) if workflow is not None else None,
+            inputs=inputs,
+            show=show,
+            block=block,
+        )
 
 
 __all__ = [
