@@ -4,6 +4,8 @@ Tests for the Waterfall widget.
 
 from __future__ import annotations
 
+import warnings
+
 import dascore as dc
 import numpy as np
 import pyqtgraph as pg
@@ -21,7 +23,12 @@ from derzug.utils.testing import (
     widget_context,
 )
 from derzug.widgets.selection import PatchSelectionBasis
-from derzug.widgets.waterfall import Waterfall, _format_coord_value
+from derzug.widgets.waterfall import (
+    _STAT_SAMPLE_TARGET,
+    Waterfall,
+    _format_coord_value,
+    _strided_subsample,
+)
 
 
 def _unrenderable_patch() -> dc.Patch:
@@ -5012,6 +5019,94 @@ class TestFormatCoordValue:
     def test_timedelta_formats_without_crashing(self):
         """Timedelta-like values should render as strings for slider labels."""
         assert _format_coord_value(np.timedelta64(5, "s")) == "5 seconds"
+
+
+class TestStridedSubsample:
+    """Unit tests for the _strided_subsample helper."""
+
+    def test_small_arrays_returned_unchanged(self):
+        """Arrays at or below the target size pass through untouched."""
+        data = np.arange(12.0).reshape(3, 4)
+        assert _strided_subsample(data, 100) is data
+
+    def test_large_arrays_reduced_toward_target(self):
+        """Oversized arrays shrink to roughly the requested sample count."""
+        data = np.zeros((400, 500))
+        sampled = _strided_subsample(data, 10_000)
+        assert sampled.ndim == 2
+        assert sampled.size < data.size
+        # Rounding of per-axis strides keeps the result within a small
+        # constant factor of the requested target.
+        assert 10_000 / 4 <= sampled.size <= 10_000 * 4
+
+    def test_short_axis_keeps_at_least_one_row(self):
+        """A very short axis still contributes at least one sample row."""
+        data = np.zeros((3, 200_000))
+        sampled = _strided_subsample(data, 10_000)
+        assert sampled.shape[0] >= 1
+        assert sampled.size < data.size
+
+
+class TestComputeDefaultLevels:
+    """Unit tests for Waterfall._compute_default_levels."""
+
+    def test_small_data_matches_full_dascore_scale(self):
+        """Data below the sample target reproduces the exact dascore levels."""
+        rng = np.random.default_rng(0)
+        data = rng.normal(size=(200, 300))
+        levels = Waterfall._compute_default_levels(data)
+        expected = get_dascore_waterfall_scale(None, "relative", data)
+        assert levels == pytest.approx(tuple(expected))
+
+    def test_large_data_levels_close_to_full_computation(self):
+        """Subsampled levels stay close to the full-array computation."""
+        rng = np.random.default_rng(1)
+        data = rng.normal(size=(1500, 1500))
+        assert data.size > _STAT_SAMPLE_TARGET
+        levels = Waterfall._compute_default_levels(data)
+        expected = get_dascore_waterfall_scale(None, "relative", data)
+        assert levels == pytest.approx(tuple(expected), rel=0.05)
+
+    def test_all_nan_data_returns_none(self):
+        """Degenerate all-NaN data cannot produce finite default levels."""
+        data = np.full((8, 8), np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            assert Waterfall._compute_default_levels(data) is None
+
+
+class TestShouldResetViewForNewPatch:
+    """Unit tests for Waterfall._should_reset_view_for_new_patch."""
+
+    def test_identical_data_copy_does_not_reset(self):
+        """A byte-identical replacement patch keeps the previous view."""
+        patch = dc.get_example_patch("example_event_2")
+        copied = patch.update(data=np.asarray(patch.data).copy())
+        assert Waterfall._should_reset_view_for_new_patch(patch, copied) is False
+
+    def test_changed_data_with_equal_attrs_resets(self):
+        """Same coords/attrs but different data should reset the view."""
+        patch = dc.get_example_patch("example_event_2")
+        scaled = patch.update(data=np.asarray(patch.data) * 100.0)
+        assert Waterfall._should_reset_view_for_new_patch(patch, scaled) is True
+
+    def test_large_patch_data_change_detected_via_sample(self):
+        """Data changes are still detected above the strided-sample target."""
+        rng = np.random.default_rng(2)
+        data = rng.normal(size=(1200, 1000))
+        assert data.size > _STAT_SAMPLE_TARGET
+        patch = dc.Patch(
+            data=data,
+            coords={
+                "distance": np.arange(data.shape[0]),
+                "time": np.arange(data.shape[1]),
+            },
+            dims=("distance", "time"),
+        )
+        scaled = patch.update(data=data * 2.0)
+        assert Waterfall._should_reset_view_for_new_patch(patch, scaled) is True
+        copied = patch.update(data=data.copy())
+        assert Waterfall._should_reset_view_for_new_patch(patch, copied) is False
 
 
 class TestWaterfallDefaults(TestPatchInputStateDefaults):

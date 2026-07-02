@@ -47,4 +47,3 @@ class TestContextDateAxisItem:
         assert ticks
         assert all(tick % (24 * 60 * 60) == 0 for tick in ticks)
         assert axis.utcOffset == -(60 * 60)
-
