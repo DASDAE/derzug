@@ -45,6 +45,13 @@ _PENDING = {
 }
 
 
+# Widgets with presentation state that must declare a ``view_model``.
+_VISUAL_WIDGETS = {"Waterfall", "Wiggle", "PatchViewer", "Spool"}
+
+# Visual widgets not yet given a view model. Remove each as it lands.
+_VIEW_PENDING = {"Waterfall", "Wiggle", "PatchViewer", "Spool"}
+
+
 def _all_widget_classes() -> dict[str, type]:
     """Return every registered concrete ZugWidget class by name."""
     found: dict[str, type] = {}
@@ -89,3 +96,24 @@ def test_filter_is_covered():
     """Filter is the reference implementation and must stay covered."""
     classes = _all_widget_classes()
     assert getattr(classes["Filter"], "params_model", None) is not None
+
+
+def test_view_model_coverage():
+    """Visual widgets declare a view_model; processing widgets do not."""
+    classes = _all_widget_classes()
+    has_view = {
+        name
+        for name, cls in classes.items()
+        if getattr(cls, "view_model", None) is not None
+    }
+
+    # Non-visual widgets must not carry a view model.
+    stray = has_view - _VISUAL_WIDGETS
+    assert not stray, f"non-visual widgets declare a view_model: {sorted(stray)}"
+
+    # Visual widgets either have a view model or are tracked as pending.
+    missing = _VISUAL_WIDGETS - has_view
+    assert missing == _VIEW_PENDING, (
+        f"view-model coverage changed. covered: {sorted(_VIEW_PENDING - missing)}; "
+        f"still missing: {sorted(missing)}. Update _VIEW_PENDING."
+    )

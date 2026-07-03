@@ -28,6 +28,7 @@ from AnyQt.QtWidgets import (
     QWidget,
 )
 from Orange.widgets.widget import OWWidget
+from pydantic import TypeAdapter
 
 from derzug.core.services import get_app_shell_service
 from derzug.core.widget_execution import WorkflowExecutionMixin
@@ -95,6 +96,11 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     #: parameters, the authoritative typed schema for ``get_params`` /
     #: ``apply_params``. ``None`` until the widget is migrated to a params model.
     params_model: ClassVar[object | None] = None
+
+    #: Pydantic model describing this widget's presentation-only state
+    #: (colormap, view range, ...), read/written via ``get_view`` /
+    #: ``apply_view``. ``None`` for widgets with no display state.
+    view_model: ClassVar[object | None] = None
 
     _FOCUS_EXCLUDE = (
         QLineEdit,
@@ -727,6 +733,60 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         if run:
             self.run()
         return prior
+
+    def _params_field_map(self) -> dict[str, str]:
+        """Return ``{model_field: setting_name}`` backing ``params_model``.
+
+        The generic ``get_params``/``apply_params`` use this for flat models.
+        Widgets with a discriminated-union model override those methods instead.
+        """
+        return {}
+
+    def _view_field_map(self) -> dict[str, str]:
+        """Return ``{model_field: setting_name}`` backing ``view_model``."""
+        return {}
+
+    def _read_model(self, model, field_map: dict[str, str], label: str):
+        """Build a typed model instance from the widget's current settings."""
+        if model is None:
+            raise NotImplementedError(f"{type(self).__name__} has no {label}")
+        data = {field: getattr(self, setting) for field, setting in field_map.items()}
+        return TypeAdapter(model).validate_python(data)
+
+    def _write_model(
+        self, value, model, field_map: dict[str, str], label: str, *, run: bool
+    ) -> dict[str, object]:
+        """Apply a typed model (or its dict form) back onto the widget settings."""
+        if model is None:
+            raise NotImplementedError(f"{type(self).__name__} has no {label}")
+        if isinstance(value, dict):
+            value = TypeAdapter(model).validate_python(value)
+        settings = {
+            setting: getattr(value, field) for field, setting in field_map.items()
+        }
+        return self.apply_settings(settings, run=run)
+
+    def get_params(self):
+        """Return this widget's parameters as its typed ``params_model``."""
+        return self._read_model(
+            self.params_model, self._params_field_map(), "params_model"
+        )
+
+    def apply_params(self, params, *, run: bool = True) -> dict[str, object]:
+        """Apply a ``params_model`` (or dict); returns prior settings (for undo)."""
+        return self._write_model(
+            params, self.params_model, self._params_field_map(), "params_model", run=run
+        )
+
+    def get_view(self):
+        """Return this widget's presentation state as its typed ``view_model``."""
+        return self._read_model(self.view_model, self._view_field_map(), "view_model")
+
+    def apply_view(self, view, *, run: bool = False) -> dict[str, object]:
+        """Apply a ``view_model`` (or dict); returns prior settings."""
+        return self._write_model(
+            view, self.view_model, self._view_field_map(), "view_model", run=run
+        )
 
     def _build_execution_request(self) -> WidgetExecutionRequest | None:
         """Return a worker-safe execution request or None for an empty result."""
