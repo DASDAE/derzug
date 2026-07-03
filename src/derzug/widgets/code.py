@@ -27,6 +27,7 @@ from Orange.widgets.data.utils.pythoneditor.editor import PythonEditor
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.settings import Setting
@@ -106,10 +107,17 @@ def _create_editor(parent: QWidget) -> QPlainTextEdit:
         return _FallbackPythonEditor(parent)
 
 
+class CodeParams(BaseModel):
+    """Parameters for the Code widget."""
+
+    script_text: str = ""
+
+
 class Code(ZugWidget):
     """Run custom Python code against an input patch."""
 
     name = "Code"
+    params_model = CodeParams
     description = "Run custom Python code on a patch"
     icon = "icons/PythonScript.svg"
     category = "Processing"

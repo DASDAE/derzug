@@ -17,7 +17,7 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.models.annotations import (
@@ -164,10 +164,26 @@ class TableToAnnotationTask(Task):
         return AnnotationSet(dims=dims, annotations=tuple(annotations))
 
 
+class Table2AnnotationParams(BaseModel):
+    """Parameters for the Table to Annotations widget."""
+
+    geometry_type: int = 0
+    line_axis_dim: str = ""
+    dims_text: str = ""
+    col_map: dict = Field(default_factory=dict)
+    semantic_type_text: str = "generic"
+    notes_col: str = ""
+    label_mode: int = 0
+    fixed_label: str = ""
+    label_col: str = ""
+    tags_col: str = ""
+
+
 class Table2Annotation(ZugWidget):
     """Orange widget that converts each DataFrame row into an Annotation."""
 
     name = "Table to Annotations"
+    params_model = Table2AnnotationParams
     description = (
         "Convert rows of a DataFrame into an AnnotationSet. "
         "Each row becomes one annotation (dot or line)."

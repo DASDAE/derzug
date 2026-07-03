@@ -11,6 +11,7 @@ import pandas as pd
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.models.annotations import AnnotationSet, PointGeometry
@@ -53,10 +54,17 @@ class AnnotationSetToDataFrameTask(Task):
         return pd.DataFrame(rows)
 
 
+class Annotation2DataFrameParams(BaseModel):
+    """Parameters for the Annotations to DataFrame widget."""
+
+    include_properties: bool = False
+
+
 class Annotation2DataFrame(ZugWidget):
     """Orange widget that extracts point annotations into a DataFrame."""
 
     name = "Annotations to DataFrame"
+    params_model = Annotation2DataFrameParams
     description = "Extract point annotations from an AnnotationSet into a DataFrame."
     icon = "icons/Annotation2DataFrame.svg"
     category = "Table"

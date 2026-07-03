@@ -25,6 +25,7 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Output
 from Orange.widgets.utils.tableview import TableView
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.settings import Setting
@@ -217,10 +218,19 @@ def _cell_alignment(value) -> Qt.AlignmentFlag:
     return Qt.AlignLeft | Qt.AlignVCenter
 
 
+class DataFrameLoaderParams(BaseModel):
+    """Parameters for the DataFrame Loader widget."""
+
+    file_path: str = ""
+    format_name: str = "Auto"
+    table_name: str = ""
+
+
 class DataFrameLoader(ZugWidget):
     """Orange widget for loading a pandas DataFrame from a file on disk."""
 
     name = "DataFrame Loader"
+    params_model = DataFrameLoaderParams
     want_control_area = False
     description = (
         "Load a tabular DataFrame from a file. "

@@ -20,6 +20,7 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
@@ -161,10 +162,19 @@ class _AnnotationsTableModel(QAbstractTableModel):
         return renamed
 
 
+class AnnotationsParams(BaseModel):
+    """Parameters for the Annotations store widget."""
+
+    store_directory: str = ""
+    stored_entries: list = Field(default_factory=list)
+    selected_entry_id: str = ""
+
+
 class Annotations(ZugWidget):
     """Store multiple annotation sets in memory or on disk."""
 
     name = "Annotations"
+    params_model = AnnotationsParams
     description = "Store and persist annotation sets"
     icon = "icons/Annotations.svg"
     category = "IO"

@@ -22,6 +22,7 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.settings import Setting
@@ -131,10 +132,18 @@ class _PreparedAudio:
     sample_count: int
 
 
+class PlayAudioParams(BaseModel):
+    """Parameters for the PlayAudio widget."""
+
+    time_scale: float = 1.0
+    volume_percent: int = 100
+
+
 class PlayAudio(ZugWidget):
     """Play 1D DAS patches as audio with a configurable time scale."""
 
     name = "PlayAudio"
+    params_model = PlayAudioParams
     description = "Play a 1D time patch as audio"
     icon = "icons/PlayAudio.svg"
     category = "Visualize"
