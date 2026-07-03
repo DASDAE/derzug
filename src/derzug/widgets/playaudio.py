@@ -359,6 +359,13 @@ class PlayAudio(ZugWidget):
         finally:
             self._syncing_time_scale = False
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "time_scale": self._time_scale_spin,
+            "volume_percent": self._volume_slider,
+        }
+
     def _on_time_scale_changed(self, value: float) -> None:
         """Persist user-selected time-scale changes and refresh readouts."""
         if self._syncing_time_scale:

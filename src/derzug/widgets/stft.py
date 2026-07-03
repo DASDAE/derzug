@@ -192,6 +192,10 @@ class Stft(PatchDimWidget):
         """Route worker failures to the transform-specific banner."""
         self._show_exception("transform_failed", exc)
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {"selected_dim": self._dim_combo}
+
     def get_task(self) -> Task:
         """Return the current STFT operation as a workflow task."""
         return PatchConfiguredMethodTask(

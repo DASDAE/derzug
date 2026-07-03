@@ -195,6 +195,16 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
         if self.uses_dim:
             self._refresh_dims()
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map each option setting (and the dim chooser) to its control."""
+        controls: dict[str, object] = {
+            **self._option_combos,
+            **self._option_spins,
+        }
+        if self.uses_dim and hasattr(self, "_dim_combo"):
+            controls["selected_dim"] = self._dim_combo
+        return controls
+
     def _on_dim_changed(self, value: str) -> None:
         """Persist the selected dimension and rerun."""
         self.selected_dim = value

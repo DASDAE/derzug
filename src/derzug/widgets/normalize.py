@@ -147,6 +147,14 @@ class Normalize(PatchDimWidget):
         """Route worker failures to the normalize-specific banner."""
         self._show_exception("operation_failed", exc)
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "operation": self._operation_combo,
+            "selected_dim": self._dim_combo,
+            "norm": self._norm_combo,
+        }
+
     def get_task(self) -> Task:
         """Return the current normalize/standardize operation as a workflow task."""
         operation = self._coerce_operation()

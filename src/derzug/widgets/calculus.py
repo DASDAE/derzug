@@ -155,6 +155,15 @@ class Calculus(PatchDimWidget):
         self._stack.setCurrentIndex(0)
         return self.transform
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "transform": self._transform_combo,
+            "selected_dim": self._dim_combo,
+            "order": self._order_spin,
+            "step": self._step_spin,
+        }
+
     def get_task(self) -> Task:
         """Return the current calculus operation as a workflow task."""
         transform = self._coerce_transform()

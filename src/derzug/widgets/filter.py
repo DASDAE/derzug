@@ -838,6 +838,13 @@ class Filter(PatchDimWidget):
     def _on_result(self, result) -> None:
         self.Outputs.patch.send(result)
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "selected_filter": self._filter_combo,
+            "selected_dim": self._dim_combo,
+        }
+
     def get_task(self) -> Task:
         """Return the current filter semantics as a workflow task."""
         task = self._validated_task()

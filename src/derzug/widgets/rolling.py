@@ -177,6 +177,13 @@ class Rolling(PatchDimWidget):
             aggregation=aggregation,
         )
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "selected_dim": self._dim_combo,
+            "aggregation": self._agg_combo,
+        }
+
     def get_task(self) -> Task:
         """Return the current rolling aggregation as a workflow task."""
         return PatchRollingTask(

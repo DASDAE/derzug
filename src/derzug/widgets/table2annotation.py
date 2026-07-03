@@ -365,6 +365,16 @@ class Table2Annotation(ZugWidget):
             output_names=("annotation_set",),
         )
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "line_axis_dim": self._line_axis_combo,
+            "notes_col": self._notes_col_combo,
+            "fixed_label": self._fixed_label_combo,
+            "label_col": self._label_col_combo,
+            "tags_col": self._tags_col_combo,
+        }
+
     def get_task(self) -> Task:
         """Return the configured table-to-annotation task."""
         return TableToAnnotationTask(

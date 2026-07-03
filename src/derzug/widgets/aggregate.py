@@ -340,6 +340,15 @@ class Aggregate(ZugWidget):
             output_names=("patch",),
         )
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "selected_dim": self._dim_combo,
+            "method": self._method_combo,
+            "transform_dim": self._transform_dim_combo,
+            "dim_reduce": self._dim_reduce_combo,
+        }
+
     def get_task(self) -> Task:
         """Return the configured aggregate task."""
         workflow_obj = self._validated_task()

@@ -165,6 +165,10 @@ class UFuncBinary(ZugWidget):
             output_names=("result",),
         )
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {"selected_op": self._op_combo}
+
     def get_task(self) -> Task:
         """Return the configured binary ufunc task."""
         self._get_selected_ufunc()

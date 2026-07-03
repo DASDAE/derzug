@@ -239,6 +239,14 @@ class Resample(PatchDimWidget):
             method_kwargs={"filter_type": filter_type},
         )
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "selected_dim": self._dim_combo,
+            "decimate_filter_type": self._decimate_filter_combo,
+            "resample_interp_kind": self._interp_combo,
+        }
+
     def get_task(self) -> Task:
         """Return the current decimate/resample operation as a workflow task."""
         dim = self._get_dim() or self.selected_dim

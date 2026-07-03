@@ -411,6 +411,13 @@ class DataFrameLoader(ZugWidget):
         """Apply one completed dataframe load result."""
         self._set_output(result)
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "format_name": self.format_combo,
+            "table_name": self.table_combo,
+        }
+
     def get_task(self) -> Task:
         """Return the current bound-source workflow semantics."""
         return DataFrameLoaderTask(

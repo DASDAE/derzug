@@ -240,6 +240,15 @@ class Fourier(PatchDimWidget):
         """Route worker failures to the transform-specific banner."""
         self._show_exception("transform_failed", exc)
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "transform": self._transform_combo,
+            "selected_dim": self._dim_combo,
+            "real_mode": self._real_combo,
+            "pad": self._pad_checkbox,
+        }
+
     def get_task(self) -> Task:
         """Return the current Fourier operation as a workflow task."""
         transform = self._coerce_transform()

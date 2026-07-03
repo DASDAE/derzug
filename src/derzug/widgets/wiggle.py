@@ -171,6 +171,15 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
 
         patch = Output("Patch", dc.Patch, doc="Patch passed through unchanged")
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "mode": self._mode_combo,
+            "selected_x_dim": self._x_axis_combo,
+            "selected_trace_dim": self._trace_axis_combo,
+            "colormap": self._cmap_combo,
+        }
+
     def get_task(self) -> Task:
         """Return the compiled patch semantics for the widget."""
         return PatchPassThroughTask()

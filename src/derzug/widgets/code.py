@@ -229,6 +229,10 @@ class Code(ZugWidget):
         else:
             self._status_label.setText("Run failed")
 
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {"script_text": self._editor}
+
     def _on_editor_text_changed(self) -> None:
         """Persist editor text and disable sticky auto-run after user edits."""
         self.script_text = self._editor.toPlainText()

@@ -7,6 +7,8 @@ from __future__ import annotations
 from AnyQt.QtCore import QPoint, Qt, QTimer
 from AnyQt.QtGui import QKeyEvent, QKeySequence, QShortcut, QShowEvent
 from AnyQt.QtWidgets import (
+    QAbstractButton,
+    QAbstractSlider,
     QAbstractSpinBox,
     QAction,
     QApplication,
@@ -76,6 +78,15 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     into settings immediately before execution/export, and
     ``_rebind_dynamic_controls()`` rebuilds option-dependent controls after new
     input metadata arrives without silently discarding saved values.
+
+    Setting parameters from code (Conductor, tests, scripts) goes through the
+    single unified entry point ``apply_settings(mapping)`` — never assign
+    ``Setting`` attributes or drive Qt controls directly, as those skip control
+    sync and are silently reverted by widgets that pull control state at run
+    time. New widgets only need to declare ``_settings_control_map()`` (setting
+    name -> control) so the default ``_apply_settings_to_controls()`` keeps the
+    UI in sync; the base handles combos, spin boxes, sliders, checkboxes, and
+    text edits.
     """
 
     _FOCUS_EXCLUDE = (
@@ -554,9 +565,22 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     def _apply_settings_to_controls(self) -> None:
         """Hydrate visible controls from persisted settings.
 
-        Override in widgets whose Qt controls need an explicit restore pass after
-        ``Setting`` values have been loaded.
+        The default hydrates each control declared by
+        ``_settings_control_map()``. Widgets whose controls do not map one-to-one
+        to a ``Setting`` (stacked pages, dynamic rows, plot/selection state)
+        override this and hydrate them explicitly.
         """
+        for name, control in self._settings_control_map().items():
+            self._set_control_value(control, getattr(self, name))
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Return ``{setting_name: control}`` for settings-backed controls.
+
+        Override to declare which visible control backs each ``Setting`` so the
+        base ``_apply_settings_to_controls()`` can keep them in sync. Only simple
+        controls (combo, spin box, checkbox, line edit) need appear here.
+        """
+        return {}
 
     def _sync_settings_from_controls(self) -> None:
         """Persist current control values back into widget settings.
@@ -596,6 +620,82 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         else:
             widget.setCurrentIndex(-1)
         widget.blockSignals(False)
+
+    @classmethod
+    def _set_control_value(cls, control: object, value: object) -> None:
+        """Assign one control's value from a Setting, without firing handlers."""
+        if isinstance(control, QComboBox):
+            cls._set_combo_value(control, value)
+        elif isinstance(control, QAbstractSpinBox):
+            control.blockSignals(True)
+            try:
+                control.setValue(value)
+            except (TypeError, ValueError):
+                pass
+            control.blockSignals(False)
+        elif isinstance(control, QAbstractSlider):
+            control.blockSignals(True)
+            try:
+                control.setValue(int(value))
+            except (TypeError, ValueError):
+                pass
+            control.blockSignals(False)
+        elif isinstance(control, QAbstractButton):
+            cls._set_checkbox_value(control, value)
+        elif isinstance(control, QLineEdit):
+            cls._set_line_edit_value(control, value)
+        elif isinstance(control, QPlainTextEdit | QTextEdit):
+            control.blockSignals(True)
+            control.setPlainText("" if value is None else str(value))
+            control.blockSignals(False)
+
+    @classmethod
+    def _is_setting(cls, name: str) -> bool:
+        """Return True when ``name`` is a declared ``Setting`` on this widget."""
+        from orangewidget.settings import Setting
+
+        return any(
+            isinstance(klass.__dict__.get(name), Setting) for klass in cls.__mro__
+        )
+
+    def apply_settings(
+        self, values: dict[str, object], *, run: bool = True
+    ) -> dict[str, object]:
+        """Apply one or more ``Setting`` values programmatically and re-run.
+
+        This is the single supported way to set a widget's parameters from code
+        (the Conductor, tests, scripts): it updates the ``Setting`` values,
+        hydrates the visible controls via ``_apply_settings_to_controls()``, and
+        re-runs unless ``run=False``. Prefer this over assigning ``Setting``
+        attributes or driving Qt controls directly — those skip control-sync and,
+        for widgets that pull control state back at run time, are silently
+        reverted.
+
+        Parameters
+        ----------
+        values
+            Mapping of ``Setting`` name to new value.
+        run
+            When True (default), re-run the widget after applying the values.
+
+        Returns
+        -------
+        dict
+            The prior values for each applied setting, so the change can be
+            reverted (e.g. wrapped in a canvas undo command).
+        """
+        unknown = sorted(name for name in values if not self._is_setting(name))
+        if unknown:
+            raise KeyError(
+                f"{type(self).__name__} has no setting(s): {', '.join(unknown)}"
+            )
+        prior = {name: getattr(self, name) for name in values}
+        for name, value in values.items():
+            setattr(self, name, value)
+        self._apply_settings_to_controls()
+        if run:
+            self.run()
+        return prior
 
     def _build_execution_request(self) -> WidgetExecutionRequest | None:
         """Return a worker-safe execution request or None for an empty result."""
