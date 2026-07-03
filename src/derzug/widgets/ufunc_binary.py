@@ -12,6 +12,7 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.settings import Setting
@@ -35,10 +36,17 @@ class UFuncBinaryTask(Task):
         return ufunc(x, y)
 
 
+class UFuncBinaryParams(BaseModel):
+    """Parameters for the binary UFunc operator."""
+
+    selected_op: str = "x+y"
+
+
 class UFuncBinary(ZugWidget):
     """Apply a selected binary NumPy ufunc to two generic inputs."""
 
     name = "UFuncBinary"
+    params_model = UFuncBinaryParams
     description = "Apply selected NumPy ufunc to x and y inputs"
     icon = "icons/UFunc.svg"
     category = "Processing"

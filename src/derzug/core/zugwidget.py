@@ -737,10 +737,15 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     def _params_field_map(self) -> dict[str, str]:
         """Return ``{model_field: setting_name}`` backing ``params_model``.
 
-        The generic ``get_params``/``apply_params`` use this for flat models.
-        Widgets with a discriminated-union model override those methods instead.
+        The default maps each model field to a same-named ``Setting``, so a
+        widget whose model fields match its setting names only needs to declare
+        ``params_model``. Override to rename (e.g. ``dim`` -> ``selected_dim``);
+        discriminated-union widgets override ``get_params``/``apply_params``.
         """
-        return {}
+        fields = getattr(self.params_model, "model_fields", None)
+        if not fields:
+            return {}
+        return {name: name for name in fields if self._is_setting(name)}
 
     def _view_field_map(self) -> dict[str, str]:
         """Return ``{model_field: setting_name}`` backing ``view_model``."""

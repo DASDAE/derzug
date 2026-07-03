@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.settings import Setting
@@ -76,10 +77,32 @@ class AggregateTask(Task):
         return patch.aggregate(dim=dim, method=self.method, dim_reduce=self.dim_reduce)
 
 
+class AggregateParams(BaseModel):
+    """Parameters for the Aggregate widget."""
+
+    selected_dim: str = ""
+    transform_dim: str = ""
+    method: Literal[
+        "first",
+        "last",
+        "max",
+        "mean",
+        "median",
+        "min",
+        "phase_weighted_stack",
+        "std",
+        "sum",
+    ] = "mean"
+    dim_reduce: Literal["empty", "squeeze", "mean", "min", "max", "first", "last"] = (
+        "empty"
+    )
+
+
 class Aggregate(ZugWidget):
     """Apply DASCore aggregate reduction to an input patch."""
 
     name = "Aggregate"
+    params_model = AggregateParams
     description = "Apply DASCore aggregate reduction to a patch"
     icon = "icons/AggregateColumns.svg"
     category = "Processing"

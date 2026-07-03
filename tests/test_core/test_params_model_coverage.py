@@ -19,7 +19,6 @@ from derzug.utils.testing import widget_context
 
 # Widgets not yet migrated to a pydantic params model. Remove each as it lands.
 _PENDING = {
-    "Aggregate",
     "Annotation2DataFrame",
     "Annotations",
     "Calculus",
@@ -28,7 +27,6 @@ _PENDING = {
     "DataFrameLoader",
     "FBE",
     "Fourier",
-    "Normalize",
     "PatchViewer",
     "PlayAudio",
     "Resample",
@@ -37,7 +35,6 @@ _PENDING = {
     "Spool",
     "Stft",
     "Table2Annotation",
-    "UFuncBinary",
     "Waterfall",
     "Wiggle",
 }

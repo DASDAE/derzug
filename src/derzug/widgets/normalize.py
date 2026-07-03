@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QLabel, QStackedWidget, QVBoxLayout, QWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.settings import Setting
@@ -16,10 +17,19 @@ from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
+class NormalizeParams(BaseModel):
+    """Parameters for the Normalize widget."""
+
+    operation: Literal["normalize", "standardize"] = "normalize"
+    selected_dim: str = ""
+    norm: Literal["l1", "l2", "max", "bit"] = "l2"
+
+
 class Normalize(PatchDimWidget):
     """Apply DASCore normalize and standardize operations to a patch."""
 
     name = "Normalize"
+    params_model = NormalizeParams
     description = "Apply DASCore normalize or standardize to a patch"
     icon = "icons/Normalize.svg"
     category = "Processing"
