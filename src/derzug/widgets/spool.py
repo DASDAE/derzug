@@ -118,11 +118,6 @@ def _format_table_header(name: str) -> str:
     return name.replace("_", " ").title()
 
 
-def _format_table_value(value: Any) -> str:
-    """Return the display text for one table cell."""
-    return format_display(value)
-
-
 def _table_sort_value(value: Any) -> Any:
     """Return a stable sort value separate from the display string."""
     if value is None:
@@ -194,7 +189,7 @@ class _SpoolContentsTableModel(QAbstractTableModel):
         source_row = self._row_order[row]
         value = self._display_df.iat[source_row, col]
         if role == Qt.ItemDataRole.DisplayRole:
-            return _format_table_value(value)
+            return format_display(value)
         if role == Qt.ItemDataRole.UserRole:
             return _table_sort_value(value)
         if role == Qt.ItemDataRole.TextAlignmentRole:

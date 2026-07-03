@@ -23,6 +23,7 @@ from Orange.widgets import gui
 
 from derzug.models.selection import SelectParams
 from derzug.utils.display import format_display
+from derzug.utils.misc import ordered_pair
 from derzug.utils.parsing import parse_coord_text_value
 from derzug.utils.spool import normalize_dims_value
 
@@ -36,14 +37,6 @@ def _values_equal(left: Any, right: Any) -> bool:
     if isinstance(result, np.ndarray):
         return bool(result.all())
     return bool(result)
-
-
-def _ordered_pair(first: Any, second: Any) -> tuple[Any, Any]:
-    """Return a comparable pair in ascending order when possible."""
-    try:
-        return (first, second) if first <= second else (second, first)
-    except Exception:
-        return first, second
 
 
 def _coerce_python_scalar(value: Any) -> Any:
@@ -60,7 +53,7 @@ def _bound_from_coord_array(values: np.ndarray) -> tuple[Any, Any]:
         return None, None
     if arr.size == 1:
         return arr[0], arr[0]
-    return _ordered_pair(arr[0], arr[-1])
+    return ordered_pair(arr[0], arr[-1])
 
 
 def _coord_delta(start: Any, value: Any) -> Any:
@@ -158,11 +151,6 @@ def _sample_index_to_coord(values: np.ndarray, sample_index: Any) -> Any:
     return arr[idx]
 
 
-def _format_coord_value(value: Any) -> str:
-    """Format a selection value for a line edit."""
-    return format_display(value)
-
-
 def _text_matches_display_value(text: str, sample: Any, value: Any) -> bool:
     """Return True when line-edit text already represents the target value."""
     stripped = text.strip()
@@ -225,8 +213,8 @@ def _ranges_overlap(
     """Return True when two ordered scalar ranges overlap."""
     if first is None or second is None:
         return False
-    first_low, first_high = _ordered_pair(*first)
-    second_low, second_high = _ordered_pair(*second)
+    first_low, first_high = ordered_pair(*first)
+    second_low, second_high = ordered_pair(*second)
     try:
         return bool(first_low <= second_high and second_low <= first_high)
     except Exception:
@@ -447,8 +435,8 @@ class SelectionState:
             extent = self.patch.extents.get(dim)
             if extent is None:
                 continue
-            low, high = _ordered_pair(*current)
-            full_low, full_high = _ordered_pair(*extent)
+            low, high = ordered_pair(*current)
+            full_low, full_high = ordered_pair(*extent)
             if _values_equal(low, full_low) and _values_equal(high, full_high):
                 continue
             kwargs[dim] = (_coerce_python_scalar(low), _coerce_python_scalar(high))
@@ -490,7 +478,7 @@ class SelectionState:
         if self.patch_source is None or dim not in self.patch.ranges:
             return None
         low, high = self.patch.ranges[dim]
-        return _ordered_pair(
+        return ordered_pair(
             self._basis_to_absolute_value(self.patch_source, dim, low),
             self._basis_to_absolute_value(self.patch_source, dim, high),
         )
@@ -514,7 +502,7 @@ class SelectionState:
 
         previous_ranges = dict(self.patch.ranges)
         absolute_ranges = {
-            dim: _ordered_pair(
+            dim: ordered_pair(
                 self._basis_to_absolute_value(patch, dim, current[0], previous_basis),
                 self._basis_to_absolute_value(patch, dim, current[1], previous_basis),
             )
@@ -522,7 +510,7 @@ class SelectionState:
         }
         extents = self._patch_extents_in_basis(patch, basis)
         ranges = {
-            dim: _ordered_pair(
+            dim: ordered_pair(
                 self._absolute_to_basis_value(patch, dim, current[0], basis),
                 self._absolute_to_basis_value(patch, dim, current[1], basis),
             )
@@ -579,7 +567,7 @@ class SelectionState:
                 extents[dim] = absolute
                 continue
             if basis is PatchSelectionBasis.RELATIVE:
-                extents[dim] = _ordered_pair(
+                extents[dim] = ordered_pair(
                     self._absolute_to_basis_value(patch, dim, absolute[0], basis),
                     self._absolute_to_basis_value(patch, dim, absolute[1], basis),
                 )
@@ -643,14 +631,14 @@ class SelectionState:
         """Update one patch dimension range."""
         if dim not in self.patch.ranges:
             return
-        self.patch.ranges[dim] = _ordered_pair(low, high)
+        self.patch.ranges[dim] = ordered_pair(low, high)
 
     def update_patch_range_absolute(self, dim: str, low: Any, high: Any) -> None:
         """Update one patch dimension range from absolute coordinate values."""
         if self.patch_source is None or dim not in self.patch.ranges:
             return
-        low_value, high_value = _ordered_pair(low, high)
-        self.patch.ranges[dim] = _ordered_pair(
+        low_value, high_value = ordered_pair(low, high)
+        self.patch.ranges[dim] = ordered_pair(
             self._absolute_to_basis_value(self.patch_source, dim, low_value),
             self._absolute_to_basis_value(self.patch_source, dim, high_value),
         )
@@ -661,12 +649,12 @@ class SelectionState:
         """Update one patch dimension range from ROI-driven absolute coordinates."""
         if self.patch_source is None or dim not in self.patch.ranges:
             return
-        low_value, high_value = _ordered_pair(low, high)
+        low_value, high_value = ordered_pair(low, high)
         converted_low = self._absolute_to_basis_value(self.patch_source, dim, low_value)
         converted_high = self._absolute_to_basis_value(
             self.patch_source, dim, high_value
         )
-        self.patch.ranges[dim] = _ordered_pair(
+        self.patch.ranges[dim] = ordered_pair(
             self._clamp_roi_basis_value(converted_low),
             self._clamp_roi_basis_value(converted_high),
         )
@@ -994,16 +982,14 @@ class SelectionPanel(QWidget):
                 low, high = ranges[dim]
                 full_low, full_high = extents[dim]
                 if dim in show_full_extent:
-                    desired_low = _format_coord_value(low)
-                    desired_high = _format_coord_value(high)
+                    desired_low = format_display(low)
+                    desired_high = format_display(high)
                 else:
                     desired_low = (
-                        "" if _values_equal(low, full_low) else _format_coord_value(low)
+                        "" if _values_equal(low, full_low) else format_display(low)
                     )
                     desired_high = (
-                        ""
-                        if _values_equal(high, full_high)
-                        else _format_coord_value(high)
+                        "" if _values_equal(high, full_high) else format_display(high)
                     )
                 current_low = low_edit.text()
                 current_high = high_edit.text()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
 from collections.abc import Callable
 from contextlib import contextmanager
 
@@ -20,21 +19,7 @@ from AnyQt.QtWidgets import (
     QWidget,
 )
 
-
-def format_nd_coord_value(value) -> str:
-    """Format one coordinate value for display in a slice slider."""
-    if isinstance(value, np.datetime64):
-        text = str(value)
-        if "." in text:
-            text = text.rstrip("0").rstrip(".")
-        return text
-    if isinstance(value, datetime.timedelta | np.timedelta64):
-        return str(value)[:20]
-    if isinstance(value, np.floating | float):
-        return f"{float(value):.4g}"
-    if isinstance(value, np.integer | int):
-        return str(int(value))
-    return str(value)[:20]
+from derzug.utils.display import format_nd_coord_value
 
 
 class _CoordSlider(QSlider):

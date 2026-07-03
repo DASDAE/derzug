@@ -17,6 +17,7 @@ from derzug.models.annotations import (
     PointGeometry,
     SpanGeometry,
 )
+from derzug.utils.misc import ordered_pair
 
 
 def normalize_dims_value(value: Any) -> list[str]:
@@ -160,13 +161,8 @@ def _row_bounds(row: pd.Series, dim: str) -> tuple[Any, Any] | None:
 
 
 def _ordered_pair(first: Any, second: Any) -> tuple[Any, Any]:
-    """Return one pair ordered from low to high."""
-    first = _normalize_coord_scalar(first)
-    second = _normalize_coord_scalar(second)
-    try:
-        return (first, second) if first <= second else (second, first)
-    except TypeError:
-        return first, second
+    """Return one pair ordered from low to high, normalizing scalars first."""
+    return ordered_pair(_normalize_coord_scalar(first), _normalize_coord_scalar(second))
 
 
 def _normalize_coord_scalar(value: Any) -> Any:

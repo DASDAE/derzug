@@ -5,10 +5,23 @@ from __future__ import annotations
 import os
 from functools import cache
 from importlib.metadata import entry_points
+from typing import Any
 
 import derzug.constants as constants
 
 _EXAMPLE_WORKFLOWS_ENTRY = "orange.widgets.tutorials"
+
+
+def ordered_pair(first: Any, second: Any) -> tuple[Any, Any]:
+    """Return the pair ordered low-to-high, unchanged when not comparable.
+
+    Callers that need type normalization (e.g. numpy to pandas scalars) should
+    apply it before calling this; the shared kernel only handles ordering.
+    """
+    try:
+        return (first, second) if first <= second else (second, first)
+    except Exception:
+        return first, second
 
 
 def _parse_csv_env(name: str, *, lower: bool = False) -> set[str]:

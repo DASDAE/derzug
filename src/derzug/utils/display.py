@@ -53,3 +53,25 @@ def format_display(value: Any) -> str:
     if isinstance(value, int):
         return str(value)
     return str(value)
+
+
+def format_nd_coord_value(value: Any) -> str:
+    """Return a compact display string for a slice-slider coordinate label.
+
+    Unlike :func:`format_display`, this favors brevity over precision: raw
+    datetime/timedelta strings (trimmed rather than reformatted), four
+    significant figures for floats, and a hard 20-character cap on non-scalar
+    fallbacks so slider overlays stay readable.
+    """
+    if isinstance(value, np.datetime64):
+        text = str(value)
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text
+    if isinstance(value, datetime.timedelta | np.timedelta64):
+        return str(value)[:20]
+    if isinstance(value, np.floating | float):
+        return f"{float(value):.4g}"
+    if isinstance(value, np.integer | int):
+        return str(int(value))
+    return str(value)[:20]
