@@ -91,30 +91,40 @@ field maps derive from model fields regardless of Setting-ness.
 that params attributes are no longer flat Settings, parametrized over every
 converted widget.
 
-Converted (21/26): UFuncBinary; Aggregate, PlayAudio, Annotation2DataFrame,
-DataFrameLoader, Annotations, Table2Annotation, Coords, PatchViewer, Wiggle; and
-the PatchDimWidget family — Normalize, Fourier, Calculus, Rolling, Stft,
-Resample, FBE, Detrend, Analytic, Taper, UFuncUnary.
+**Complete — all 26 widgets converted.** How the special cases resolved:
 
-Remaining (5), each a special case for careful follow-up:
+- **Filter** — discriminated union: a custom `_init_authoritative_state` seeds
+  every attribute from all member models' defaults, then overlays the persisted
+  active type. **Decision (active-type-only):** the blob stores only the active
+  filter type; in-session switching keeps values, but a saved+reloaded workflow
+  resets inactive types to defaults. Also fixed model defaults Filter's earlier
+  audit skipped (window/frequency → "0.01"; one empty Gaussian row).
+- **Spool** — `spool_input` holds an example name (string)/None, so it
+  serializes fine. `recent_directories` is a global MRU (`schema_only=False`),
+  not a workflow parameter, so it was **dropped from `SpoolParams` and kept as a
+  flat Setting** (app-level, outside the blob).
+- **Select**, **Waterfall** — converted cleanly; Select's `__setattr__` sync is
+  guarded by a flag not yet set during `_init`. Waterfall carries both params
+  (selection/annotations) and view (colormap/limits/range/dims) models, and its
+  `_persist_selection_settings` was hardened to not wipe restored/pre-set
+  selection state when no patch is loaded.
+- **Code** — the "hang" was unrelated to storage: loading a scheme with a Code
+  widget shows the arbitrary-Python confirmation dialog, which blocks headless;
+  the round-trip test auto-accepts it. Code converted normally.
 
-- **Filter** — `params_model` is a discriminated union, so it needs a custom
-  `_default_params` (a union can't be default-constructed) and custom
-  attribute restore (it overrides `get_params`/`apply_params` and holds attrs
-  for *all* filter types, while the blob captures only the active type; decide
-  whether inactive-type values should persist).
-- **Spool** — settings include live objects (`spool_input`) and a global-default
-  MRU (`recent_directories`, `schema_only=False`); decide what belongs in the
-  blob vs. stays app-level.
-- **Select**, **Waterfall** — `SelectionControlsMixin` (and Waterfall's plot
-  mixin) run their own saved-selection restore/`__setattr__` sync; the blob
-  restore must interleave with that.
-- **Code** — the scheme reload hangs with the `PythonEditor`; needs debugging
-  before conversion.
+Full suite green throughout (1757 passed, 44 skipped at completion).
 
-Version bump: pending completion of the five above; the storage format is
-already broken for the converted widgets, so the minor bump lands with the final
-conversion.
+### Decisions to revisit (flagged, low-confidence)
+
+- Filter active-type-only storage (above) — confirm the minor UX loss is
+  acceptable, or switch to preserving all types.
+- Waterfall `_persist_selection_settings` no-patch guard — verify it doesn't
+  mask a real "selection intentionally cleared before patch arrives" case.
+
+Version bump: the `.ows` format is now broken app-wide, so a **minor bump
+(0.0.x → 0.1.0)** is warranted. Versioning is tag-based
+(`setuptools-git-versioning`), so the tag lands on/after merge to `main`, not on
+the feature branch; noted in `CHANGELOG.md` under Unreleased.
 
 ## Phase 4 decision point (resolved: break compatibility)
 
