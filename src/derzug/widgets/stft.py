@@ -11,6 +11,7 @@ from dascore.units import percent
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.settings import Setting
@@ -19,10 +20,22 @@ from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
+class StftParams(BaseModel):
+    """Parameters for the Stft widget."""
+
+    selected_dim: str = ""
+    window_length: str = "0.01"
+    overlap: str = "50 %"
+    taper_window: str = "hann"
+    samples: bool = False
+    detrend: bool = False
+
+
 class Stft(PatchDimWidget):
     """Apply a DASCore short-time Fourier transform to an input patch."""
 
     name = "Stft"
+    params_model = StftParams
     description = "Apply a short-time Fourier transform to a patch"
     icon = "icons/Stft.svg"
     category = "Transform"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtCore import Qt
@@ -19,6 +19,7 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel, Field
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.settings import Setting
@@ -34,10 +35,21 @@ _REAL_OPTIONS: tuple[tuple[str, str | bool | None], ...] = (
 _REAL_OPTION_MAP = dict(_REAL_OPTIONS)
 
 
+class FourierParams(BaseModel):
+    """Parameters for the Fourier widget."""
+
+    transform: Literal["dft", "idft"] = "dft"
+    selected_dim: str = ""
+    selected_dims: list[str] = Field(default_factory=list)
+    real_mode: Literal["Auto", "Real", "Complex"] = "Auto"
+    pad: bool = True
+
+
 class Fourier(PatchDimWidget):
     """Apply DASCore Fourier transforms to an input patch."""
 
     name = "Fourier"
+    params_model = FourierParams
     description = "Apply DASCore Fourier transforms to a patch"
     icon = "icons/Fourier.svg"
     category = "Transform"

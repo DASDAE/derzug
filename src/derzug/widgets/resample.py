@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QStackedWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.settings import Setting
@@ -17,10 +18,25 @@ from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
+class ResampleParams(BaseModel):
+    """Parameters for the Resample widget."""
+
+    mode: Literal["decimate", "resample"] = "decimate"
+    selected_dim: str = ""
+    decimate_factor: str = "2"
+    decimate_filter_type: Literal["iir", "fir", "none"] = "iir"
+    resample_target: str = "10 ms"
+    resample_samples: bool = False
+    resample_interp_kind: Literal[
+        "linear", "nearest", "zero", "slinear", "quadratic", "cubic"
+    ] = "linear"
+
+
 class Resample(PatchDimWidget):
     """Decimate or resample an input patch along a chosen dimension."""
 
     name = "Resample"
+    params_model = ResampleParams
     description = "Decimate or resample a patch along a dimension"
     icon = "icons/Resample.svg"
     category = "Processing"

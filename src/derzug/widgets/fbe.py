@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
@@ -10,6 +10,7 @@ from dascore.units import percent
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.settings import Setting
@@ -79,10 +80,24 @@ class FBETask(Task):
         )
 
 
+class FBEParams(BaseModel):
+    """Parameters for the FBE widget."""
+
+    selected_dim: str = ""
+    window_length: str = "0.01"
+    overlap: str = "50 %"
+    taper_window: Literal["hann", "hamming", "blackman", "nuttall"] = "hann"
+    samples: bool = False
+    detrend: bool = False
+    fbe_lower: str = ""
+    fbe_upper: str = ""
+
+
 class FBE(PatchDimWidget):
     """Extract one frequency band energy trace via STFT power reduction."""
 
     name = "FBE"
+    params_model = FBEParams
     description = "Extract one frequency band energy feature from a patch"
     icon = "icons/FBE.svg"
     category = "Transform"

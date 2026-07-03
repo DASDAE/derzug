@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QSpinBox, QStackedWidget, QVBoxLayout, QWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.settings import Setting
@@ -16,10 +17,21 @@ from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
+class CalculusParams(BaseModel):
+    """Parameters for the Calculus widget."""
+
+    transform: Literal["differentiate", "integrate"] = "differentiate"
+    selected_dim: str = ""
+    order: int = 2
+    step: int = 1
+    definite: bool = False
+
+
 class Calculus(PatchDimWidget):
     """Apply differentiation and integration transforms to an input patch."""
 
     name = "Calculus"
+    params_model = CalculusParams
     description = "Apply differentiation and integration transforms to a patch"
     icon = "icons/Calculus.svg"
     category = "Transform"

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.settings import Setting
@@ -17,10 +18,22 @@ from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchRollingTask
 
 
+class RollingParams(BaseModel):
+    """Parameters for the Rolling widget."""
+
+    selected_dim: str = ""
+    rolling_window: str = "0.01"
+    step: str = ""
+    center: bool = False
+    dropna: bool = False
+    aggregation: Literal["mean", "median", "sum", "min", "max", "std"] = "mean"
+
+
 class Rolling(PatchDimWidget):
     """Apply DASCore rolling aggregations to an input patch."""
 
     name = "Rolling"
+    params_model = RollingParams
     description = "Apply DASCore rolling aggregation to a patch"
     icon = "icons/Rolling.svg"
     category = "Processing"
