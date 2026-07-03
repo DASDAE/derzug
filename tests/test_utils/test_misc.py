@@ -5,9 +5,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import derzug.constants as constants
+import numpy as np
 from derzug.utils.misc import (
     load_example_workflow_entrypoints,
     load_widget_entrypoints,
+    ordered_pair,
 )
 
 
@@ -68,3 +70,22 @@ class TestLoadExampleWorkflowEntrypoints:
         ), loaded
         assert all(dist == constants.PKG_NAME for _, _, dist in loaded), loaded
         assert "000-Orange3" not in {name for name, _, _ in loaded}
+
+
+class TestOrderedPair:
+    """Tests for the shared low-to-high ordering kernel."""
+
+    def test_orders_ascending(self):
+        """A reversed pair is returned low-to-high."""
+        assert ordered_pair(3, 1) == (1, 3)
+        assert ordered_pair(1, 3) == (1, 3)
+
+    def test_orders_comparable_non_numeric(self):
+        """Comparable non-numeric values (e.g. datetimes) are ordered."""
+        later = np.datetime64("2020-01-02")
+        earlier = np.datetime64("2020-01-01")
+        assert ordered_pair(later, earlier) == (earlier, later)
+
+    def test_incomparable_values_returned_unchanged(self):
+        """Values that cannot be compared are returned in their original order."""
+        assert ordered_pair(1, "a") == (1, "a")

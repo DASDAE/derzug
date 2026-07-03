@@ -39,6 +39,7 @@ from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.models.selection import SelectParams
 from derzug.settings import Setting
+from derzug.utils.display import format_nd_coord_value
 from derzug.utils.plot_axes import (
     CursorField,
     build_plot_axis_spec,
@@ -55,7 +56,6 @@ from derzug.widgets.annotation_editor import (
 from derzug.widgets.annotation_overlay import AnnotationOverlayController
 from derzug.widgets.ndim_controls import (
     MultiDimPlotControlsMixin,
-    format_nd_coord_value,
 )
 from derzug.widgets.selection import (
     PatchSelectionBasis,
@@ -89,11 +89,6 @@ class _PreparedPatchRender:
     axes: _AxisState
 
 
-def _format_coord_value(val) -> str:
-    """Format a single coordinate value for display inside a slider."""
-    return format_nd_coord_value(val)
-
-
 class _CoordSlider(QSlider):
     """QSlider that draws the current coordinate value as subtle centred text."""
 
@@ -105,7 +100,7 @@ class _CoordSlider(QSlider):
         super().paintEvent(event)
         idx = self.value()
         if 0 <= idx < len(self._coord_values):
-            text = _format_coord_value(self._coord_values[idx])
+            text = format_nd_coord_value(self._coord_values[idx])
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 

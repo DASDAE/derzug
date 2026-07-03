@@ -26,7 +26,6 @@ from derzug.widgets.selection import PatchSelectionBasis
 from derzug.widgets.waterfall import (
     _STAT_SAMPLE_TARGET,
     Waterfall,
-    _format_coord_value,
     _strided_subsample,
 )
 
@@ -5018,36 +5017,6 @@ class TestWaterfallSliceDims:
         QTest.mousePress(btn_next, Qt.MouseButton.LeftButton)
         QTest.mouseRelease(btn_next, Qt.MouseButton.LeftButton)
         assert len(render_calls) == 1
-
-
-class TestFormatCoordValue:
-    """Unit tests for the _format_coord_value helper."""
-
-    def test_float_uses_4g_format(self):
-        """Floats are formatted with 4 significant figures."""
-        assert _format_coord_value(np.float64(1234.5678)) == "1235"
-        assert _format_coord_value(np.float64(0.000123456)) == "0.0001235"
-
-    def test_integer_returns_plain_string(self):
-        """Integers are returned as plain decimal strings."""
-        assert _format_coord_value(np.int64(42)) == "42"
-
-    def test_datetime64_strips_trailing_zeros(self):
-        """Datetime64 values strip trailing fractional zeros."""
-        val = np.datetime64("2020-01-03T00:00:01.500000000")
-        result = _format_coord_value(val)
-        assert result == "2020-01-03T00:00:01.5"
-        assert not result.endswith("0")
-
-    def test_datetime64_no_fractional_part(self):
-        """Datetime64 with zero fraction omits the decimal point entirely."""
-        val = np.datetime64("2020-01-03T12:00:00.000000000")
-        result = _format_coord_value(val)
-        assert result == "2020-01-03T12:00:00"
-
-    def test_timedelta_formats_without_crashing(self):
-        """Timedelta-like values should render as strings for slider labels."""
-        assert _format_coord_value(np.timedelta64(5, "s")) == "5 seconds"
 
 
 class TestStridedSubsample:

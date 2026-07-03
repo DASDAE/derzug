@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from derzug.utils.display import format_display
+from derzug.utils.display import format_display, format_nd_coord_value
 
 
 class TestFormatDisplay:
@@ -42,3 +42,36 @@ class TestFormatDisplay:
     def test_fallback_uses_str(self):
         """Non-special values should fall back to their string representation."""
         assert format_display({"a": 1}) == "{'a': 1}"
+
+
+class TestFormatNdCoordValue:
+    """Tests for the compact slider-label formatter."""
+
+    def test_float_uses_4g_format(self):
+        """Floats use four significant figures (more compact than format_display)."""
+        assert format_nd_coord_value(np.float64(1234.5678)) == "1235"
+        assert format_nd_coord_value(np.float64(0.000123456)) == "0.0001235"
+
+    def test_integer_returns_plain_string(self):
+        """Integers render as plain decimal strings."""
+        assert format_nd_coord_value(np.int64(42)) == "42"
+
+    def test_datetime64_strips_trailing_zeros(self):
+        """Datetime64 values strip trailing fractional zeros (raw, not ISO)."""
+        val = np.datetime64("2020-01-03T00:00:01.500000000")
+        result = format_nd_coord_value(val)
+        assert result == "2020-01-03T00:00:01.5"
+        assert not result.endswith("0")
+
+    def test_datetime64_no_fractional_part(self):
+        """Datetime64 with zero fraction omits the decimal point entirely."""
+        val = np.datetime64("2020-01-03T12:00:00.000000000")
+        assert format_nd_coord_value(val) == "2020-01-03T12:00:00"
+
+    def test_timedelta_renders_as_truncated_string(self):
+        """Timedelta-like values render as raw strings for slider labels."""
+        assert format_nd_coord_value(np.timedelta64(5, "s")) == "5 seconds"
+
+    def test_long_fallback_is_capped(self):
+        """Non-scalar fallbacks are capped at 20 characters for slider overlays."""
+        assert format_nd_coord_value("x" * 40) == "x" * 20
