@@ -26,8 +26,8 @@ _PENDING: set[str] = set()
 # needs a view model.
 _VISUAL_WIDGETS = {"Waterfall", "Wiggle"}
 
-# Visual widgets not yet given a view model. Remove each as it lands (Phase 3).
-_VIEW_PENDING = {"Waterfall", "Wiggle"}
+# Visual widgets not yet given a view model. All visual widgets are covered.
+_VIEW_PENDING: set[str] = set()
 
 
 def _all_widget_classes() -> dict[str, type]:
@@ -96,6 +96,23 @@ def test_params_roundtrip(widget_cls, qtbot):
         stabilized = widget.get_params()
         widget.apply_params(stabilized)
         assert widget.get_params() == stabilized
+
+
+_VIEWED = [
+    pytest.param(cls, id=name)
+    for name, cls in sorted(_all_widget_classes().items())
+    if getattr(cls, "view_model", None) is not None
+]
+
+
+@pytest.mark.parametrize("widget_cls", _VIEWED)
+def test_view_roundtrip(widget_cls, qtbot):
+    """Applying read-back view state is idempotent from a stabilized state."""
+    with widget_context(widget_cls) as widget:
+        widget.apply_view(widget.get_view())
+        stabilized = widget.get_view()
+        widget.apply_view(stabilized)
+        assert widget.get_view() == stabilized
 
 
 def test_view_model_coverage():

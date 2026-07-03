@@ -323,6 +323,17 @@ class WaterfallParams(BaseModel):
     saved_annotation_set: Any = None
 
 
+class WaterfallView(BaseModel):
+    """Presentation-only state for Waterfall (never leaves the widget)."""
+
+    colormap: str = "CET-D1"
+    color_limits: Any = None
+    reset_on_new: bool = True
+    saved_view_range: Any = None
+    saved_plot_y_dim: str = ""
+    saved_plot_x_dim: str = ""
+
+
 class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     """
     Display a 2D DAS patch as an interactive pyqtgraph waterfall image.
@@ -334,6 +345,7 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
 
     name = "Waterfall"
     params_model = WaterfallParams
+    view_model = WaterfallView
     description = "Interactive pyqtgraph waterfall view for DAS patches"
     icon = "icons/Waterfall.svg"
     category = "Visualize"

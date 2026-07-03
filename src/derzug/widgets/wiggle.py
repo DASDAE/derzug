@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Literal
 
 import dascore as dc
 import numpy as np
@@ -122,6 +123,19 @@ class WiggleParams(BaseModel):
     """
 
 
+class WiggleView(BaseModel):
+    """Presentation-only state for Wiggle (a passthrough viewer)."""
+
+    mode: Literal["offset", "time series"] = "offset"
+    selected_trace_dim: str = ""
+    selected_x_dim: str = ""
+    stride: int = 8
+    gain: int = 150
+    colormap: str = "viridis"
+    series_color_limits: Any = None
+    percentiles: bool = False
+
+
 class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     """Display DASCore patches as wiggle or time-series plots."""
 
@@ -134,6 +148,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
 
     name = "Wiggle"
     params_model = WiggleParams
+    view_model = WiggleView
     description = "Interactive pyqtgraph wiggle view for DAS patches"
     icon = "icons/Wiggle.svg"
     category = "Visualize"

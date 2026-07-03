@@ -748,8 +748,15 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         return {name: name for name in fields if self._is_setting(name)}
 
     def _view_field_map(self) -> dict[str, str]:
-        """Return ``{model_field: setting_name}`` backing ``view_model``."""
-        return {}
+        """Return ``{model_field: setting_name}`` backing ``view_model``.
+
+        Like ``_params_field_map``, defaults to mapping each model field to a
+        same-named ``Setting``.
+        """
+        fields = getattr(self.view_model, "model_fields", None)
+        if not fields:
+            return {}
+        return {name: name for name in fields if self._is_setting(name)}
 
     def _read_model(self, model, field_map: dict[str, str], label: str):
         """Build a typed model instance from the widget's current settings."""
