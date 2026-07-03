@@ -40,7 +40,7 @@ class NotchFilterParams(_SharedFilter):
     """Notch (band-stop) filter."""
 
     kind: Literal["notch_filter"] = "notch_filter"
-    frequency: str = ""  # stored as filter_window
+    frequency: str = "0.01"  # stored as filter_window
     q: float = 35.0
 
 
@@ -48,7 +48,7 @@ class MedianFilterParams(_SharedFilter):
     """Median filter."""
 
     kind: Literal["median_filter"] = "median_filter"
-    window: str = ""  # stored as filter_window
+    window: str = "0.01"  # stored as filter_window
     samples: bool = False
     mode: str = "reflect"
     cval: float = 0.0
@@ -58,7 +58,7 @@ class HampelFilterParams(_SharedFilter):
     """Hampel outlier filter."""
 
     kind: Literal["hampel_filter"] = "hampel_filter"
-    window: str = ""  # stored as filter_window
+    window: str = "0.01"  # stored as filter_window
     threshold: float = 10.0
     samples: bool = False
     approximate: bool = True
@@ -68,7 +68,7 @@ class SavgolFilterParams(_SharedFilter):
     """Savitzky-Golay filter."""
 
     kind: Literal["savgol_filter"] = "savgol_filter"
-    window: str = ""  # stored as filter_window
+    window: str = "0.01"  # stored as filter_window
     polyorder: int = 3
     samples: bool = False
     mode: str = "interp"  # savgol modes differ from the other filters
@@ -79,7 +79,7 @@ class WienerFilterParams(_SharedFilter):
     """Wiener filter."""
 
     kind: Literal["wiener_filter"] = "wiener_filter"
-    window: str = ""  # stored as filter_window
+    window: str = "0.01"  # stored as filter_window
     noise: str = ""
     samples: bool = False
 
@@ -95,7 +95,10 @@ class GaussianFilterParams(_SharedFilter):
     """Gaussian filter (per-dimension windows)."""
 
     kind: Literal["gaussian_filter"] = "gaussian_filter"
-    windows: list[GaussianWindow] = Field(default_factory=list)
+    # one empty row by default, matching the widget's initial Gaussian table
+    windows: list[GaussianWindow] = Field(
+        default_factory=lambda: [GaussianWindow(window="")]
+    )
     samples: bool = False
     mode: str = "reflect"
     cval: float = 0.0
@@ -134,3 +137,17 @@ FilterParams = Annotated[
     | SlopeFilterParams,
     Field(discriminator="kind"),
 ]
+
+#: Every filter-type model, used to seed defaults for all of Filter's
+#: attributes (which span all types) under authoritative storage.
+_FILTER_MODELS: tuple[type[BaseModel], ...] = (
+    PassFilterParams,
+    NotchFilterParams,
+    MedianFilterParams,
+    HampelFilterParams,
+    SavgolFilterParams,
+    WienerFilterParams,
+    GaussianFilterParams,
+    SobelFilterParams,
+    SlopeFilterParams,
+)

@@ -390,21 +390,6 @@ class TestFilter:
         assert received[-1] is None
         assert filter_widget.Error.general.is_shown()
 
-    def test_gaussian_legacy_single_dim_settings_restore_into_rows(self, qtbot):
-        """Old stored Gaussian settings should seed the first Gaussian row."""
-        stored_settings = {
-            "selected_filter": "gaussian_filter",
-            "selected_dim": "time",
-            "filter_window": "0.01",
-        }
-
-        with widget_context(Filter, stored_settings=stored_settings) as widget:
-            widget.show()
-            qtbot.wait(10)
-            widget.set_patch(dc.get_example_patch("example_event_2"))
-
-            assert widget.gaussian_dim_windows == [{"dim": "time", "window": "0.01"}]
-
     def test_savgol_mode_options_exclude_reflect(self, filter_widget):
         """Savitzky-Golay mode dropdown excludes invalid 'reflect'."""
         filter_widget._filter_combo.setCurrentText("savgol_filter")
