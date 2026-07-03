@@ -26,7 +26,6 @@ from derzug.models.annotations import (
     PointGeometry,
     SpanGeometry,
 )
-from derzug.settings import Setting
 from derzug.utils.annotation_metadata import LABEL_SLOTS, optional_text
 from derzug.workflow import Task
 
@@ -184,6 +183,7 @@ class Table2Annotation(ZugWidget):
 
     name = "Table to Annotations"
     params_model = Table2AnnotationParams
+    authoritative_state = True
     description = (
         "Convert rows of a DataFrame into an AnnotationSet. "
         "Each row becomes one annotation (dot or line)."
@@ -195,16 +195,6 @@ class Table2Annotation(ZugWidget):
     want_main_area = False
 
     # --- settings ---
-    geometry_type: int = Setting(_GEOM_DOT)  # 0=dot, 1=line
-    line_axis_dim: str = Setting("")  # which dim the line is pinned to
-    dims_text: str = Setting("")  # comma-separated dims
-    col_map: dict = Setting({})  # {dim_name: col_name}
-    semantic_type_text: str = Setting("generic")
-    notes_col: str = Setting(_NO_COLUMN)
-    label_mode: int = Setting(_LABEL_MODE_FIXED)  # 0=fixed, 1=column
-    fixed_label: str = Setting("")
-    label_col: str = Setting(_NO_COLUMN)
-    tags_col: str = Setting(_NO_COLUMN)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""

@@ -110,7 +110,7 @@ def _create_editor(parent: QWidget) -> QPlainTextEdit:
 class CodeParams(BaseModel):
     """Parameters for the Code widget."""
 
-    script_text: str = ""
+    script_text: str = DEFAULT_SCRIPT
 
 
 class Code(ZugWidget):

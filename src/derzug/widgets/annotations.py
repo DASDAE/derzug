@@ -24,7 +24,6 @@ from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
-from derzug.settings import Setting
 from derzug.utils.annotations import (
     AnnotationStoreSummary,
     build_state,
@@ -175,16 +174,13 @@ class Annotations(ZugWidget):
 
     name = "Annotations"
     params_model = AnnotationsParams
+    authoritative_state = True
     description = "Store and persist annotation sets"
     icon = "icons/Annotations.svg"
     category = "IO"
     keywords = ("annotations", "store", "persist", "table")
     priority = 27
     is_source = True
-
-    store_directory: str = Setting("")
-    stored_entries: list = Setting([])
-    selected_entry_id: str = Setting("")
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""

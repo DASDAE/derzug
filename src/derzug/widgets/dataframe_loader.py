@@ -28,7 +28,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.settings import Setting
 from derzug.utils.optional_imports import optional_import
 from derzug.workflow import Task
 
@@ -231,6 +230,7 @@ class DataFrameLoader(ZugWidget):
 
     name = "DataFrame Loader"
     params_model = DataFrameLoaderParams
+    authoritative_state = True
     want_control_area = False
     description = (
         "Load a tabular DataFrame from a file. "
@@ -241,10 +241,6 @@ class DataFrameLoader(ZugWidget):
     keywords = ("dataframe", "csv", "parquet", "excel", "table", "file", "load")
     priority = 20
     is_source = True
-
-    file_path = Setting("")
-    format_name = Setting(_AUTO)
-    table_name = Setting("")
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""

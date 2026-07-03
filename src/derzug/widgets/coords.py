@@ -31,7 +31,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.settings import Setting
 from derzug.utils.parsing import parse_coord_text_value
 from derzug.workflow import Task
 
@@ -252,8 +251,8 @@ class CoordsParams(BaseModel):
         "flip",
         "transpose",
     ] = "rename_coords"
-    rename_rows: list = Field(default_factory=list)
-    set_dims_rows: list = Field(default_factory=list)
+    rename_rows: list = Field(default_factory=lambda: [["", ""]])
+    set_dims_rows: list = Field(default_factory=lambda: [["", ""]])
     set_coords_dim: str = ""
     set_coords_start: str = ""
     set_coords_stop: str = ""
@@ -278,6 +277,7 @@ class Coords(ZugWidget):
 
     name = "Coords"
     params_model = CoordsParams
+    authoritative_state = True
     description = "Apply coordinate operations to a patch"
     icon = "icons/Coords.svg"
     category = "Processing"
@@ -292,27 +292,6 @@ class Coords(ZugWidget):
         "set_coords",
     )
     priority = 24.5
-
-    operation = Setting("rename_coords")
-    rename_rows = Setting([["", ""]])
-    set_dims_rows = Setting([["", ""]])
-    set_coords_dim = Setting("")
-    set_coords_start = Setting("")
-    set_coords_stop = Setting("")
-    set_coords_step = Setting("")
-    set_coords_applied_dim = Setting("")
-    set_coords_applied_start = Setting("")
-    set_coords_applied_stop = Setting("")
-    set_coords_applied_step = Setting("")
-    drop_coords_selected = Setting([])
-    sort_coords_selected = Setting([])
-    sort_reverse = Setting(False)
-    snap_coords_selected = Setting([])
-    snap_reverse = Setting(False)
-    flip_dims_selected = Setting([])
-    flip_data = Setting(True)
-    flip_coords = Setting(True)
-    transpose_order = Setting([])
 
     _OPERATIONS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("rename_coords", "Rename"),

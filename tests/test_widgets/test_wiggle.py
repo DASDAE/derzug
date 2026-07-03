@@ -348,8 +348,8 @@ class TestWiggle:
     def test_widget_instantiates(self, wiggle_widget):
         """Widget starts with no curves, an empty combo, and default settings."""
         assert wiggle_widget._trace_axis_combo.count() == 0
-        assert wiggle_widget.stride == Wiggle.stride.default
-        assert wiggle_widget.gain == Wiggle.gain.default
+        assert wiggle_widget.stride == Wiggle.view_model.model_fields["stride"].default
+        assert wiggle_widget.gain == Wiggle.view_model.model_fields["gain"].default
         assert wiggle_widget.percentiles is False
         assert wiggle_widget._offset_box.isHidden()
         assert wiggle_widget._time_series_box.isHidden()
@@ -685,9 +685,12 @@ class TestWiggle:
 
         assert wiggle_widget._gain_slider.minimum() == Wiggle._GAIN_MIN
         assert wiggle_widget._gain_slider.maximum() == Wiggle._GAIN_MAX
-        wiggle_widget.gain = Wiggle.gain.default
+        wiggle_widget.gain = Wiggle.view_model.model_fields["gain"].default
         wiggle_widget._sync_gain_control()
-        assert wiggle_widget._gain_slider.value() == Wiggle.gain.default
+        assert (
+            wiggle_widget._gain_slider.value()
+            == Wiggle.view_model.model_fields["gain"].default
+        )
 
     def test_dragging_gain_slider_to_right_edge_expands_maximum(
         self, wiggle_widget, small_patch_2d

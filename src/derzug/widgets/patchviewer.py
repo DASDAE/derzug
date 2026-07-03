@@ -62,6 +62,7 @@ class PatchViewer(ZugWidget):
 
     name = "PatchViewer"
     params_model = PatchViewerParams
+    authoritative_state = True
     description = "Inspect a DAS patch and preview its arrays"
     want_control_area = False
     icon = "icons/PatchViewer.svg"

@@ -16,7 +16,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
-from derzug.settings import Setting
 from derzug.utils.plot_axes import (
     CursorField,
     build_plot_axis_spec,
@@ -149,6 +148,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     name = "Wiggle"
     params_model = WiggleParams
     view_model = WiggleView
+    authoritative_state = True
     description = "Interactive pyqtgraph wiggle view for DAS patches"
     icon = "icons/Wiggle.svg"
     category = "Visualize"
@@ -166,15 +166,6 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         "plasma",
         "turbo",
     )
-
-    mode = Setting("offset")
-    selected_trace_dim = Setting("")
-    selected_x_dim = Setting("")
-    stride = Setting(8)
-    gain = Setting(150)
-    colormap = Setting("viridis")
-    series_color_limits = Setting(None)
-    percentiles = Setting(False)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""

@@ -12,7 +12,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.settings import Setting
 from derzug.workflow import Task
 
 
@@ -103,6 +102,7 @@ class Aggregate(ZugWidget):
 
     name = "Aggregate"
     params_model = AggregateParams
+    authoritative_state = True
     description = "Apply DASCore aggregate reduction to a patch"
     icon = "icons/AggregateColumns.svg"
     category = "Processing"
@@ -110,11 +110,6 @@ class Aggregate(ZugWidget):
     priority = 25
 
     want_main_area = False
-
-    selected_dim = Setting("")
-    transform_dim = Setting("")
-    method = Setting("mean")
-    dim_reduce = Setting("empty")
 
     _METHODS: ClassVar[tuple[str, ...]] = (
         "first",
