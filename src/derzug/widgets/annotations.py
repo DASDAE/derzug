@@ -23,7 +23,7 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.annotations import (
     AnnotationStoreSummary,
     build_state,

@@ -36,7 +36,7 @@ from derzug.widgets.rolling import Rolling
 from derzug.widgets.select import Select
 from derzug.widgets.spool import Spool
 from derzug.widgets.stft import Stft
-from derzug.widgets.ufunc import UFuncOperator
+from derzug.widgets.ufunc_binary import UFuncBinary
 from derzug.widgets.waterfall import Waterfall
 from derzug.widgets.wiggle import Wiggle
 from derzug.workflow import Task
@@ -62,7 +62,7 @@ ALL_WIDGET_CLASSES = (
     Select,
     Spool,
     Stft,
-    UFuncOperator,
+    UFuncBinary,
     Waterfall,
     Wiggle,
 )

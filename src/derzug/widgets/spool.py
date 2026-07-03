@@ -37,7 +37,7 @@ from Orange.widgets.widget import Msg
 from pydantic import Field
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.display import format_display
 from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.example_parameters import (

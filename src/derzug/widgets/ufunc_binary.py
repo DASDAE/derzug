@@ -14,11 +14,11 @@ from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.workflow import Task
 
 
-class UFuncOperatorTask(Task):
+class UFuncBinaryTask(Task):
     """Task wrapper around one selected binary NumPy ufunc."""
 
     selected_op: str
@@ -27,18 +27,18 @@ class UFuncOperatorTask(Task):
 
     def run(self, x, y):
         """Apply the selected NumPy ufunc to both inputs."""
-        ufunc = UFuncOperator._OP_LABEL_TO_UFUNC.get(self.selected_op)
+        ufunc = UFuncBinary._OP_LABEL_TO_UFUNC.get(self.selected_op)
         if ufunc is None:
-            ufunc = UFuncOperator._OP_LABEL_TO_UFUNC[
-                next(iter(UFuncOperator._OP_LABEL_TO_UFUNC))
+            ufunc = UFuncBinary._OP_LABEL_TO_UFUNC[
+                next(iter(UFuncBinary._OP_LABEL_TO_UFUNC))
             ]
         return ufunc(x, y)
 
 
-class UFuncOperator(ZugWidget):
+class UFuncBinary(ZugWidget):
     """Apply a selected binary NumPy ufunc to two generic inputs."""
 
-    name = "UfuncBinary"
+    name = "UFuncBinary"
     description = "Apply selected NumPy ufunc to x and y inputs"
     icon = "icons/UFunc.svg"
     category = "Processing"
@@ -168,7 +168,7 @@ class UFuncOperator(ZugWidget):
     def get_task(self) -> Task:
         """Return the configured binary ufunc task."""
         self._get_selected_ufunc()
-        return UFuncOperatorTask(selected_op=self.selected_op)
+        return UFuncBinaryTask(selected_op=self.selected_op)
 
     def _resolve_operand(self, value: object, label: str) -> object:
         """Unwrap length-1 spools to patches and reject unsupported spool inputs."""
@@ -225,12 +225,12 @@ class UFuncOperator(ZugWidget):
     @staticmethod
     def _summary_for_object(value: object) -> PartialSummary:
         """Build a warning-free signal summary using str(value)."""
-        if value is None or value is UFuncOperator._UNSET:
+        if value is None or value is UFuncBinary._UNSET:
             return PartialSummary()
         label = type(value).__name__
         details = (
             "<pre style='margin:0; white-space:pre-wrap'>"
-            f"{escape(UFuncOperator._safe_string(value))}</pre>"
+            f"{escape(UFuncBinary._safe_string(value))}</pre>"
         )
         return PartialSummary(summary=label, details=details)
 
@@ -246,4 +246,4 @@ class UFuncOperator(ZugWidget):
 if __name__ == "__main__":  # pragma: no cover
     from Orange.widgets.utils.widgetpreview import WidgetPreview
 
-    WidgetPreview(UFuncOperator).run()
+    WidgetPreview(UFuncBinary).run()

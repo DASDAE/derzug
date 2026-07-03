@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from derzug.orange import Setting
+from derzug.settings import Setting
 
 
 def test_setting_defaults_to_workflow_only_persistence():

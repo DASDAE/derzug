@@ -12,15 +12,15 @@ from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
-class UFunc(ZugWidget):
+class UFuncUnary(ZugWidget):
     """Apply a selected unary element-wise math transform to an input patch."""
 
-    name = "UFunc"
+    name = "UFuncUnary"
     description = "Apply a unary element-wise transform to a patch"
     icon = "icons/UFunc.svg"
     category = "Processing"
@@ -143,4 +143,4 @@ class UFunc(ZugWidget):
 if __name__ == "__main__":  # pragma: no cover
     from Orange.widgets.utils.widgetpreview import WidgetPreview
 
-    WidgetPreview(UFunc).run()
+    WidgetPreview(UFuncUnary).run()

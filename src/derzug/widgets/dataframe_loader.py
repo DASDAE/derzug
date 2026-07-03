@@ -27,7 +27,7 @@ from Orange.widgets.utils.tableview import TableView
 from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.optional_imports import optional_import
 from derzug.workflow import Task
 
