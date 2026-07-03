@@ -19,12 +19,8 @@ from derzug.utils.testing import widget_context
 
 # Widgets not yet migrated to a pydantic params model. Remove each as it lands.
 _PENDING = {
-    "Coords",
-    "PatchViewer",
-    "Select",
     "Spool",
     "Waterfall",
-    "Wiggle",
 }
 
 

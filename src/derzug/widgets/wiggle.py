@@ -12,6 +12,7 @@ from AnyQt.QtWidgets import QComboBox, QLabel, QSlider, QVBoxLayout, QWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.settings import Setting
@@ -113,6 +114,14 @@ class _ExpandableGainSlider(QSlider):
             self._last_edge_direction = direction
 
 
+class WiggleParams(BaseModel):
+    """Parameters for the Wiggle widget.
+
+    Wiggle passes the patch through unchanged, so it has no output-affecting
+    parameters; its display state belongs to the view model.
+    """
+
+
 class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     """Display DASCore patches as wiggle or time-series plots."""
 
@@ -124,6 +133,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     _LINE_COLOR = (15, 15, 15, 255)
 
     name = "Wiggle"
+    params_model = WiggleParams
     description = "Interactive pyqtgraph wiggle view for DAS patches"
     icon = "icons/Wiggle.svg"
     category = "Visualize"

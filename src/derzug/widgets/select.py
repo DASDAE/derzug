@@ -10,6 +10,7 @@ from AnyQt.QtCore import QTimer
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
@@ -88,10 +89,21 @@ class SelectTask(Task):
         return {"patch": None, "spool": None}
 
 
+class SelectWidgetParams(BaseModel):
+    """Parameters for the Select widget (named to avoid the models.SelectParams)."""
+
+    unpack_single_patch: bool = True
+    saved_patch_selection: dict = Field(default_factory=dict)
+    saved_selection_basis: str = ""
+    saved_selection_ranges: list = Field(default_factory=list)
+    saved_spool_filters: list = Field(default_factory=list)
+
+
 class Select(SelectionControlsMixin, ZugWidget):
     """Select subsets of patches or spools using shared left-side controls."""
 
     name = "Select"
+    params_model = SelectWidgetParams
     want_main_area = False
     description = "Select subsets of patches or spools"
     icon = "icons/SelectRows.svg"
