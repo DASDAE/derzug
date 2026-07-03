@@ -807,6 +807,7 @@ class TestDerZugMainWindow:
         assert all(labels), labels
         assert "DerZug" in labels
 
+    @pytest.mark.qt_no_exception_capture
     def test_install_derzug_exception_handler_replaces_orange_handler(
         self, qapp, monkeypatch
     ):
