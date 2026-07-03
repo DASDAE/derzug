@@ -52,7 +52,47 @@ Done on `feature/unified-set-params`:
   `.ows` save/reload via existing `Setting` persistence.
 - **Convention + tracker.** `ZugWidget.params_model` ClassVar;
   `tests/test_core/test_params_model_coverage.py` enforces that the only widgets
-  without a model are the tracked `_PENDING` set (25 remaining).
+  without a model are the tracked `_PENDING` set.
+
+## Progress
+
+- **Phase 1 complete.** `ZugWidget` gained the `view_model` axis and generic
+  `get_params`/`apply_params`/`get_view`/`apply_view` driven by
+  `_params_field_map()` / `_view_field_map()` (both default to mapping model
+  fields to same-named settings). Coverage test extended with the view axis.
+- **Phase 2 complete — all 26 widgets have a `params_model`.** Declarative
+  family (Detrend/Analytic/Taper/UFuncUnary) auto-derived from `_OPTIONS`; the
+  bespoke and data/IO widgets given explicit Literal-typed models; the visual
+  widgets modeled on their output-affecting state only (Waterfall = selection +
+  annotations; Wiggle/PatchViewer are passthrough viewers with empty params).
+  `_PENDING` is empty. Generic round-trip test asserts idempotence from a
+  stabilized state.
+- **Phase 3 complete.** `WaterfallView` and `WiggleView` added; view-coverage
+  axis closed (`_VIEW_PENDING` empty), with a view round-trip test.
+- Full suite green throughout (1705 passed, 44 skipped after Phase 2).
+
+At this point every widget exposes typed `params` (and, where relevant, `view`)
+models as the authoritative *interface*. The models are still a typed view over
+the flat `Setting`s, so the two coexist — Phase 4 removes that duplication.
+
+## Phase 4 decision point (open)
+
+Making the model the authoritative *storage* (dropping the flat `Setting`s) is
+paused for review because it is destructive and outward-facing:
+
+- **`.ows` backward compatibility.** Existing saved workflows store each param
+  as a flat property (e.g. `detrend_type`). Removing that `Setting` means old
+  `.ows` files silently lose the value unless a migration shim reads the legacy
+  flat properties into the new blob on load. This needs an explicit decision.
+- **Shared base state.** Params like `selected_dim` live on `PatchDimWidget`, so
+  the blob bridge (`_params_blob` Setting + `storeSpecificSettings` writing
+  `get_params().model_dump()` + a restore hook calling `apply_params`) belongs on
+  the base as an opt-in, converted family-by-family rather than one widget in
+  isolation.
+
+Recommended Phase 4 shape once approved: add the opt-in blob bridge to the base,
+add a legacy-flat-settings migration on load, convert one family (Detrend) as the
+reference, verify the `.ows` round-trip and an old-format load, then roll out.
 
 ## Remaining work
 
