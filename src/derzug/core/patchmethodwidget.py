@@ -1,9 +1,10 @@
 """Declarative base for simple patch-in/patch-out DASCore method widgets.
 
-Many processing widgets share the same shape: one or more fixed-choice
-dropdowns (optionally a dimension chooser) feeding a single configured DASCore
-patch method. ``PatchMethodWidget`` captures that boilerplate so a concrete
-widget only declares its metadata, settings, and an ``_OPTIONS`` spec.
+Many processing widgets share the same shape: one or more controls (fixed-choice
+dropdowns and/or numeric spin boxes, optionally a dimension chooser) feeding a
+single configured DASCore patch method. ``PatchMethodWidget`` captures that
+boilerplate so a concrete widget only declares its metadata, settings, and an
+``_OPTIONS`` spec of :class:`ComboOption` / :class:`SpinOption`.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 import dascore as dc
-from AnyQt.QtWidgets import QComboBox
+from AnyQt.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
@@ -60,6 +61,37 @@ class ComboOption:
         return self.choices[0]
 
 
+@dataclass(frozen=True)
+class SpinOption:
+    """One numeric spin control backing a configured patch-method argument.
+
+    ``role`` mirrors :class:`ComboOption` but adds ``"dim_value"``, which feeds
+    the ``keyword_dim`` call style (the value passed under the selected
+    dimension). ``decimals=0`` selects an integer spin box.
+    """
+
+    setting: str
+    minimum: float = 0.0
+    maximum: float = 1.0
+    step: float = 0.01
+    decimals: int = 3
+    role: str = "kwarg"
+    label: str = ""
+    spin_attr: str = ""
+    kwarg_name: str = ""
+
+    @property
+    def is_int(self) -> bool:
+        """Return True when this option renders as an integer spin box."""
+        return self.decimals == 0
+
+    def coerce(self, value: object) -> float | int:
+        """Return ``value`` clamped to the configured range and numeric type."""
+        number = int(value) if self.is_int else float(value)
+        clamped = max(self.minimum, min(self.maximum, number))
+        return int(clamped) if self.is_int else clamped
+
+
 class PatchMethodWidget(PatchDimWidget, openclass=True):
     """Base for patch-in/patch-out widgets calling one configured DASCore method.
 
@@ -68,7 +100,8 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
     - ``method_name``: the DASCore ``Patch`` method to call, unless an option
       with ``role="method"`` supplies it.
     - ``call_style``: forwarded to :class:`PatchConfiguredMethodTask`.
-    - ``_OPTIONS``: the dropdowns to render and feed into the task.
+    - ``uses_dim``: whether a dimension chooser is shown and passed to the task.
+    - ``_OPTIONS``: the controls to render and feed into the task.
     - ``error_key``: the ``Error`` slot used for execution failures.
     """
 
@@ -77,7 +110,7 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
     uses_dim: ClassVar[bool] = True
     error_key: ClassVar[str] = "operation_failed"
     parameters_title: ClassVar[str] = "Parameters"
-    _OPTIONS: ClassVar[tuple[ComboOption, ...]] = ()
+    _OPTIONS: ClassVar[tuple[ComboOption | SpinOption, ...]] = ()
 
     selected_dim = Setting("")
 
@@ -99,24 +132,14 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
     def __init__(self) -> None:
         super().__init__()
         self._option_combos: dict[str, QComboBox] = {}
+        self._option_spins: dict[str, QDoubleSpinBox | QSpinBox] = {}
         box = gui.widgetBox(self.controlArea, self.parameters_title)
 
         for option in self._OPTIONS:
-            gui.widgetLabel(box, option.label or f"{option.setting}:")
-            combo = QComboBox(box)
-            combo.addItems(option.choices)
-            box.layout().addWidget(combo)
-            if getattr(self, option.setting) not in option.choices:
-                setattr(self, option.setting, option.default)
-            combo.setCurrentText(getattr(self, option.setting))
-            combo.currentTextChanged.connect(
-                lambda value, setting=option.setting: self._on_option_changed(
-                    setting, value
-                )
-            )
-            self._option_combos[option.setting] = combo
-            if option.combo_attr:
-                setattr(self, option.combo_attr, combo)
+            if isinstance(option, ComboOption):
+                self._build_combo(box, option)
+            else:
+                self._build_spin(box, option)
 
         if self.uses_dim:
             gui.widgetLabel(box, "Dimension:")
@@ -124,23 +147,65 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
             box.layout().addWidget(self._dim_combo)
             self._dim_combo.currentTextChanged.connect(self._on_dim_changed)
 
+    def _build_combo(self, box: object, option: ComboOption) -> None:
+        """Create and wire one dropdown control for ``option``."""
+        gui.widgetLabel(box, option.label or f"{option.setting}:")
+        combo = QComboBox(box)
+        combo.addItems(option.choices)
+        box.layout().addWidget(combo)
+        if getattr(self, option.setting) not in option.choices:
+            setattr(self, option.setting, option.default)
+        combo.setCurrentText(getattr(self, option.setting))
+        combo.currentTextChanged.connect(
+            lambda value, setting=option.setting: self._on_option_changed(
+                setting, value
+            )
+        )
+        self._option_combos[option.setting] = combo
+        if option.combo_attr:
+            setattr(self, option.combo_attr, combo)
+
+    def _build_spin(self, box: object, option: SpinOption) -> None:
+        """Create and wire one numeric spin control for ``option``."""
+        gui.widgetLabel(box, option.label or f"{option.setting}:")
+        spin = QSpinBox(box) if option.is_int else QDoubleSpinBox(box)
+        if not option.is_int:
+            spin.setDecimals(option.decimals)
+        spin.setRange(option.minimum, option.maximum)
+        spin.setSingleStep(option.step)
+        spin.setValue(option.coerce(getattr(self, option.setting)))
+        box.layout().addWidget(spin)
+        spin.valueChanged.connect(
+            lambda value, setting=option.setting: self._on_option_changed(
+                setting, value
+            )
+        )
+        self._option_spins[option.setting] = spin
+        if option.spin_attr:
+            setattr(self, option.spin_attr, spin)
+
     @Inputs.patch
     def set_patch(self, patch: dc.Patch | None) -> None:
         """Receive an input patch and run the configured method."""
         self._set_patch_input(patch)
         self.run()
 
+    def _rebind_dynamic_controls(self) -> None:
+        """Refresh the dim chooser only for widgets that use one."""
+        if self.uses_dim:
+            self._refresh_dims()
+
     def _on_dim_changed(self, value: str) -> None:
         """Persist the selected dimension and rerun."""
         self.selected_dim = value
         self.run()
 
-    def _on_option_changed(self, setting: str, value: str) -> None:
+    def _on_option_changed(self, setting: str, value: object) -> None:
         """Persist one changed option and rerun."""
         setattr(self, setting, value)
         self.run()
 
-    def _coerce_option(self, option: ComboOption) -> str:
+    def _coerce_combo(self, option: ComboOption) -> str:
         """Return a valid value for ``option``, resetting to the default if not."""
         value = getattr(self, option.setting)
         if value in option.choices:
@@ -153,6 +218,18 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
             combo.blockSignals(False)
         return option.default
 
+    def _coerce_spin(self, option: SpinOption) -> float | int:
+        """Return ``option`` clamped to range, updating the control if changed."""
+        coerced = option.coerce(getattr(self, option.setting))
+        if coerced != getattr(self, option.setting):
+            setattr(self, option.setting, coerced)
+            spin = self._option_spins.get(option.setting)
+            if spin is not None:
+                spin.blockSignals(True)
+                spin.setValue(coerced)
+                spin.blockSignals(False)
+        return coerced
+
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the widget's execution-error banner."""
         self._show_exception(self.error_key, exc)
@@ -162,18 +239,26 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
         method_name = self.method_name
         method_args: list[object] = []
         method_kwargs: dict[str, object] = {}
+        dim_value: object | None = None
         for option in self._OPTIONS:
-            value = self._coerce_option(option)
+            if isinstance(option, ComboOption):
+                value = self._coerce_combo(option)
+            else:
+                value = self._coerce_spin(option)
             if option.role == "method":
                 method_name = value
             elif option.role == "kwarg":
                 method_kwargs[option.kwarg_name or option.setting] = value
+            elif option.role == "dim_value":
+                dim_value = value
             else:
                 method_args.append(value)
 
         extra: dict[str, object] = {}
         if self.uses_dim:
             extra["dim"] = self._get_dim() or self.selected_dim
+        if dim_value is not None:
+            extra["dim_value"] = dim_value
         return PatchConfiguredMethodTask(
             method_name=method_name,
             call_style=self.call_style,
