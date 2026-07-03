@@ -18,12 +18,14 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import TypeAdapter
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.core.zugwidget import WidgetExecutionRequest
 from derzug.settings import Setting
 from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.parsing import parse_patch_text_value
+from derzug.widgets.filter_params import FilterParams
 from derzug.workflow import Task
 
 _FILTER_NAMES: tuple[str, ...] = (
@@ -224,6 +226,7 @@ class Filter(PatchDimWidget):
 
     name = "Filter"
     description = "Apply a DASCore filter function to a patch"
+    params_model = FilterParams
     icon = "icons/Filter.svg"
     category = "Processing"
     keywords = ("filter", "bandpass", "gaussian", "notch", "median", "sobel")
@@ -849,69 +852,91 @@ class Filter(PatchDimWidget):
         """The filter combo selects the per-filter parameter page."""
         return {self._filter_combo: self._stack}
 
-    def get_params(self):
-        """Return the current filter parameters as a typed pydantic model.
+    # model field -> widget setting, per filter type (shared dim/taper fields and
+    # the special gaussian windows are handled separately).
+    _PARAM_FIELDS: ClassVar[dict[str, dict[str, str]]] = {
+        "pass_filter": {
+            "low_bound": "low_bound",
+            "high_bound": "high_bound",
+            "corners": "corners",
+            "zerophase": "zerophase",
+        },
+        "notch_filter": {"frequency": "filter_window", "q": "q"},
+        "median_filter": {
+            "window": "filter_window",
+            "samples": "samples",
+            "mode": "mode",
+            "cval": "cval",
+        },
+        "hampel_filter": {
+            "window": "filter_window",
+            "threshold": "threshold",
+            "samples": "samples",
+            "approximate": "approximate",
+        },
+        "savgol_filter": {
+            "window": "filter_window",
+            "polyorder": "polyorder",
+            "samples": "samples",
+            "mode": "mode",
+            "cval": "cval",
+        },
+        "wiener_filter": {
+            "window": "filter_window",
+            "noise": "noise",
+            "samples": "samples",
+        },
+        "gaussian_filter": {
+            "samples": "samples",
+            "mode": "mode",
+            "cval": "cval",
+            "truncate": "truncate",
+        },
+        "sobel_filter": {"mode": "mode", "cval": "cval"},
+        "slope_filter": {
+            "slope_filt": "slope_filt",
+            "slope_dim0": "slope_dim0",
+            "slope_dim1": "slope_dim1",
+            "directional": "slope_directional",
+            "notch": "slope_notch",
+            "invert": "slope_invert",
+        },
+    }
 
-        Pilot for a widget-wide params-model layer; currently covers the
-        pass and notch filters.
-        """
-        from derzug.widgets.filter_params import NotchFilterParams, PassFilterParams
+    def get_params(self) -> FilterParams:
+        """Return the current filter parameters as a typed pydantic model."""
+        kind = self.selected_filter
+        data: dict[str, object] = {
+            "kind": kind,
+            "dim": self.selected_dim,
+            "apply_taper": bool(self.apply_taper),
+            "taper_window": self.taper_window,
+        }
+        for model_field, setting in self._PARAM_FIELDS[kind].items():
+            data[model_field] = getattr(self, setting)
+        if kind == "gaussian_filter":
+            data["windows"] = list(self.gaussian_dim_windows or [])
+        return TypeAdapter(FilterParams).validate_python(data)
 
-        selected = self.selected_filter
-        if selected == "pass_filter":
-            return PassFilterParams(
-                dim=self.selected_dim,
-                low_bound=self.low_bound,
-                high_bound=self.high_bound,
-                corners=int(self.corners),
-                zerophase=bool(self.zerophase),
-            )
-        if selected == "notch_filter":
-            return NotchFilterParams(
-                dim=self.selected_dim,
-                frequency=self.filter_window,
-                q=float(self.q),
-            )
-        raise NotImplementedError(
-            f"params model does not yet cover filter {selected!r}"
-        )
-
-    def apply_params(self, params) -> dict[str, object]:
+    def apply_params(self, params: object) -> dict[str, object]:
         """Apply a typed filter-parameter model (or its dict form) and re-run.
 
         Returns the prior widget settings (for undo), like ``apply_settings``.
         """
-        from pydantic import TypeAdapter
-
-        from derzug.widgets.filter_params import (
-            FilterParams,
-            NotchFilterParams,
-            PassFilterParams,
-        )
-
         if isinstance(params, dict):
             params = TypeAdapter(FilterParams).validate_python(params)
-        if isinstance(params, PassFilterParams):
-            return self.apply_settings(
-                {
-                    "selected_filter": "pass_filter",
-                    "selected_dim": params.dim,
-                    "low_bound": params.low_bound,
-                    "high_bound": params.high_bound,
-                    "corners": params.corners,
-                    "zerophase": params.zerophase,
-                }
-            )
-        if isinstance(params, NotchFilterParams):
-            return self.apply_settings(
-                {
-                    "selected_filter": "notch_filter",
-                    "selected_dim": params.dim,
-                    "filter_window": params.frequency,
-                    "q": params.q,
-                }
-            )
-        raise TypeError(f"unsupported filter params: {type(params).__name__}")
+        kind = params.kind
+        settings: dict[str, object] = {
+            "selected_filter": kind,
+            "selected_dim": params.dim,
+            "apply_taper": params.apply_taper,
+            "taper_window": params.taper_window,
+        }
+        for model_field, setting in self._PARAM_FIELDS[kind].items():
+            settings[setting] = getattr(params, model_field)
+        if kind == "gaussian_filter":
+            settings["gaussian_dim_windows"] = [w.model_dump() for w in params.windows]
+        return self.apply_settings(settings)
 
     def _sync_dependent_controls(self) -> None:
         """Re-derive dim visibility and mode from the selected filter."""

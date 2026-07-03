@@ -5,12 +5,20 @@ from __future__ import annotations
 import os
 import tempfile
 
+import pytest
 from derzug.utils.testing import widget_context
 from derzug.widgets.filter import Filter
 from derzug.widgets.filter_params import (
     FilterParams,
+    GaussianFilterParams,
+    HampelFilterParams,
+    MedianFilterParams,
     NotchFilterParams,
     PassFilterParams,
+    SavgolFilterParams,
+    SlopeFilterParams,
+    SobelFilterParams,
+    WienerFilterParams,
 )
 from pydantic import TypeAdapter
 
@@ -61,6 +69,26 @@ class TestFilterParamsModel:
             )
             assert isinstance(widget.get_params(), PassFilterParams)
             assert widget.low_bound == "1 Hz"
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            PassFilterParams(dim="time", low_bound="5 Hz", high_bound="40 Hz"),
+            NotchFilterParams(dim="time", frequency="60 Hz", q=30.0),
+            MedianFilterParams(dim="time", window="0.02"),
+            HampelFilterParams(dim="time", window="0.02", threshold=5.0),
+            SavgolFilterParams(dim="time", window="0.02", polyorder=2),
+            WienerFilterParams(dim="time", window="0.02"),
+            GaussianFilterParams(dim="time", truncate=3.0),
+            SobelFilterParams(dim="time"),
+            SlopeFilterParams(slope_filt="1,2"),
+        ],
+    )
+    def test_all_filter_types_roundtrip(self, model, qtbot):
+        """Every modeled filter type applies and reads back as the same model."""
+        with widget_context(Filter) as widget:
+            widget.apply_params(model)
+            assert widget.get_params() == model
 
     def test_schema_is_discriminated(self):
         """The JSON schema an agent would read distinguishes the filter types."""

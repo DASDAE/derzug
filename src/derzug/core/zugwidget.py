@@ -4,6 +4,8 @@ Base widget class for DerZug.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from AnyQt.QtCore import QPoint, Qt, QTimer
 from AnyQt.QtGui import QKeyEvent, QKeySequence, QShortcut, QShowEvent
 from AnyQt.QtWidgets import (
@@ -88,6 +90,11 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     UI in sync; the base handles combos, spin boxes, sliders, checkboxes, and
     text edits.
     """
+
+    #: Pydantic model (or discriminated union) describing this widget's
+    #: parameters, the authoritative typed schema for ``get_params`` /
+    #: ``apply_params``. ``None`` until the widget is migrated to a params model.
+    params_model: ClassVar[object | None] = None
 
     _FOCUS_EXCLUDE = (
         QLineEdit,
