@@ -849,6 +849,70 @@ class Filter(PatchDimWidget):
         """The filter combo selects the per-filter parameter page."""
         return {self._filter_combo: self._stack}
 
+    def get_params(self):
+        """Return the current filter parameters as a typed pydantic model.
+
+        Pilot for a widget-wide params-model layer; currently covers the
+        pass and notch filters.
+        """
+        from derzug.widgets.filter_params import NotchFilterParams, PassFilterParams
+
+        selected = self.selected_filter
+        if selected == "pass_filter":
+            return PassFilterParams(
+                dim=self.selected_dim,
+                low_bound=self.low_bound,
+                high_bound=self.high_bound,
+                corners=int(self.corners),
+                zerophase=bool(self.zerophase),
+            )
+        if selected == "notch_filter":
+            return NotchFilterParams(
+                dim=self.selected_dim,
+                frequency=self.filter_window,
+                q=float(self.q),
+            )
+        raise NotImplementedError(
+            f"params model does not yet cover filter {selected!r}"
+        )
+
+    def apply_params(self, params) -> dict[str, object]:
+        """Apply a typed filter-parameter model (or its dict form) and re-run.
+
+        Returns the prior widget settings (for undo), like ``apply_settings``.
+        """
+        from pydantic import TypeAdapter
+
+        from derzug.widgets.filter_params import (
+            FilterParams,
+            NotchFilterParams,
+            PassFilterParams,
+        )
+
+        if isinstance(params, dict):
+            params = TypeAdapter(FilterParams).validate_python(params)
+        if isinstance(params, PassFilterParams):
+            return self.apply_settings(
+                {
+                    "selected_filter": "pass_filter",
+                    "selected_dim": params.dim,
+                    "low_bound": params.low_bound,
+                    "high_bound": params.high_bound,
+                    "corners": params.corners,
+                    "zerophase": params.zerophase,
+                }
+            )
+        if isinstance(params, NotchFilterParams):
+            return self.apply_settings(
+                {
+                    "selected_filter": "notch_filter",
+                    "selected_dim": params.dim,
+                    "filter_window": params.frequency,
+                    "q": params.q,
+                }
+            )
+        raise TypeError(f"unsupported filter params: {type(params).__name__}")
+
     def _sync_dependent_controls(self) -> None:
         """Re-derive dim visibility and mode from the selected filter."""
         self._sync_primary_dim_visibility(self.selected_filter)
