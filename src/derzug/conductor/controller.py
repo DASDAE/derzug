@@ -116,7 +116,27 @@ def _widget_error(widget: object) -> str | None:
 
 
 class CanvasController:
-    """Read-only observation surface over one live ``DerZugMainWindow``."""
+    """Read-only observation surface over one live ``DerZugMainWindow``.
+
+    Wraps a running window and projects its workflow as JSON-serializable
+    observations for an agent:
+
+    - :meth:`get_canvas_state` — the whole node/link graph and active source.
+    - :meth:`list_widget_types` — the placeable widget catalog.
+    - :meth:`describe_node` — one node's detail plus an input-patch summary.
+    - :meth:`compile_check` — whether the canvas currently compiles.
+    - :meth:`get_focused_node` / :meth:`get_focus` — what the user is looking at
+      and pointing to, for shared user/agent context.
+
+    Phase 1 is read-only and must be called on the Qt main thread. See this
+    package's ``README.md`` for the return shapes and the roadmap.
+
+    Examples
+    --------
+    >>> controller = CanvasController(main_window)
+    >>> controller.get_canvas_state().model_dump()   # agent-ready JSON
+    {'title': None, 'nodes': [...], 'links': [...], 'active_source_id': None}
+    """
 
     def __init__(self, window: object) -> None:
         self._window = window

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
+import dascore as dc
 import pytest
 from derzug.conductor import CanvasController, CanvasState, FocusState, NodeDetail
 from derzug.conductor import controller as controller_module
+from derzug.conductor.controller import _json_safe
+from derzug.widgets.composite import NODE_ID_KEY
 
 
 def _description(window, name):
@@ -194,3 +198,108 @@ class TestFocusAndPointer:
         focus = controller.get_focus()
         assert focus.cursor.over_node_id == view_id
         assert focus.cursor.data_position == readout
+
+    def test_data_readout_hook_failure_is_safe(self, blank_canvas, monkeypatch):
+        """A failing cursor-readout hook yields a null data position, not an error."""
+        window, scheme = blank_canvas
+        waterfall = _add_node(scheme, window, "Waterfall", "view", (0.0, 0.0))
+        widget = scheme.widget_for_node(waterfall)
+
+        def _boom():
+            raise RuntimeError("no readout")
+
+        widget.conductor_cursor_readout = _boom
+        monkeypatch.setattr(
+            controller_module.QApplication, "activeWindow", staticmethod(lambda: None)
+        )
+        monkeypatch.setattr(
+            controller_module.QApplication,
+            "widgetAt",
+            staticmethod(lambda pos: widget),
+        )
+        focus = CanvasController(window).get_focus()
+        assert focus.cursor.data_position is None
+
+
+class TestNodeDetail:
+    """Per-node detail: patch summaries, errors, active source, and stable ids."""
+
+    def test_input_patch_summary(self, blank_canvas):
+        """A node holding an input patch reports its shape and dims."""
+        window, scheme = blank_canvas
+        waterfall = _add_node(scheme, window, "Waterfall", "view", (0.0, 0.0))
+        widget = scheme.widget_for_node(waterfall)
+        widget._patch = dc.get_example_patch("example_event_1")
+
+        controller = CanvasController(window)
+        view_id = controller.get_canvas_state().nodes[0].id
+        detail = controller.describe_node(view_id)
+        assert set(detail.input_patch["dims"]) == {"distance", "time"}
+        assert len(detail.input_patch["shape"]) == 2
+
+    def test_node_error_is_surfaced(self, blank_canvas):
+        """A widget's last unhandled error surfaces on its node state."""
+        window, scheme = blank_canvas
+        node = _add_node(scheme, window, "Waterfall", "view", (0.0, 0.0))
+        widget = scheme.widget_for_node(node)
+        widget._last_error_exc = (ValueError, ValueError("boom"), None)
+
+        state = CanvasController(window).get_canvas_state()
+        assert state.nodes[0].error == "boom"
+
+    def test_active_source_is_reported(self, blank_canvas):
+        """The active-source widget is flagged and named in the snapshot."""
+        window, scheme = blank_canvas
+        spool = _add_node(scheme, window, "Spool", "source", (0.0, 0.0))
+        widget = scheme.widget_for_node(spool)
+        window.active_source_manager = SimpleNamespace(_active_widget=widget)
+
+        state = CanvasController(window).get_canvas_state()
+        source = state.nodes[0]
+        assert source.is_active_source is True
+        assert state.active_source_id == source.id
+
+    def test_stable_node_id_from_properties(self, blank_canvas):
+        """A node's persisted DerZug id is preferred over its object id."""
+        window, scheme = blank_canvas
+        node = _add_node(scheme, window, "Spool", "source", (0.0, 0.0))
+        node.properties[NODE_ID_KEY] = "stable-id"
+
+        state = CanvasController(window).get_canvas_state()
+        assert state.nodes[0].id == "stable-id"
+
+
+class TestCompileCheckAndHelpers:
+    """compile_check over real graphs, and the settings JSON coercion helper."""
+
+    def test_compile_check_reports_graph(self, blank_canvas):
+        """A connected Spool->Waterfall compiles with the expected task/edge counts."""
+        window, scheme = blank_canvas
+        spool = _add_node(scheme, window, "Spool", "source", (0.0, 0.0))
+        waterfall = _add_node(scheme, window, "Waterfall", "view", (300.0, 0.0))
+        scheme.new_link(
+            spool,
+            spool.output_channel("Patch"),
+            waterfall,
+            waterfall.input_channel("Patch"),
+        )
+
+        result = CanvasController(window).compile_check()
+        assert result["ok"] is True
+        assert result["error"] is None
+        assert result["task_count"] == 2
+        assert result["edge_count"] == 1
+
+    def test_json_safe_coercion(self):
+        """Settings values are coerced to JSON-safe data, deeply."""
+        assert _json_safe(None) is None
+        assert _json_safe("x") == "x"
+        assert _json_safe(3) == 3
+        assert _json_safe(1.5) == 1.5
+        assert _json_safe(True) is True
+        assert _json_safe((1, "a")) == [1, "a"]  # tuples become lists
+        assert _json_safe({"k": [1, 2]}) == {"k": [1, 2]}
+        # Non-JSON values fall back to their string form.
+        coerced = _json_safe({"obj": object()})
+        assert isinstance(coerced["obj"], str)
+        json.dumps(coerced)  # must not raise
