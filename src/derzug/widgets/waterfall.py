@@ -39,7 +39,6 @@ from pydantic import BaseModel, Field
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.models.selection import SelectParams
-from derzug.settings import Setting
 from derzug.utils.display import format_nd_coord_value
 from derzug.utils.plot_axes import (
     CursorField,
@@ -346,6 +345,7 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     name = "Waterfall"
     params_model = WaterfallParams
     view_model = WaterfallView
+    authoritative_state = True
     description = "Interactive pyqtgraph waterfall view for DAS patches"
     icon = "icons/Waterfall.svg"
     category = "Visualize"
@@ -363,18 +363,6 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         "plasma",
         "turbo",
     )
-    colormap = Setting(_COLORMAPS[0])
-    color_limits = Setting(None)
-    reset_on_new = Setting(True)
-    # Keep selection state inside saved workflows only; do not promote it to
-    # future widget defaults.
-    saved_selection_basis = Setting("", schema_only=True)
-    saved_selection_ranges = Setting([], schema_only=True)
-    saved_selection_has_roi = Setting(None, schema_only=True)
-    saved_annotation_set = Setting(None, schema_only=True)
-    saved_view_range = Setting(None, schema_only=True)
-    saved_plot_y_dim = Setting("", schema_only=True)
-    saved_plot_x_dim = Setting("", schema_only=True)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""

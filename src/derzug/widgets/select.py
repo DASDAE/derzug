@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
 from derzug.models.selection import SelectParams
-from derzug.settings import Setting
 from derzug.utils.spool import (
     extract_single_patch,
     filter_contents_by_annotations,
@@ -104,17 +103,13 @@ class Select(SelectionControlsMixin, ZugWidget):
 
     name = "Select"
     params_model = SelectWidgetParams
+    authoritative_state = True
     want_main_area = False
     description = "Select subsets of patches or spools"
     icon = "icons/SelectRows.svg"
     category = "Processing"
     keywords = ("select", "patch", "spool", "subset", "filter")
     priority = 23
-    unpack_single_patch = Setting(True)
-    saved_patch_selection = Setting({}, schema_only=True)
-    saved_selection_basis = Setting("", schema_only=True)
-    saved_selection_ranges = Setting([], schema_only=True)
-    saved_spool_filters = Setting([], schema_only=True)
 
     def __setattr__(self, name, value) -> None:
         """Track restored settings so late patch selection restore stays atomic."""

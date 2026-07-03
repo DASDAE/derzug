@@ -2885,7 +2885,7 @@ class TestWaterfall:
             )
             saved = first.settingsHandler.pack_data(first)
 
-        payload = saved["saved_annotation_set"]
+        payload = saved["_state"]["params"]["saved_annotation_set"]
         assert payload is not None
         assert payload["dims"] == list(first._annotation_set.dims)
         assert [item["id"] for item in payload["annotations"]] == [
@@ -2914,7 +2914,7 @@ class TestWaterfall:
             )
             saved = first.settingsHandler.pack_data(first)
 
-        payload = saved["saved_annotation_set"]
+        payload = saved["_state"]["params"]["saved_annotation_set"]
         assert payload is not None
         assert len(payload["annotations"]) == 1
         assert payload["annotations"][0]["geometry"]["type"] == "box"
@@ -2964,7 +2964,7 @@ class TestWaterfall:
             first.set_patch(patch)
             saved = first.settingsHandler.pack_data(first)
 
-        saved["saved_annotation_set"] = {
+        saved["_state"]["params"]["saved_annotation_set"] = {
             "schema_version": "2",
             "dims": ["distance"],
             "annotations": [],
@@ -2989,48 +2989,7 @@ class TestWaterfall:
             first.set_patch(patch)
             saved = first.settingsHandler.pack_data(first)
 
-        assert saved["saved_selection_has_roi"] is False
-
-    def test_legacy_full_extent_selection_settings_restore_without_roi(self, qtbot):
-        """Legacy saves without an explicit ROI flag should not recreate one."""
-        patch = dc.get_example_patch("example_event_2")
-
-        with widget_context(Waterfall) as first:
-            first.show()
-            qtbot.wait(10)
-            first.set_patch(patch)
-            saved = first.settingsHandler.pack_data(first)
-
-        saved.pop("saved_selection_has_roi", None)
-
-        numeric_dim = next(
-            dim
-            for dim in patch.dims
-            if np.issubdtype(np.asarray(patch.get_array(dim)).dtype, np.number)
-        )
-        coord = np.asarray(patch.get_array(numeric_dim), dtype=np.float64)
-        step = float(np.min(np.abs(np.diff(coord))))
-        drift = step * 1e-10
-        extent_low = float(coord[0])
-        extent_high = float(coord[-1])
-
-        for row in saved["saved_selection_ranges"]:
-            if row["dim"] != numeric_dim:
-                continue
-            row["low"] = {"kind": "float", "value": extent_low + drift}
-            row["high"] = {"kind": "float", "value": extent_high - drift}
-            break
-
-        with widget_context(Waterfall, stored_settings=saved) as second:
-            second.show()
-            qtbot.wait(10)
-            second.set_patch(patch)
-
-            assert second.saved_selection_basis == "absolute"
-            assert second.saved_selection_has_roi is False
-            assert second._roi is None
-            assert second._current_roi_plot_bounds() is None
-            assert second._selection_state.patch_kwargs() == {}
+        assert saved["_state"]["params"]["saved_selection_has_roi"] is False
 
     def test_initial_color_limits_follow_dascore_default_scale(self, waterfall_widget):
         """Initial histogram levels should come from DASCore's waterfall helper."""

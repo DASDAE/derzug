@@ -69,10 +69,13 @@ def test_state_survives_ows_roundtrip(widget_cls, qtbot):
 
     # Re-apply the current params so the widget is in a settled, known state.
     widget.apply_params(widget.get_params(), run=False)
-    expected = widget.get_params()
 
     path = os.path.join(tempfile.mkdtemp(), "state_roundtrip.ows")
     window.save_scheme_to(scheme, path)
+    # Capture after save: saving syncs controls and may normalize state (e.g.
+    # Waterfall's unset ROI flag -> False), and that persisted form is what a
+    # reload must reproduce.
+    expected = widget.get_params()
 
     reloaded = ns._create_main_window()
     reloaded.load_scheme(path)
