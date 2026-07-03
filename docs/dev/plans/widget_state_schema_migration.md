@@ -75,7 +75,48 @@ At this point every widget exposes typed `params` (and, where relevant, `view`)
 models as the authoritative *interface*. The models are still a typed view over
 the flat `Setting`s, so the two coexist — Phase 4 removes that duplication.
 
-## Phase 4 decision point (open)
+## Phase 4 progress (authoritative storage, breaking)
+
+Decided: break `.ows` backward compatibility (no legacy migration); cleanest
+architecture; minor version bump on completion.
+
+Mechanism (on `ZugWidget`): a widget opting in with `authoritative_state = True`
+stores its models' serialized form in a single `_state` blob Setting and drops
+its flat per-param Settings. The base restores attributes from `_state` (or model
+defaults) in `_init_authoritative_state` before controls are built, and
+re-serializes on the `settingsAboutToBePacked` signal (the hook Orange emits from
+`pack_data`). `apply_settings` accepts model-backed attribute names, and the
+field maps derive from model fields regardless of Setting-ness.
+`tests/test_core/test_authoritative_state.py` proves the `.ows` round-trip and
+that params attributes are no longer flat Settings, parametrized over every
+converted widget.
+
+Converted (21/26): UFuncBinary; Aggregate, PlayAudio, Annotation2DataFrame,
+DataFrameLoader, Annotations, Table2Annotation, Coords, PatchViewer, Wiggle; and
+the PatchDimWidget family — Normalize, Fourier, Calculus, Rolling, Stft,
+Resample, FBE, Detrend, Analytic, Taper, UFuncUnary.
+
+Remaining (5), each a special case for careful follow-up:
+
+- **Filter** — `params_model` is a discriminated union, so it needs a custom
+  `_default_params` (a union can't be default-constructed) and custom
+  attribute restore (it overrides `get_params`/`apply_params` and holds attrs
+  for *all* filter types, while the blob captures only the active type; decide
+  whether inactive-type values should persist).
+- **Spool** — settings include live objects (`spool_input`) and a global-default
+  MRU (`recent_directories`, `schema_only=False`); decide what belongs in the
+  blob vs. stays app-level.
+- **Select**, **Waterfall** — `SelectionControlsMixin` (and Waterfall's plot
+  mixin) run their own saved-selection restore/`__setattr__` sync; the blob
+  restore must interleave with that.
+- **Code** — the scheme reload hangs with the `PythonEditor`; needs debugging
+  before conversion.
+
+Version bump: pending completion of the five above; the storage format is
+already broken for the converted widgets, so the minor bump lands with the final
+conversion.
+
+## Phase 4 decision point (resolved: break compatibility)
 
 Making the model the authoritative *storage* (dropping the flat `Setting`s) is
 paused for review because it is destructive and outward-facing:
