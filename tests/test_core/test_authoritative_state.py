@@ -78,6 +78,9 @@ def test_state_survives_ows_roundtrip(widget_cls, qtbot):
     expected = widget.get_params()
 
     reloaded = ns._create_main_window()
+    # Auto-accept the arbitrary-Python confirmation dialog (Code widget) that
+    # would otherwise block a headless scheme load.
+    reloaded.maybe_confirm_code_widget_load = lambda: True
     reloaded.load_scheme(path)
     reloaded_scheme = reloaded.current_document().scheme()
     restored = next(

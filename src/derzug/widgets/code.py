@@ -30,7 +30,6 @@ from orangewidget.utils.signals import PartialSummary
 from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
-from derzug.settings import Setting
 from derzug.utils.code2widget import INPUTS_NOT_READY, task_from_callable
 from derzug.workflow import Task
 
@@ -118,14 +117,13 @@ class Code(ZugWidget):
 
     name = "Code"
     params_model = CodeParams
+    authoritative_state = True
     description = "Run custom Python code on a patch"
     icon = "icons/PythonScript.svg"
     category = "Processing"
     keywords = ("code", "python", "script", "custom")
     priority = 21.7
     want_main_area = True
-
-    script_text = Setting(DEFAULT_SCRIPT)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""

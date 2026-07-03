@@ -2083,6 +2083,11 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         """Mirror the current shared selection state into schema-backed settings."""
         payload = self._selection_state.patch_settings_payload(include_inactive=True)
         if payload is None:
+            # With no patch to derive a selection from, keep any restored or
+            # pre-set selection state rather than wiping it (it should survive a
+            # save/reload before the input patch arrives).
+            if self._patch is None:
+                return
             self.saved_selection_basis = ""
             self.saved_selection_ranges = []
             self.saved_selection_has_roi = False
