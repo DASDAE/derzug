@@ -27,7 +27,6 @@ from derzug.widgets.detrend import Detrend
 from derzug.widgets.fbe import FBE
 from derzug.widgets.filter import Filter
 from derzug.widgets.fourier import Fourier
-from derzug.widgets.norm import Norm
 from derzug.widgets.normalize import Normalize
 from derzug.widgets.patchviewer import PatchViewer
 from derzug.widgets.playaudio import PlayAudio
@@ -54,7 +53,6 @@ ALL_WIDGET_CLASSES = (
     Filter,
     Fourier,
     Normalize,
-    Norm,
     PatchViewer,
     PlayAudio,
     Resample,
