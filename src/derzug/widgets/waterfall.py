@@ -34,6 +34,7 @@ from dascore.viz.waterfall import _get_scale as get_dascore_waterfall_scale
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
@@ -308,6 +309,20 @@ class _WaterfallViewBox(pg.ViewBox):
                     self.state["mouseMode"] = restore_mode
 
 
+class WaterfallParams(BaseModel):
+    """Output-affecting parameters for Waterfall: selection and annotations.
+
+    Presentation state (colormap, colour limits, view range, plot dims) is the
+    view model, not params — Waterfall emits selection and annotations as
+    downstream outputs, but its colouring never leaves the widget.
+    """
+
+    saved_selection_basis: str = ""
+    saved_selection_ranges: list = Field(default_factory=list)
+    saved_selection_has_roi: bool | None = None
+    saved_annotation_set: Any = None
+
+
 class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     """
     Display a 2D DAS patch as an interactive pyqtgraph waterfall image.
@@ -318,6 +333,7 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     """
 
     name = "Waterfall"
+    params_model = WaterfallParams
     description = "Interactive pyqtgraph waterfall view for DAS patches"
     icon = "icons/Waterfall.svg"
     category = "Visualize"

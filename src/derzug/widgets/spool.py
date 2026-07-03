@@ -34,7 +34,7 @@ from dascore.utils.patch import get_patch_names
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.settings import Setting
@@ -681,10 +681,35 @@ def _contents_identity_token(df: pd.DataFrame, row: int) -> str:
     return "row:" + "|".join(parts)
 
 
+class SpoolParams(BaseModel):
+    """Parameters for the Spool source widget (source + chunk + select config)."""
+
+    spool_input: Any = None
+    example_parameters: dict = Field(default_factory=dict)
+    file_input: str = ""
+    recent_directories: list = Field(default_factory=list)
+    raw_input: str = ""
+    chunk_dim: str = ""
+    chunk_enabled: bool = True
+    chunk_value: str = ""
+    chunk_overlap: str = ""
+    chunk_keep_partial: bool = False
+    chunk_snap_coords: bool = True
+    chunk_tolerance: float = 1.5
+    chunk_conflict: str = "raise"
+    select_filters: list = Field(default_factory=list)
+    select_col: str = ""
+    select_val: str = ""
+    selected_source_row: Any = None
+    selected_source_patch_name: str = ""
+    unpack_single_patch: bool = True
+
+
 class Spool(ZugWidget):
     """Orange widget for loading DASCore example spools."""
 
     name = "Spool"
+    params_model = SpoolParams
     description = "Interact with DASCore Spools"
     icon = "icons/Spool.svg"
     category = "IO"

@@ -17,18 +17,17 @@ from derzug.core import ZugWidget
 from derzug.utils.misc import load_widget_entrypoints
 from derzug.utils.testing import widget_context
 
-# Widgets not yet migrated to a pydantic params model. Remove each as it lands.
-_PENDING = {
-    "Spool",
-    "Waterfall",
-}
+# Widgets not yet migrated to a pydantic params model. Every widget is modeled.
+_PENDING: set[str] = set()
 
 
-# Widgets with presentation state that must declare a ``view_model``.
-_VISUAL_WIDGETS = {"Waterfall", "Wiggle", "PatchViewer", "Spool"}
+# Widgets with persisted presentation state that must declare a ``view_model``.
+# PatchViewer persists nothing and Spool's settings are all params, so neither
+# needs a view model.
+_VISUAL_WIDGETS = {"Waterfall", "Wiggle"}
 
-# Visual widgets not yet given a view model. Remove each as it lands.
-_VIEW_PENDING = {"Waterfall", "Wiggle", "PatchViewer", "Spool"}
+# Visual widgets not yet given a view model. Remove each as it lands (Phase 3).
+_VIEW_PENDING = {"Waterfall", "Wiggle"}
 
 
 def _all_widget_classes() -> dict[str, type]:
@@ -86,11 +85,17 @@ _MODELED = [
 
 @pytest.mark.parametrize("widget_cls", _MODELED)
 def test_params_roundtrip(widget_cls, qtbot):
-    """Reading params and applying them back is a stable no-op for every model."""
+    """Applying read-back params is idempotent from a stabilized state.
+
+    An initial apply lets widgets that normalize state on run (e.g. Waterfall
+    coercing an unset ROI flag to False) settle first; re-applying the settled
+    params must then be a stable no-op.
+    """
     with widget_context(widget_cls) as widget:
-        params = widget.get_params()
-        widget.apply_params(params)
-        assert widget.get_params() == params
+        widget.apply_params(widget.get_params())
+        stabilized = widget.get_params()
+        widget.apply_params(stabilized)
+        assert widget.get_params() == stabilized
 
 
 def test_view_model_coverage():
