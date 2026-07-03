@@ -9,6 +9,8 @@ well-typed observation surface so its shape can be reviewed first.
 from derzug.conductor.controller import CanvasController
 from derzug.conductor.schema import (
     CanvasState,
+    CursorState,
+    FocusState,
     LinkState,
     NodeDetail,
     NodeState,
@@ -19,6 +21,8 @@ from derzug.conductor.schema import (
 __all__ = (
     "CanvasController",
     "CanvasState",
+    "CursorState",
+    "FocusState",
     "LinkState",
     "NodeDetail",
     "NodeState",

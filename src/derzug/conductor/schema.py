@@ -77,3 +77,21 @@ class NodeDetail(BaseModel):
 
     node: NodeState
     input_patch: dict[str, Any] | None
+
+
+class CursorState(BaseModel):
+    """Where the user's pointer is, for shared user/agent context."""
+
+    screen_xy: tuple[int, int]
+    over_node_id: str | None
+    # Data-space position under the cursor (e.g. {"time": ..., "distance": ...,
+    # "value": ...}), when the hovered widget exposes a cursor readout.
+    data_position: dict[str, Any] | None
+
+
+class FocusState(BaseModel):
+    """What the user is currently looking at and pointing to."""
+
+    focused_node_id: str | None
+    focused_window_title: str | None
+    cursor: CursorState

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
-from derzug.conductor import CanvasController, CanvasState, NodeDetail
+from derzug.conductor import CanvasController, CanvasState, FocusState, NodeDetail
+from derzug.conductor import controller as controller_module
 
 
 def _description(window, name):
@@ -117,7 +120,77 @@ class TestObservations:
         window, scheme = blank_canvas
         _add_node(scheme, window, "Spool", "source", (0.0, 0.0))
         dumped = CanvasController(window).get_canvas_state().model_dump()
-        import json
-
         json.dumps(dumped)  # must not raise
         assert dumped["nodes"][0]["title"] == "source"
+
+
+class TestFocusAndPointer:
+    """The controller reports what the user is looking at and pointing to."""
+
+    def test_focus_maps_focused_widget_window(self, blank_canvas, monkeypatch):
+        """A focused widget window resolves to its canvas node."""
+        window, scheme = blank_canvas
+        spool = _add_node(scheme, window, "Spool", "source", (0.0, 0.0))
+        widget = scheme.widget_for_node(spool)
+        monkeypatch.setattr(
+            controller_module.QApplication,
+            "activeWindow",
+            staticmethod(lambda: widget),
+        )
+        monkeypatch.setattr(
+            controller_module.QApplication, "widgetAt", staticmethod(lambda pos: None)
+        )
+
+        controller = CanvasController(window)
+        source_id = next(
+            node.id
+            for node in controller.get_canvas_state().nodes
+            if node.title == "source"
+        )
+
+        focus = controller.get_focus()
+        assert isinstance(focus, FocusState)
+        assert focus.focused_node_id == source_id
+        assert controller.get_focused_node() == source_id
+        json.dumps(focus.model_dump())  # must not raise
+
+    def test_focus_none_when_canvas_focused(self, blank_canvas, monkeypatch):
+        """Focus on the canvas window (not a widget) reports no focused node."""
+        window, _ = blank_canvas
+        monkeypatch.setattr(
+            controller_module.QApplication,
+            "activeWindow",
+            staticmethod(lambda: window),
+        )
+        monkeypatch.setattr(
+            controller_module.QApplication, "widgetAt", staticmethod(lambda pos: None)
+        )
+        focus = CanvasController(window).get_focus()
+        assert focus.focused_node_id is None
+        assert focus.cursor.over_node_id is None
+
+    def test_cursor_over_node_and_data_readout(self, blank_canvas, monkeypatch):
+        """The hovered node and its data-space cursor readout are reported."""
+        window, scheme = blank_canvas
+        waterfall = _add_node(scheme, window, "Waterfall", "view", (0.0, 0.0))
+        widget = scheme.widget_for_node(waterfall)
+        readout = {"time": "t0", "distance": 340.0, "value": 1.0}
+        widget.conductor_cursor_readout = lambda: readout
+        monkeypatch.setattr(
+            controller_module.QApplication, "activeWindow", staticmethod(lambda: None)
+        )
+        monkeypatch.setattr(
+            controller_module.QApplication,
+            "widgetAt",
+            staticmethod(lambda pos: widget),
+        )
+
+        controller = CanvasController(window)
+        view_id = next(
+            node.id
+            for node in controller.get_canvas_state().nodes
+            if node.title == "view"
+        )
+        focus = controller.get_focus()
+        assert focus.cursor.over_node_id == view_id
+        assert focus.cursor.data_position == readout

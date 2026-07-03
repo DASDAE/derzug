@@ -15,10 +15,14 @@ from __future__ import annotations
 from typing import Any
 
 import dascore as dc
+from AnyQt.QtGui import QCursor
+from AnyQt.QtWidgets import QApplication
 from orangewidget.settings import Setting
 
 from derzug.conductor.schema import (
     CanvasState,
+    CursorState,
+    FocusState,
     LinkState,
     NodeDetail,
     NodeState,
@@ -217,6 +221,59 @@ class CanvasController:
                     input_patch=_patch_summary(getattr(widget, "_patch", None)),
                 )
         raise KeyError(f"no node with id {node_id!r}")
+
+    def _node_for_window(self, window: object | None) -> Any | None:
+        """Return the node whose widget owns ``window``, or None."""
+        if window is None:
+            return None
+        scheme = self._scheme()
+        for node in scheme.nodes:
+            widget = scheme.widget_for_node(node)
+            if widget is window or widget.window() is window:
+                return node
+        return None
+
+    def _data_position(self, node: Any | None) -> dict[str, Any] | None:
+        """Return the hovered widget's data-space cursor readout, if it exposes one.
+
+        Plotting widgets can implement ``conductor_cursor_readout()`` returning a
+        mapping like ``{"time": ..., "distance": ..., "value": ...}``; until they
+        do, this is ``None``.
+        """
+        if node is None:
+            return None
+        widget = self._scheme().widget_for_node(node)
+        hook = getattr(widget, "conductor_cursor_readout", None)
+        if not callable(hook):
+            return None
+        try:
+            readout = hook()
+        except Exception:
+            return None
+        return dict(readout) if readout else None
+
+    def get_focused_node(self) -> str | None:
+        """Return the id of the node whose widget window is currently focused."""
+        node = self._node_for_window(QApplication.activeWindow())
+        return _node_id(node) if node is not None else None
+
+    def get_focus(self) -> FocusState:
+        """Return what the user is looking at and pointing to (shared context)."""
+        active = QApplication.activeWindow()
+        focused_node = self._node_for_window(active)
+        position = QCursor.pos()
+        over_node = self._node_for_window(
+            widget.window() if (widget := QApplication.widgetAt(position)) else None
+        )
+        return FocusState(
+            focused_node_id=_node_id(focused_node) if focused_node else None,
+            focused_window_title=active.windowTitle() if active is not None else None,
+            cursor=CursorState(
+                screen_xy=(position.x(), position.y()),
+                over_node_id=_node_id(over_node) if over_node else None,
+                data_position=self._data_position(over_node),
+            ),
+        )
 
     def compile_check(self) -> dict[str, Any]:
         """Return whether the current canvas compiles, with a compact summary."""
