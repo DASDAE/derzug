@@ -12,7 +12,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
@@ -32,18 +31,13 @@ class Calculus(PatchDimWidget):
 
     name = "Calculus"
     params_model = CalculusParams
+    authoritative_state = True
     description = "Apply differentiation and integration transforms to a patch"
     icon = "icons/Calculus.svg"
     category = "Transform"
     keywords = ("transform", "differentiate", "integrate", "derivative", "integral")
     priority = 21.3
     want_main_area = False
-
-    transform = Setting("differentiate")
-    selected_dim = Setting("")
-    order = Setting(2)
-    step = Setting(1)
-    definite = Setting(False)
 
     _TRANSFORMS: ClassVar[tuple[str, ...]] = ("differentiate", "integrate")
 

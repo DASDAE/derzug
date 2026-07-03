@@ -22,7 +22,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel, Field
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
@@ -50,18 +49,13 @@ class Fourier(PatchDimWidget):
 
     name = "Fourier"
     params_model = FourierParams
+    authoritative_state = True
     description = "Apply DASCore Fourier transforms to a patch"
     icon = "icons/Fourier.svg"
     category = "Transform"
     keywords = ("transform", "fourier", "fft", "dft", "idft")
     priority = 21.1
     want_main_area = False
-
-    transform = Setting("dft")
-    selected_dim = Setting("")
-    selected_dims = Setting([])
-    real_mode = Setting("Auto")
-    pad = Setting(True)
 
     _TRANSFORMS: ClassVar[tuple[str, ...]] = _TRANSFORMS
 

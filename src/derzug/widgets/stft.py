@@ -14,7 +14,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
@@ -36,19 +35,13 @@ class Stft(PatchDimWidget):
 
     name = "Stft"
     params_model = StftParams
+    authoritative_state = True
     description = "Apply a short-time Fourier transform to a patch"
     icon = "icons/Stft.svg"
     category = "Transform"
     keywords = ("stft", "spectrogram", "fourier", "transform")
     priority = 21.15
     want_main_area = False
-
-    selected_dim = Setting("")
-    window_length = Setting("0.01")
-    overlap = Setting("50 %")
-    taper_window = Setting("hann")
-    samples = Setting(False)
-    detrend = Setting(False)
 
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""

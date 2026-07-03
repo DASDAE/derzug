@@ -13,7 +13,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task
 
@@ -98,21 +97,13 @@ class FBE(PatchDimWidget):
 
     name = "FBE"
     params_model = FBEParams
+    authoritative_state = True
     description = "Extract one frequency band energy feature from a patch"
     icon = "icons/FBE.svg"
     category = "Transform"
     keywords = ("fbe", "stft", "frequency", "band", "energy")
     priority = 21.14
     want_main_area = False
-
-    selected_dim = Setting("")
-    window_length = Setting("0.01")
-    overlap = Setting("50 %")
-    taper_window = Setting("hann")
-    samples = Setting(False)
-    detrend = Setting(False)
-    fbe_lower = Setting("")
-    fbe_upper = Setting("")
 
     _WINDOW_TYPES: ClassVar[tuple[str, ...]] = (
         "hann",

@@ -7,7 +7,6 @@ from typing import ClassVar
 from Orange.widgets.widget import Msg
 
 from derzug.core.patchmethodwidget import ComboOption, PatchMethodWidget
-from derzug.settings import Setting
 
 
 class UFuncUnary(PatchMethodWidget):
@@ -21,7 +20,7 @@ class UFuncUnary(PatchMethodWidget):
     priority = 22
     want_main_area = False
 
-    selected_op = Setting("abs")
+    authoritative_state = True
 
     _OPS: ClassVar[tuple[str, ...]] = (
         "abs",

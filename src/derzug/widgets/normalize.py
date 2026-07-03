@@ -12,7 +12,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
@@ -30,16 +29,13 @@ class Normalize(PatchDimWidget):
 
     name = "Normalize"
     params_model = NormalizeParams
+    authoritative_state = True
     description = "Apply DASCore normalize or standardize to a patch"
     icon = "icons/Normalize.svg"
     category = "Processing"
     keywords = ("normalize", "standardize", "scale", "amplitude")
     priority = 21.5
     want_main_area = False
-
-    operation = Setting("normalize")
-    selected_dim = Setting("")
-    norm = Setting("l2")
 
     _OPERATIONS: ClassVar[tuple[str, ...]] = ("normalize", "standardize")
     _NORMS: ClassVar[tuple[str, ...]] = ("l1", "l2", "max", "bit")

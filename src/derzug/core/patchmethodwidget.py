@@ -89,6 +89,7 @@ class SpinOption:
     label: str = ""
     spin_attr: str = ""
     kwarg_name: str = ""
+    default: float = 0.0
 
     @property
     def is_int(self) -> bool:
@@ -108,11 +109,11 @@ def _build_params_model(cls: type) -> type:
     if cls.uses_dim:
         fields["dim"] = (str, _setting_default(cls, "selected_dim", ""))
     for option in cls._OPTIONS:
-        default = _setting_default(cls, option.setting, None)
         if isinstance(option, ComboOption):
-            fields[option.setting] = (Literal[tuple(option.choices)], default)
+            fields[option.setting] = (Literal[tuple(option.choices)], option.default)
         else:
-            fields[option.setting] = (int if option.is_int else float, default)
+            field_type = int if option.is_int else float
+            fields[option.setting] = (field_type, field_type(option.default))
     return create_model(f"{cls.__name__}Params", **fields)
 
 
@@ -135,8 +136,6 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
     error_key: ClassVar[str] = "operation_failed"
     parameters_title: ClassVar[str] = "Parameters"
     _OPTIONS: ClassVar[tuple[ComboOption | SpinOption, ...]] = ()
-
-    selected_dim = Setting("")
 
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""

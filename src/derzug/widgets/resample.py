@@ -12,7 +12,6 @@ from Orange.widgets.widget import Msg
 from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.utils.parsing import parse_patch_text_value, parse_text_value
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
@@ -37,20 +36,13 @@ class Resample(PatchDimWidget):
 
     name = "Resample"
     params_model = ResampleParams
+    authoritative_state = True
     description = "Decimate or resample a patch along a dimension"
     icon = "icons/Resample.svg"
     category = "Processing"
     keywords = ("resample", "decimate", "downsample", "upsample", "interpolate")
     priority = 24
     want_main_area = False
-
-    mode = Setting("decimate")
-    selected_dim = Setting("")
-    decimate_factor = Setting("2")
-    decimate_filter_type = Setting("iir")
-    resample_target = Setting("10 ms")
-    resample_samples = Setting(False)
-    resample_interp_kind = Setting("linear")
 
     _MODE_NAMES: ClassVar[tuple[str, ...]] = ("decimate", "resample")
     _DECIMATE_FILTER_TYPES: ClassVar[tuple[str, ...]] = ("iir", "fir", "none")
