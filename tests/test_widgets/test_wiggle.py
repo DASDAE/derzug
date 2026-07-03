@@ -45,6 +45,25 @@ def example_patch_1d(example_patch_2d):
 
 
 @pytest.fixture(scope="session")
+def wide_patch_2d():
+    """Return a 2D patch with more traces than the render cap."""
+    rng = np.random.default_rng(0)
+    trace_count = Wiggle._AUTO_STRIDE_TRACE_CAP + 100
+    data = rng.standard_normal((trace_count, 60))
+    time_values = np.datetime64("2024-01-02T03:04:05") + np.arange(60).astype(
+        "timedelta64[ms]"
+    )
+    return dc.Patch(
+        data=data,
+        coords={
+            "distance": np.arange(trace_count, dtype=np.float64),
+            "time": time_values,
+        },
+        dims=("distance", "time"),
+    )
+
+
+@pytest.fixture(scope="session")
 def ricker_moveout_patch():
     """Return the ricker moveout example patch used for direct wiggle regressions."""
     return dc.get_example_patch("ricker_moveout")
@@ -148,9 +167,8 @@ def _first_trace_peak_excursion(widget: Wiggle) -> float:
     """Return the peak excursion of the first rendered wiggle trace."""
     state = widget._render_state
     assert state is not None and state.mode == "offset"
-    sample_count = len(state.x_plot)
     trace_offset = float(state.trace_offsets[0])
-    first_trace = state.flat_y[:sample_count]
+    first_trace = state.trace_rows[0]
     return float(np.nanmax(np.abs(first_trace - trace_offset)))
 
 
@@ -252,7 +270,80 @@ class TestWiggle:
         assert state.y_dim == "distance"
         assert np.array_equal(state.trace_indices, np.arange(patch.shape[0])[::10])
         assert state.trace_offsets.shape == state.trace_indices.shape
-        assert state.flat_x.size == state.flat_y.size
+        assert state.trace_rows.shape == (state.trace_indices.size, state.x_plot.size)
+
+    def test_time_series_2d_caps_rendered_lines(self, wide_patch_2d):
+        """2D time-series rendering should stride rows above the trace cap."""
+        patch = wide_patch_2d
+        trace_count = patch.shape[0]
+
+        state = Wiggle._build_time_series_state_2d(
+            patch,
+            selected_x_dim="time",
+            percentiles_enabled=False,
+            color_limits=None,
+        )
+
+        stride = Wiggle._auto_stride_for_trace_count(trace_count)
+        assert stride > 1
+        assert state.line_values.shape[0] <= Wiggle._AUTO_STRIDE_TRACE_CAP
+        assert state.full_line_values.shape[0] == trace_count
+        assert np.array_equal(state.series_indices, np.arange(trace_count)[::stride])
+        assert np.allclose(state.series_coord, patch.get_array("distance")[::stride])
+
+    def test_percentiles_use_all_rows_above_cap(self, wide_patch_2d):
+        """Percentile aggregation should include rows hidden by the line cap."""
+        state = Wiggle._build_time_series_state_2d(
+            wide_patch_2d,
+            selected_x_dim="time",
+            percentiles_enabled=True,
+            color_limits=None,
+        )
+
+        expected = np.nanpercentile(np.asarray(wide_patch_2d.data), 50.0, axis=0)
+        assert state.line_values.shape[0] == 7
+        assert np.allclose(state.line_values[3], expected)
+
+    def test_line_item_pool_reused_across_renders(self, wiggle_widget, small_patch_2d):
+        """Re-renders should reuse pooled line items instead of recreating them."""
+        wiggle_widget.set_patch(small_patch_2d)
+        first_items = wiggle_widget._all_line_curves()
+        assert len(first_items) > 1
+
+        wiggle_widget._gain_slider.setValue(300)
+
+        second_items = wiggle_widget._all_line_curves()
+        assert [id(item) for item in first_items] == [id(item) for item in second_items]
+
+    def test_lines_use_downsampling_and_clipping(self, wiggle_widget, small_patch_2d):
+        """Rendered lines should enable peak downsampling, clipping, thin pens."""
+        wiggle_widget.set_patch(small_patch_2d)
+
+        items = wiggle_widget._all_line_curves()
+        assert len(items) == small_patch_2d.shape[0]
+        for item in items:
+            assert item.opts["autoDownsample"] is True
+            assert item.opts["downsampleMethod"] == "peak"
+            assert item.opts["clipToView"] is True
+            assert item.opts["pen"].widthF() <= 1.0
+
+    def test_mode_switch_restores_default_pens(self, wiggle_widget, small_patch_2d):
+        """Offset rendering after colored series mode should restore black pens."""
+        wiggle_widget.set_patch(small_patch_2d)
+        wiggle_widget._mode_combo.setCurrentText("time series")
+        colored = {
+            curve.opts["pen"].color().getRgb()
+            for curve in wiggle_widget._all_line_curves()
+        }
+        assert len(colored) > 1
+
+        wiggle_widget._mode_combo.setCurrentText("offset")
+
+        pens = {
+            curve.opts["pen"].color().getRgb()
+            for curve in wiggle_widget._all_line_curves()
+        }
+        assert pens == {Wiggle._LINE_COLOR}
 
     def test_widget_instantiates(self, wiggle_widget):
         """Widget starts with no curves, an empty combo, and default settings."""

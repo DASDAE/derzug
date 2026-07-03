@@ -43,8 +43,7 @@ class _OffsetRenderState:
     title: str
     trace_offsets: np.ndarray
     trace_indices: np.ndarray
-    flat_x: np.ndarray
-    flat_y: np.ndarray
+    trace_rows: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -120,6 +119,9 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     _AUTO_STRIDE_TRACE_CAP = 300
     _GAIN_MIN = 1
     _GAIN_MAX = 1200
+    # Qt's raster engine draws pens wider than 1 device pixel roughly 16x
+    # slower, so all bulk line rendering must stay at width 1.
+    _LINE_COLOR = (15, 15, 15, 255)
 
     name = "Wiggle"
     description = "Interactive pyqtgraph wiggle view for DAS patches"
@@ -185,7 +187,9 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         self._colormap_ui_dirty = False
         self._axis_kinds = {"bottom": "numeric", "left": "numeric"}
         self._axis_dims = {"bottom": "Sample", "left": "Trace"}
-        self._series_curves: list[pg.PlotCurveItem] = []
+        self._series_curves: list[pg.PlotDataItem] = []
+        self._line_clip_allowed = False
+        self._line_pens_dirty = False
         self._ignore_color_level_changes = 0
         self._current_colormap = pg.colormap.get("viridis")
 
@@ -261,7 +265,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         main_layout.addWidget(self._build_nd_plot_controls(main_container), 0)
         self.mainArea.layout().addWidget(main_container)
 
-        self._curve = pg.PlotCurveItem(pen=pg.mkPen(color=(15, 15, 15, 255), width=2))
+        self._curve = self._new_line_item()
         self._plot_item.addItem(self._curve)
         self._color_bar = pg.ColorBarItem(
             values=(0.0, 1.0),
@@ -599,12 +603,12 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         """Render the current patch in the selected mode."""
         self.Error.clear()
         view_range = self._get_view_range() if preserve_view_range else None
-        self._clear_curves()
         self._hide_color_bar()
 
         display_patch = self._current_display_patch()
         self._display_patch = display_patch
         if display_patch is None:
+            self._clear_curves()
             self._render_state = None
             self._axis_kinds = {"bottom": "numeric", "left": "numeric"}
             self._axis_dims = {"bottom": "Sample", "left": "Trace"}
@@ -615,11 +619,14 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
 
         try:
             data = np.asarray(display_patch.data)
+            # Clip lines immediately only when the view range is kept; fresh
+            # renders enable clipping after auto-range settles the view.
+            clip_lines = view_range is not None
             if data.ndim == 1:
                 self.mode = "time series"
                 self._refresh_controls()
                 state = self._build_time_series_state_1d(display_patch)
-                self._apply_time_series_state(state)
+                self._apply_time_series_state(state, clip_lines=clip_lines)
             elif data.ndim == 2 and self.mode == "time series":
                 state = self._build_time_series_state_2d(
                     display_patch,
@@ -627,7 +634,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
                     percentiles_enabled=bool(self.percentiles),
                     color_limits=self.series_color_limits,
                 )
-                self._apply_time_series_state(state)
+                self._apply_time_series_state(state, clip_lines=clip_lines)
             elif data.ndim == 2:
                 state = self._build_offset_state_2d(
                     display_patch,
@@ -635,12 +642,14 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
                     stride=self.stride,
                     gain=self.gain,
                 )
-                self._apply_offset_state(state)
+                self._apply_offset_state(state, clip_lines=clip_lines)
             else:
                 raise ValueError(f"expected 1D or 2D data, got shape {data.shape}")
 
             self._refresh_axis_labels()
             if view_range is None:
+                # Auto-range must run before clipping is enabled: clipped
+                # items only report the visible slice as their data bounds.
                 self._plot_item.vb.enableAutoRange(x=True, y=True)
                 self._plot_item.vb.autoRange()
             else:
@@ -650,6 +659,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
                     yRange=view_range[1],
                     padding=0,
                 )
+            self._enable_line_clipping()
         except Exception as exc:
             self._display_patch = None
             self._render_state = None
@@ -734,10 +744,13 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
             rendered_series_indices = np.arange(len(percentile_values), dtype=int)
             rendered_series_dim = "percentile"
         else:
-            rendered_values = full_line_values
-            rendered_series_plot = series_plot
-            rendered_series_coord = series_coord
-            rendered_series_indices = series_indices
+            # Cap rendered lines like offset mode's auto stride; hundreds of
+            # overlapping series are unreadable and slow to paint.
+            stride = cls._auto_stride_for_trace_count(full_line_values.shape[0])
+            rendered_values = full_line_values[::stride]
+            rendered_series_plot = series_plot[::stride]
+            rendered_series_coord = series_coord[::stride]
+            rendered_series_indices = series_indices[::stride]
             rendered_series_dim = series_dim
         default_levels = cls._default_series_color_levels(rendered_series_plot)
         resolved_levels = cls._resolve_series_color_levels(
@@ -764,21 +777,57 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
             color_levels=resolved_levels,
         )
 
-    def _render_series_lines(
-        self, x_plot: np.ndarray, series_values: np.ndarray
+    @classmethod
+    def _default_line_pen(cls) -> pg.QtGui.QPen:
+        """Return the standard width-1 pen used for bulk line rendering."""
+        return pg.mkPen(color=cls._LINE_COLOR, width=1)
+
+    def _new_line_item(self) -> pg.PlotDataItem:
+        """Return a line item prepared for pooled row rendering."""
+        return pg.PlotDataItem(pen=self._default_line_pen())
+
+    def _ensure_line_item_count(self, count: int) -> None:
+        """Grow or shrink the pooled line items to exactly count rows."""
+        while len(self._series_curves) < count - 1:
+            item = self._new_line_item()
+            self._plot_item.addItem(item)
+            self._series_curves.append(item)
+        while len(self._series_curves) > max(count - 1, 0):
+            self._plot_item.removeItem(self._series_curves.pop())
+
+    def _set_line_rows(
+        self,
+        x_plot: np.ndarray,
+        rows: np.ndarray,
+        *,
+        clip: bool,
+        pen: pg.QtGui.QPen | None = None,
     ) -> None:
-        """Render one curve per row in a 2D series matrix."""
-        # This assumes _clear_curves() removed any prior extra line items first.
-        if series_values.shape[0] == 0:
+        """Write one data row per pooled line item, sharing the x values."""
+        x = np.ascontiguousarray(x_plot, dtype=np.float64)
+        self._ensure_line_item_count(max(int(rows.shape[0]), 1))
+        if rows.shape[0] == 0:
             self._curve.setData([], [])
             return
+        # Peak downsampling and view clipping keep paint cost proportional to
+        # pixels instead of samples, but both require increasing x values.
+        increasing = x.size > 1 and bool(np.all(np.diff(x) > 0))
+        self._line_clip_allowed = increasing
+        for item, row in zip(self._all_line_curves(), rows, strict=True):
+            # The config setters no-op when unchanged, so pooled items pay
+            # only for the setData recompute on typical re-renders.
+            item.setDownsampling(ds=1, auto=increasing, method="peak")
+            item.setClipToView(clip and increasing)
+            if pen is not None:
+                item.setPen(pen)
+            item.setData(x, row)
 
-        self._curve.setData(x_plot, series_values[0])
-        for row in series_values[1:]:
-            curve = pg.PlotCurveItem()
-            curve.setData(x_plot, row)
-            self._plot_item.addItem(curve)
-            self._series_curves.append(curve)
+    def _enable_line_clipping(self) -> None:
+        """Clip pooled lines to the view once the view range is settled."""
+        if not self._line_clip_allowed:
+            return
+        for item in self._all_line_curves():
+            item.setClipToView(True)
 
     @staticmethod
     def _build_offset_state_2d(
@@ -823,17 +872,6 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         max_abs[~np.isfinite(max_abs) | (max_abs == 0)] = 1.0
         normalized = traces / max_abs
         y_values = normalized * trace_scale + offsets[:, np.newaxis]
-
-        n_traces, _ = y_values.shape
-        x_rows = np.tile(x_axis, (n_traces, 1))
-        if n_traces > 1:
-            x_rows[1::2] = x_rows[1::2, ::-1]
-            y_values = y_values.copy()
-            y_values[1::2] = y_values[1::2, ::-1]
-        nans_col = np.full((n_traces, 1), np.nan)
-        x_with_nan = np.concatenate([x_rows, nans_col], axis=1)
-        flat_x = x_with_nan.ravel()
-        flat_y = np.concatenate([y_values, nans_col], axis=1).ravel()
         return _OffsetRenderState(
             mode="offset",
             x_dim=x_label,
@@ -845,13 +883,16 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
             title=f"Wiggle ({selected_trace_dim})",
             trace_offsets=offsets,
             trace_indices=trace_indices,
-            flat_x=flat_x,
-            flat_y=flat_y,
+            trace_rows=y_values,
         )
 
-    def _apply_time_series_state(self, state: _TimeSeriesRenderState) -> None:
+    def _apply_time_series_state(
+        self, state: _TimeSeriesRenderState, *, clip_lines: bool
+    ) -> None:
         """Apply time-series plotting metadata to the live plot."""
-        self._render_series_lines(state.x_plot, state.line_values)
+        pen = self._default_line_pen() if self._line_pens_dirty else None
+        self._line_pens_dirty = False
+        self._set_line_rows(state.x_plot, state.line_values, clip=clip_lines, pen=pen)
         self._render_state = state
         self._axis_kinds = {"bottom": state.bottom_axis_kind, "left": "numeric"}
         self._axis_dims = {"bottom": state.x_dim, "left": state.y_dim}
@@ -868,10 +909,15 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         self._show_color_bar()
         self._apply_series_colors()
 
-    def _apply_offset_state(self, state: _OffsetRenderState) -> None:
+    def _apply_offset_state(
+        self, state: _OffsetRenderState, *, clip_lines: bool
+    ) -> None:
         """Apply offset plotting metadata to the live plot."""
-        self._curve.setData(state.flat_x, state.flat_y)
-        self._curve.setPen(pg.mkPen(color=(15, 15, 15, 255), width=2))
+        # Pooled items keep their black default pen; re-pen only after series
+        # mode colored them.
+        pen = self._default_line_pen() if self._line_pens_dirty else None
+        self._line_pens_dirty = False
+        self._set_line_rows(state.x_plot, state.trace_rows, clip=clip_lines, pen=pen)
         self._render_state = state
         self._plot_item.setTitle(state.title)
         self._axis_kinds = {
@@ -929,8 +975,8 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         """Hide the time-series colorbar."""
         self._color_bar.hide()
 
-    def _all_line_curves(self) -> list[pg.PlotCurveItem]:
-        """Return the currently active line curves in render order."""
+    def _all_line_curves(self) -> list[pg.PlotDataItem]:
+        """Return the currently active line items in render order."""
         return [self._curve, *self._series_curves]
 
     @staticmethod
@@ -940,7 +986,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         """Return the styled pen for a rendered time-series line."""
         if percentiles_enabled and np.isfinite(value) and np.isclose(value, 50.0):
             return pg.mkPen(color=color, width=6, style=Qt.PenStyle.DotLine)
-        return pg.mkPen(color=color, width=2)
+        return pg.mkPen(color=color, width=1)
 
     def _apply_series_colors(self) -> None:
         """Color active time-series lines from the series coordinate values."""
@@ -956,6 +1002,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         levels = self._color_bar.levels()
         if levels is None:
             return
+        self._line_pens_dirty = True
         low, high = levels
         span = high - low
         for curve, value in zip(
@@ -1136,11 +1183,10 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
 
     def _clear_curves(self) -> None:
         """Clear all plotted trace data."""
+        self._ensure_line_item_count(1)
+        self._line_clip_allowed = False
         self._curve.setData([], [])
-        self._curve.setPen(pg.mkPen(color=(15, 15, 15, 255), width=2))
-        for curve in self._series_curves:
-            self._plot_item.removeItem(curve)
-        self._series_curves.clear()
+        self._curve.setPen(self._default_line_pen())
 
     def _get_view_range(self) -> tuple[tuple[float, float], tuple[float, float]] | None:
         """Return the current finite x/y plot ranges, if available."""

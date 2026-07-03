@@ -51,11 +51,10 @@ pyqtgraph `ImageItem` + `PlotWidget` mirroring the Waterfall render path.
 - **Cursor readout via `searchsorted`.** `nearest_axis_index` allocates
   a full-axis temp per mouse move (two axes, up to 60 Hz);
   `searchsorted` + neighbor check is ~10× faster and allocation-free.
-- **Wiggle widget rendering.** Time-series mode creates one
-  `PlotCurveItem` per row; switch to a single NaN-separated flat curve
-  (as offset mode already does) and consider `PlotDataItem` with
-  `setDownsampling(auto=True, method="peak")` + `setClipToView(True)`
-  so paint cost scales with pixels rather than samples.
+- **Wiggle widget rendering.** Done on branch `wiggle-render-perf`; see
+  Progress below. Profiling showed the dominant cost was pen width, not
+  item count: Qt's raster engine draws width-2 polylines ~16x slower
+  than width-1 (933 ms vs 56 ms per frame at 300×5000).
 - **Viewport-based lazy loading.** For arrays that do not fit
   comfortably in RAM, select and render only the visible window at
   screen resolution from the spool, re-selecting on zoom. Largest lift,
@@ -81,3 +80,29 @@ pyqtgraph `ImageItem` + `PlotWidget` mirroring the Waterfall render path.
   `TestShouldResetViewForNewPatch`; `pytest -q tests/test_widgets/
   tests/test_integrations.py` (1171 passed, 46 skipped) and
   `prek run --all-files` clean.
+- 2026-07-03: Completed the Wiggle phase-2 item on branch
+  `wiggle-render-perf`. Profiling (offscreen, 300×5000 float64 patch)
+  found ~95% of paint time in Qt line rasterization of width-2 pens;
+  per-item overhead was negligible (~13 µs/item). Changes:
+  - All bulk line pens width 2 → 1 (~16x paint speedup; the percentile
+    median keeps its thick dotted style, only 7 lines).
+  - Both modes render one `PlotDataItem` per trace from a reused item
+    pool with `setDownsampling(auto=True, method="peak")` and
+    `setClipToView(True)`; clipping is enabled only after the view range
+    settles because clipped items report only the visible slice as
+    their data bounds, which would corrupt auto-range. Config setters
+    and pens are only touched when values actually change so re-renders
+    pay one display-dataset recompute per item.
+  - Offset mode's serpentine NaN-flattened single curve was removed;
+    this also fixes spurious connector lines that were drawn along the
+    plot edges between consecutive traces.
+  - 2D time-series mode now caps rendered lines with the same auto
+    stride as offset mode (≤300 rows); percentiles still aggregate all
+    rows.
+  Measured with the real widget offscreen: time-series first render
+  4261→1047 ms and offset 2795→571 ms (300×5000); gain-slider tick
+  929→168 ms; 2000×15000 time series 8964→1285 ms (was one Qt item and
+  ~15 ms of paint per row, uncapped). Cursor readout and colorbar
+  recolor stay ≤1 ms. Verified before/after screenshots match in all
+  three modes (offset, series, percentiles) apart from line width.
+  Remaining follow-up: viewport-based lazy loading (above).
