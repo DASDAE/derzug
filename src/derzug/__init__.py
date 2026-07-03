@@ -19,8 +19,3 @@ def __getattr__(name: str):
 
         return getattr(_workflow, name)
     raise AttributeError(name)
-
-# Just the bit of code for debugging.
-#from PyQt6.QtCore import pyqtRemoveInputHook
-#pyqtRemoveInputHook()
-#breakpoint()
