@@ -21,3 +21,7 @@ affected widgets will not load and must be rebuilt.
     `derzug.widgets.ufunc_binary`; class `UFuncOperator` → `UFuncBinary`;
     display name `UfuncBinary` → `UFuncBinary`; entry-point key `UFunc` →
     `UFuncBinary`.
+- The `Norm` widget was removed; it was fully subsumed by `Normalize` (both
+  call `patch.normalize`, and `Normalize` additionally offers standardize).
+  Workflows referencing `derzug.widgets.norm.Norm` will not load; rebuild them
+  with `Normalize`.
