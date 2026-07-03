@@ -26,7 +26,7 @@ from derzug.models.annotations import (
     PointGeometry,
     SpanGeometry,
 )
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.annotation_metadata import LABEL_SLOTS, optional_text
 from derzug.workflow import Task
 

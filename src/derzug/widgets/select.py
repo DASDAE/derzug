@@ -14,7 +14,7 @@ from Orange.widgets.widget import Msg
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
 from derzug.models.selection import SelectParams
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.spool import (
     extract_single_patch,
     filter_contents_by_annotations,

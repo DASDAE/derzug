@@ -38,7 +38,7 @@ from Orange.widgets.widget import Msg
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.models.selection import SelectParams
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.plot_axes import (
     CursorField,
     build_plot_axis_spec,

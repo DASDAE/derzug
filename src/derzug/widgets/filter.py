@@ -21,7 +21,7 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.core.zugwidget import WidgetExecutionRequest
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task

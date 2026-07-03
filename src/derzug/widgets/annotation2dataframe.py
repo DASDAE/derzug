@@ -14,7 +14,7 @@ from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.models.annotations import AnnotationSet, PointGeometry
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.annotation_metadata import annotation_metadata_row
 from derzug.workflow import Task
 

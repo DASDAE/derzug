@@ -24,7 +24,7 @@ from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import ZugWidget
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.display import format_display
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchPassThroughTask

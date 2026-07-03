@@ -1,4 +1,4 @@
-"""Tests for the UFuncOperator widget."""
+"""Tests for the UFuncBinary widget."""
 
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ from derzug.utils.testing import (
     wait_for_widget_idle,
     widget_context,
 )
-from derzug.widgets.ufunc import UFuncOperator
+from derzug.widgets.ufunc_binary import UFuncBinary
 from orangewidget.utils.signals import PartialSummary
 
 
 @pytest.fixture
 def ufunc_widget():
-    """Return a live UFuncOperator widget for one test case."""
-    with widget_context(UFuncOperator) as widget:
+    """Return a live UFuncBinary widget for one test case."""
+    with widget_context(UFuncBinary) as widget:
         yield widget
 
 
@@ -38,12 +38,12 @@ def _wait_for_output(widget, qtbot, received: list, count: int) -> None:
     wait_for_widget_idle(widget)
 
 
-class TestUFuncOperator:
-    """Tests for the UFuncOperator widget."""
+class TestUFuncBinary:
+    """Tests for the UFuncBinary widget."""
 
     def test_widget_instantiates(self, ufunc_widget):
         """Widget creates with expected defaults and operation menu."""
-        assert ufunc_widget.name == "UfuncBinary"
+        assert ufunc_widget.name == "UFuncBinary"
         assert ufunc_widget.selected_op == "x+y"
         assert ufunc_widget._op_combo.count() > 0
         assert ufunc_widget._op_combo.currentText() == "x+y"
@@ -330,7 +330,7 @@ class TestUFuncOperator:
 
 
 class TestUFuncDefaults(TestWidgetDefaults):
-    """Shared default/smoke tests for UFuncOperator."""
+    """Shared default/smoke tests for UFuncBinary."""
 
     __test__ = True
-    widget = UFuncOperator
+    widget = UFuncBinary

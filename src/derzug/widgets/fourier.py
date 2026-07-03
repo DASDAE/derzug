@@ -21,7 +21,7 @@ from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 

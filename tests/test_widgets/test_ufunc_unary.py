@@ -1,4 +1,4 @@
-"""Tests for the UFunc unary transform widget."""
+"""Tests for the UFuncUnary unary transform widget."""
 
 from __future__ import annotations
 
@@ -12,23 +12,23 @@ from derzug.utils.testing import (
     wait_for_widget_idle,
     widget_context,
 )
-from derzug.widgets.ufunc_unary import UFunc
+from derzug.widgets.ufunc_unary import UFuncUnary
 
 
 @pytest.fixture
 def ufunc_widget(qtbot):
-    """Return a live UFunc widget for one test case."""
-    with widget_context(UFunc) as widget:
+    """Return a live UFuncUnary widget for one test case."""
+    with widget_context(UFuncUnary) as widget:
         yield widget
 
 
 class TestUFunc:
-    """Tests for the UFunc unary transform widget."""
+    """Tests for the UFuncUnary unary transform widget."""
 
     def test_widget_instantiates(self, ufunc_widget):
         """Widget creates with expected defaults and operation menu."""
         assert ufunc_widget.selected_op == "abs"
-        assert ufunc_widget._op_combo.count() == len(UFunc._OPS)
+        assert ufunc_widget._op_combo.count() == len(UFuncUnary._OPS)
         assert ufunc_widget._op_combo.currentText() == "abs"
 
     def test_operation_menu_contains_expected_ops(self, ufunc_widget):
@@ -175,8 +175,8 @@ class TestUFunc:
 
 
 class TestUFuncDefaults(TestWidgetDefaults):
-    """Shared default/smoke tests for UFunc unary widget."""
+    """Shared default/smoke tests for UFuncUnary unary widget."""
 
     __test__ = True
-    widget = UFunc
+    widget = UFuncUnary
     inputs = (("patch", dc.get_example_patch("example_event_1")),)

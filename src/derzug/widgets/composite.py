@@ -12,7 +12,7 @@ from Orange.widgets.widget import OWWidget
 from orangecanvas.registry import InputSignal, OutputSignal, WidgetDescription
 from orangecanvas.scheme import readwrite
 
-from derzug.orange import Setting
+from derzug.settings import Setting
 
 COMPOSITE_PAYLOAD_KEY = "composite_payload"
 NODE_ID_KEY = "__derzug_node_id"

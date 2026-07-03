@@ -29,7 +29,7 @@ from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
 
 from derzug.core.zugwidget import ZugWidget
-from derzug.orange import Setting
+from derzug.settings import Setting
 from derzug.utils.code2widget import INPUTS_NOT_READY, task_from_callable
 from derzug.workflow import Task
 
