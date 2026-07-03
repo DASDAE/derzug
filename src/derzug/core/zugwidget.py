@@ -34,6 +34,7 @@ from derzug.core.services import get_app_shell_service
 from derzug.core.widget_execution import WorkflowExecutionMixin
 from derzug.core.widget_messages import WidgetMessageMixin
 from derzug.core.widget_runtime import WidgetExecutionRequest, WidgetExecutionRuntime
+from derzug.settings import Setting
 from derzug.workflow import Pipe, Task
 
 
@@ -102,6 +103,16 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     #: ``apply_view``. ``None`` for widgets with no display state.
     view_model: ClassVar[object | None] = None
 
+    #: When True, the params/view models are the sole persisted state: their
+    #: serialized form is stored in the ``_state`` blob and the flat per-param
+    #: ``Setting``s are removed. Attributes are restored from ``_state`` (or the
+    #: model defaults) before the subclass builds its controls.
+    authoritative_state: ClassVar[bool] = False
+
+    #: The single persisted state blob for authoritative-state widgets:
+    #: ``{"params": <params model_dump>, "view": <view model_dump>}``.
+    _state = Setting({}, schema_only=True)
+
     _FOCUS_EXCLUDE = (
         QLineEdit,
         QTextEdit,
@@ -138,6 +149,9 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     def __init__(self, *args, **kwargs) -> None:
         """Initialize the base widget and install shared window shortcuts."""
         super().__init__(*args, **kwargs)
+        if self.authoritative_state:
+            self._init_authoritative_state()
+            self.settingsAboutToBePacked.connect(self._serialize_authoritative_state)
         self._ui_refresh_pending = False
         self._control_area_width_check_pending = False
         self._dirty_delayed_outputs: set[str] = set()
@@ -721,7 +735,14 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
             The prior values for each applied setting, so the change can be
             reverted (e.g. wrapped in a canvas undo command).
         """
-        unknown = sorted(name for name in values if not self._is_setting(name))
+        allowed_extra = (
+            self._model_backed_attrs() if self.authoritative_state else set()
+        )
+        unknown = sorted(
+            name
+            for name in values
+            if not self._is_setting(name) and name not in allowed_extra
+        )
         if unknown:
             raise KeyError(
                 f"{type(self).__name__} has no setting(s): {', '.join(unknown)}"
@@ -735,28 +756,30 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         return prior
 
     def _params_field_map(self) -> dict[str, str]:
-        """Return ``{model_field: setting_name}`` backing ``params_model``.
+        """Return ``{model_field: attribute_name}`` backing ``params_model``.
 
-        The default maps each model field to a same-named ``Setting``, so a
-        widget whose model fields match its setting names only needs to declare
+        The default maps each model field to a same-named widget attribute, so a
+        widget whose model fields match its attribute names only needs to declare
         ``params_model``. Override to rename (e.g. ``dim`` -> ``selected_dim``);
-        discriminated-union widgets override ``get_params``/``apply_params``.
+        discriminated-union widgets override ``get_params``/``apply_params``. The
+        attribute need not be an Orange ``Setting`` (authoritative-state widgets
+        back these attributes with the serialized-model blob instead).
         """
         fields = getattr(self.params_model, "model_fields", None)
         if not fields:
             return {}
-        return {name: name for name in fields if self._is_setting(name)}
+        return {name: name for name in fields}
 
     def _view_field_map(self) -> dict[str, str]:
-        """Return ``{model_field: setting_name}`` backing ``view_model``.
+        """Return ``{model_field: attribute_name}`` backing ``view_model``.
 
-        Like ``_params_field_map``, defaults to mapping each model field to a
-        same-named ``Setting``.
+        Like ``_params_field_map``, maps each model field to a same-named
+        widget attribute.
         """
         fields = getattr(self.view_model, "model_fields", None)
         if not fields:
             return {}
-        return {name: name for name in fields if self._is_setting(name)}
+        return {name: name for name in fields}
 
     def _read_model(self, model, field_map: dict[str, str], label: str):
         """Build a typed model instance from the widget's current settings."""
@@ -799,6 +822,73 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         return self._write_model(
             view, self.view_model, self._view_field_map(), "view_model", run=run
         )
+
+    # -- Authoritative state (models as the sole persisted state) --------------
+
+    def _default_params(self):
+        """Return a default params-model instance (override for unions)."""
+        model = self.params_model
+        if model is None:
+            return None
+        try:
+            return model()
+        except TypeError:
+            # Discriminated-union models can't be default-constructed; the
+            # widget must override this to pick a default member.
+            return None
+
+    def _default_view(self):
+        """Return a default view-model instance."""
+        model = self.view_model
+        return model() if model is not None else None
+
+    def _model_backed_attrs(self) -> set[str]:
+        """Attribute names backed by the params/view models (authoritative)."""
+        return set(self._params_field_map().values()) | set(
+            self._view_field_map().values()
+        )
+
+    def _init_authoritative_state(self) -> None:
+        """Restore model-backed attributes from ``_state`` or model defaults.
+
+        Runs before the subclass builds its controls. Because Orange restores
+        ``_state`` prior to ``__init__``, the attributes end up holding either
+        the persisted values or the model defaults, exactly as the flat
+        ``Setting`` values used to.
+        """
+        state = self._state or {}
+        params = state.get("params")
+        default = (
+            TypeAdapter(self.params_model).validate_python(params)
+            if params
+            else self._default_params()
+        )
+        if default is not None:
+            for field, attr in self._params_field_map().items():
+                setattr(self, attr, getattr(default, field))
+        view = state.get("view")
+        default_view = (
+            TypeAdapter(self.view_model).validate_python(view)
+            if view
+            else self._default_view()
+        )
+        if default_view is not None:
+            for field, attr in self._view_field_map().items():
+                setattr(self, attr, getattr(default_view, field))
+
+    def _serialize_authoritative_state(self) -> None:
+        """Serialize the models into ``_state`` before Orange packs settings.
+
+        Connected to ``settingsAboutToBePacked`` (the hook Orange emits from
+        ``pack_data`` when saving), so the blob is current at every save.
+        """
+        self._sync_settings_from_controls()
+        state: dict[str, object] = {}
+        if self.params_model is not None:
+            state["params"] = self.get_params().model_dump()
+        if self.view_model is not None:
+            state["view"] = self.get_view().model_dump()
+        self._state = state
 
     def _build_execution_request(self) -> WidgetExecutionRequest | None:
         """Return a worker-safe execution request or None for an empty result."""

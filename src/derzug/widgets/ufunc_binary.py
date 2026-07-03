@@ -15,7 +15,6 @@ from orangewidget.utils.signals import PartialSummary
 from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.settings import Setting
 from derzug.workflow import Task
 
 
@@ -47,13 +46,12 @@ class UFuncBinary(ZugWidget):
 
     name = "UFuncBinary"
     params_model = UFuncBinaryParams
+    authoritative_state = True
     description = "Apply selected NumPy ufunc to x and y inputs"
     icon = "icons/UFunc.svg"
     category = "Processing"
     keywords = ("ufunc", "numpy", "binary", "operator", "math")
     priority = 23
-
-    selected_op = Setting("x+y")
 
     # This is a non-graphical widget; we dont need main area.
     want_main_area = False

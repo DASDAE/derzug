@@ -54,10 +54,15 @@ class TestApplySettingsContract:
                 widget.apply_settings({"__definitely_not_a_setting__": 1})
 
     def test_control_map_names_are_settings(self, widget_cls, qtbot):
-        """Every name in the control map is a real Setting on the widget."""
+        """Every control-map name is a Setting or a model-backed attribute."""
         with widget_context(widget_cls) as widget:
+            backed = (
+                widget._model_backed_attrs() if widget.authoritative_state else set()
+            )
             for name in widget._settings_control_map():
-                assert widget._is_setting(name), f"{widget_cls.__name__}.{name}"
+                assert (
+                    widget._is_setting(name) or name in backed
+                ), f"{widget_cls.__name__}.{name}"
 
     def test_mapped_settings_roundtrip_and_sync(self, widget_cls, qtbot):
         """Applying a mapped setting updates the value and its visible control."""
