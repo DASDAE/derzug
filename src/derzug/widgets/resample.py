@@ -247,6 +247,16 @@ class Resample(PatchDimWidget):
             "resample_interp_kind": self._interp_combo,
         }
 
+    def _sync_dependent_controls(self) -> None:
+        """Sync the index-based mode combo (label != value) and its page."""
+        index = (
+            self._MODE_NAMES.index(self.mode) if self.mode in self._MODE_NAMES else 0
+        )
+        self._mode_combo.blockSignals(True)
+        self._mode_combo.setCurrentIndex(index)
+        self._mode_combo.blockSignals(False)
+        self._stack.setCurrentIndex(index)
+
     def get_task(self) -> Task:
         """Return the current decimate/resample operation as a workflow task."""
         dim = self._get_dim() or self.selected_dim

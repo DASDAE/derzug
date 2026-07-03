@@ -565,22 +565,46 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     def _apply_settings_to_controls(self) -> None:
         """Hydrate visible controls from persisted settings.
 
-        The default hydrates each control declared by
-        ``_settings_control_map()``. Widgets whose controls do not map one-to-one
-        to a ``Setting`` (stacked pages, dynamic rows, plot/selection state)
-        override this and hydrate them explicitly.
+        Runs three passes: set each control declared by
+        ``_settings_control_map()``, switch each stacked page declared by
+        ``_linked_stacks()`` to follow its selector combo, then call
+        ``_sync_dependent_controls()`` for any other setting-driven UI state.
+        Widgets whose controls do not map one-to-one to a ``Setting`` (dynamic
+        rows, plot/selection state) may override this and hydrate explicitly.
         """
         for name, control in self._settings_control_map().items():
             self._set_control_value(control, getattr(self, name))
+        for selector, stack in self._linked_stacks().items():
+            stack.setCurrentIndex(selector.currentIndex())
+        self._sync_dependent_controls()
 
     def _settings_control_map(self) -> dict[str, object]:
         """Return ``{setting_name: control}`` for settings-backed controls.
 
         Override to declare which visible control backs each ``Setting`` so the
         base ``_apply_settings_to_controls()`` can keep them in sync. Only simple
-        controls (combo, spin box, checkbox, line edit) need appear here.
+        controls (combo, spin box, slider, checkbox, line/text edit) need appear
+        here.
         """
         return {}
+
+    def _linked_stacks(self) -> dict[object, object]:
+        """Return ``{selector_combo: stacked_widget}`` for cascading options.
+
+        The common cascading-options case: a combo (already synced by the
+        control map) selects which page of a ``QStackedWidget`` is shown, with
+        pages added in the same order as the combo's items. The base keeps the
+        page in sync when settings are applied. Override to declare these links.
+        """
+        return {}
+
+    def _sync_dependent_controls(self) -> None:
+        """Sync setting-driven UI that isn't a plain combo-to-stack link.
+
+        Override for cascades that ``_linked_stacks()`` cannot express: index-
+        based selectors (combo label != setting value), enable/disable or
+        show/hide, and dynamic parameter widgets.
+        """
 
     def _sync_settings_from_controls(self) -> None:
         """Persist current control values back into widget settings.

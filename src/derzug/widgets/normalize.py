@@ -155,6 +155,10 @@ class Normalize(PatchDimWidget):
             "norm": self._norm_combo,
         }
 
+    def _linked_stacks(self) -> dict[object, object]:
+        """The operation combo selects the parameter page."""
+        return {self._operation_combo: self._stack}
+
     def get_task(self) -> Task:
         """Return the current normalize/standardize operation as a workflow task."""
         operation = self._coerce_operation()

@@ -845,6 +845,15 @@ class Filter(PatchDimWidget):
             "selected_dim": self._dim_combo,
         }
 
+    def _linked_stacks(self) -> dict[object, object]:
+        """The filter combo selects the per-filter parameter page."""
+        return {self._filter_combo: self._stack}
+
+    def _sync_dependent_controls(self) -> None:
+        """Re-derive dim visibility and mode from the selected filter."""
+        self._sync_primary_dim_visibility(self.selected_filter)
+        self._coerce_mode_for_filter(self.selected_filter)
+
     def get_task(self) -> Task:
         """Return the current filter semantics as a workflow task."""
         task = self._validated_task()

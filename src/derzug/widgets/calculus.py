@@ -164,6 +164,10 @@ class Calculus(PatchDimWidget):
             "step": self._step_spin,
         }
 
+    def _linked_stacks(self) -> dict[object, object]:
+        """The transform combo selects the parameter page."""
+        return {self._transform_combo: self._stack}
+
     def get_task(self) -> Task:
         """Return the current calculus operation as a workflow task."""
         transform = self._coerce_transform()

@@ -70,6 +70,41 @@ class TestApplySettingsContract:
                 assert getattr(widget, name) == target  # setting applied
                 assert _control_value(control) == target  # control synced
 
+    def test_linked_stack_cascades(self, widget_cls, qtbot):
+        """Applying a stack-selector setting switches the visible page."""
+        with widget_context(widget_cls) as widget:
+            stacks = widget._linked_stacks()
+            if not stacks:
+                return
+            setting_for_combo = {
+                control: name
+                for name, control in widget._settings_control_map().items()
+            }
+            for selector, stack in stacks.items():
+                name = setting_for_combo.get(selector)
+                target = _alternate_value(selector)
+                if name is None or target is None:
+                    continue
+                widget.apply_settings({name: target})
+                # The visible page follows the selector's chosen item.
+                assert stack.currentIndex() == selector.currentIndex()
+                assert selector.currentText() == target
+
+
+def test_resample_mode_cascade(qtbot):
+    """Resample's index-based mode combo and its parameter page cascade."""
+    from derzug.widgets.resample import Resample
+
+    with widget_context(Resample) as widget:
+        widget.apply_settings({"mode": "resample"})
+        assert widget.mode == "resample"
+        assert widget._mode_combo.currentIndex() == 1
+        assert widget._stack.currentIndex() == 1
+
+        widget.apply_settings({"mode": "decimate"})
+        assert widget._mode_combo.currentIndex() == 0
+        assert widget._stack.currentIndex() == 0
+
 
 def _alternate_value(control):
     """Return a valid new value for a control, or None when not derivable."""

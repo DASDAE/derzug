@@ -249,6 +249,10 @@ class Fourier(PatchDimWidget):
             "pad": self._pad_checkbox,
         }
 
+    def _linked_stacks(self) -> dict[object, object]:
+        """The transform combo selects the parameter page."""
+        return {self._transform_combo: self._stack}
+
     def get_task(self) -> Task:
         """Return the current Fourier operation as a workflow task."""
         transform = self._coerce_transform()
