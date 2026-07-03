@@ -25,6 +25,7 @@ from AnyQt.QtWidgets import (
 )
 from Orange.widgets.widget import OWWidget
 
+from derzug.core.services import get_app_shell_service
 from derzug.core.widget_execution import WorkflowExecutionMixin
 from derzug.core.widget_messages import WidgetMessageMixin
 from derzug.core.widget_runtime import WidgetExecutionRequest, WidgetExecutionRuntime
@@ -319,13 +320,9 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
 
     def _raise_canvas(self) -> None:
         """Bring the DerZug canvas window to the front."""
-        from derzug.views import orange as orange_view
-
-        for widget in QApplication.topLevelWidgets():
-            if isinstance(widget, orange_view.DerZugMainWindow):
-                widget.raise_()
-                widget.activateWindow()
-                return
+        service = get_app_shell_service()
+        if service is not None:
+            service.raise_canvas()
 
     def _should_close_window(self, event: QKeyEvent) -> bool:
         """Return True when `Ctrl+Q` should close the widget window."""
@@ -513,50 +510,10 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         return target_width + margins.left() + margins.right()
 
     def _ensure_active_source_selection(self) -> None:
-        """Ask the app-level manager to select an active source if needed."""
-        from derzug.views import orange as orange_view
-
-        manager = orange_view._APP_ACTIVE_SOURCE_MANAGER
-        main_window = orange_view._APP_ACTIVE_SOURCE_MAIN_WINDOW
-        if manager is not None and main_window is not None:
-            try:
-                if manager._active_widget is None:
-                    manager._set_active_widget(main_window, self)
-                    return
-                current_sources = manager._source_widgets()
-                if manager._active_widget not in current_sources:
-                    manager._set_active_widget(main_window, self)
-                else:
-                    manager.ensure_active_source(main_window)
-            except Exception:
-                return
-            return
-        app = QApplication.instance()
-        if app is None:
-            return
-        candidates = [*app.topLevelWidgets(), *app.allWidgets()]
-        seen: set[int] = set()
-        for top_level in candidates:
-            key = id(top_level)
-            if key in seen:
-                continue
-            seen.add(key)
-            manager = getattr(top_level, "active_source_manager", None)
-            if manager is None:
-                continue
-            try:
-                if manager._active_widget is None:
-                    manager._set_active_widget(top_level, self)
-                    return
-                # If no valid active source exists, promote this newly shown source.
-                current_sources = manager._source_widgets()
-                if manager._active_widget not in current_sources:
-                    manager._set_active_widget(top_level, self)
-                else:
-                    manager.ensure_active_source(top_level)
-            except Exception:
-                return
-            return
+        """Ask the app shell to select an active source if needed."""
+        service = get_app_shell_service()
+        if service is not None:
+            service.promote_source(self)
 
     def run(self) -> None:
         """

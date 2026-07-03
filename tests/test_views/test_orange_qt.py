@@ -40,6 +40,7 @@ from derzug.annotations_config import (
     clear_annotation_config_cache,
     save_annotation_config,
 )
+from derzug.core.error_dialog import _build_issue_body, _build_issue_url
 from derzug.utils.display import format_display
 from derzug.utils.testing import (
     build_window_workflow,
@@ -64,7 +65,6 @@ from derzug.views.orange import (
     _TabWindowCycler,
     ensure_linux_desktop_entry,
 )
-from derzug.views.orange_errors import _build_issue_body, _build_issue_url
 from derzug.widgets.spool import Spool
 from derzug.widgets.table2annotation import Table2Annotation
 from orangecanvas.application.canvastooldock import SplitterResizer
@@ -1451,7 +1451,7 @@ class TestUnexpectedErrorDialog:
             return True
 
         monkeypatch.setattr(
-            "derzug.views.orange_errors.QDesktopServices.openUrl", _fake_open
+            "derzug.core.error_dialog.QDesktopServices.openUrl", _fake_open
         )
         dialog = DerZugErrorDialog(
             details={"Exception": "ValueError: boom", "Location": "x.py:12"},
@@ -1471,7 +1471,7 @@ class TestUnexpectedErrorDialog:
     def test_submit_bug_report_shows_message_when_browser_open_fails(self, monkeypatch):
         """Show a visible failure message when browser launch fails."""
         monkeypatch.setattr(
-            "derzug.views.orange_errors.QDesktopServices.openUrl",
+            "derzug.core.error_dialog.QDesktopServices.openUrl",
             lambda _url: False,
         )
         dialog = DerZugErrorDialog(

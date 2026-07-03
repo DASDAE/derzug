@@ -17,7 +17,7 @@ from AnyQt.QtGui import QOffscreenSurface, QOpenGLContext
 from AnyQt.QtWidgets import QApplication
 from orangecanvas.application.outputview import ExceptHook
 
-from derzug.views.orange_errors import handle_derzug_exception
+from derzug.core.error_dialog import handle_derzug_exception
 
 
 def install_derzug_exception_handler() -> None:

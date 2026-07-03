@@ -5,7 +5,7 @@ from __future__ import annotations
 from AnyQt.QtCore import QEvent, QPoint, Qt
 from AnyQt.QtWidgets import QApplication, QLabel, QMenu, QWidget, QWidgetAction
 
-from derzug.views.orange_errors import DerZugErrorDialog, _build_exception_report_data
+from derzug.core.error_dialog import DerZugErrorDialog, _build_exception_report_data
 
 
 class WidgetMessageMixin:
