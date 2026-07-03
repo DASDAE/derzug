@@ -10,18 +10,28 @@ boilerplate so a concrete widget only declares its metadata, settings, and an
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import create_model
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.settings import Setting
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
+
+
+def _setting_default(cls: type, name: str, fallback: object) -> object:
+    """Return the default of the named ``Setting`` declared on ``cls``."""
+    for klass in cls.__mro__:
+        value = klass.__dict__.get(name)
+        if isinstance(value, Setting):
+            return value.default
+    return fallback
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,20 @@ class SpinOption:
         number = int(value) if self.is_int else float(value)
         clamped = max(self.minimum, min(self.maximum, number))
         return int(clamped) if self.is_int else clamped
+
+
+def _build_params_model(cls: type) -> type:
+    """Derive a pydantic params model from a widget's ``_OPTIONS`` + dim chooser."""
+    fields: dict[str, tuple[object, object]] = {}
+    if cls.uses_dim:
+        fields["dim"] = (str, _setting_default(cls, "selected_dim", ""))
+    for option in cls._OPTIONS:
+        default = _setting_default(cls, option.setting, None)
+        if isinstance(option, ComboOption):
+            fields[option.setting] = (Literal[tuple(option.choices)], default)
+        else:
+            fields[option.setting] = (int if option.is_int else float, default)
+    return create_model(f"{cls.__name__}Params", **fields)
 
 
 class PatchMethodWidget(PatchDimWidget, openclass=True):
@@ -195,6 +219,12 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
         if self.uses_dim:
             self._refresh_dims()
 
+    def __init_subclass__(cls, **kwargs) -> None:
+        """Auto-derive a params model for each concrete option-based widget."""
+        super().__init_subclass__(**kwargs)
+        if cls.__dict__.get("_OPTIONS"):
+            cls.params_model = _build_params_model(cls)
+
     def _settings_control_map(self) -> dict[str, object]:
         """Map each option setting (and the dim chooser) to its control."""
         controls: dict[str, object] = {
@@ -204,6 +234,13 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
         if self.uses_dim and hasattr(self, "_dim_combo"):
             controls["selected_dim"] = self._dim_combo
         return controls
+
+    def _params_field_map(self) -> dict[str, str]:
+        """Map each params-model field to its backing setting."""
+        field_map = {option.setting: option.setting for option in self._OPTIONS}
+        if self.uses_dim:
+            field_map["dim"] = "selected_dim"
+        return field_map
 
     def _on_dim_changed(self, value: str) -> None:
         """Persist the selected dimension and rerun."""

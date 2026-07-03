@@ -12,20 +12,20 @@ from __future__ import annotations
 import importlib
 import inspect
 
+import pytest
 from derzug.core import ZugWidget
 from derzug.utils.misc import load_widget_entrypoints
+from derzug.utils.testing import widget_context
 
 # Widgets not yet migrated to a pydantic params model. Remove each as it lands.
 _PENDING = {
     "Aggregate",
-    "Analytic",
     "Annotation2DataFrame",
     "Annotations",
     "Calculus",
     "Code",
     "Coords",
     "DataFrameLoader",
-    "Detrend",
     "FBE",
     "Fourier",
     "Normalize",
@@ -37,9 +37,7 @@ _PENDING = {
     "Spool",
     "Stft",
     "Table2Annotation",
-    "Taper",
     "UFuncBinary",
-    "UFuncUnary",
     "Waterfall",
     "Wiggle",
 }
@@ -96,6 +94,22 @@ def test_filter_is_covered():
     """Filter is the reference implementation and must stay covered."""
     classes = _all_widget_classes()
     assert getattr(classes["Filter"], "params_model", None) is not None
+
+
+_MODELED = [
+    pytest.param(cls, id=name)
+    for name, cls in sorted(_all_widget_classes().items())
+    if getattr(cls, "params_model", None) is not None
+]
+
+
+@pytest.mark.parametrize("widget_cls", _MODELED)
+def test_params_roundtrip(widget_cls, qtbot):
+    """Reading params and applying them back is a stable no-op for every model."""
+    with widget_context(widget_cls) as widget:
+        params = widget.get_params()
+        widget.apply_params(params)
+        assert widget.get_params() == params
 
 
 def test_view_model_coverage():
