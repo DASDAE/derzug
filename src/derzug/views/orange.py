@@ -101,6 +101,12 @@ from derzug.annotations_config import (
     load_annotation_config,
     save_annotation_config,
 )
+from derzug.core.error_dialog import (
+    DerZugErrorDialog,
+    _build_exception_report_data,
+    handle_derzug_exception,
+)
+from derzug.core.services import register_app_shell_service
 from derzug.core.zugwidget import ZugWidget
 from derzug.utils.misc import (
     load_example_workflow_entrypoints,
@@ -112,11 +118,6 @@ from derzug.views.dialogs import (
     DerZugAboutDialog,
     DerZugKeyboardShortcutsDialog,
     ExperimentalWarningDialog,
-)
-from derzug.views.orange_errors import (
-    DerZugErrorDialog,
-    _build_exception_report_data,
-    handle_derzug_exception,
 )
 from derzug.views.orange_registry import filter_registry_for_das
 from derzug.views.platform import (
@@ -2910,6 +2911,56 @@ class DerZugMain(OMain):
         return pattern.sub("", content)
 
 
+class _AppShellService:
+    """AppShellService backed by the running DerZug canvas app.
+
+    Resolves the active-source manager and main window dynamically from the
+    module globals (with a QApplication-attribute fallback) so it always
+    reflects current app state instead of a snapshot taken at registration.
+    """
+
+    @staticmethod
+    def _resolve() -> tuple[object | None, object | None]:
+        """Return the current (manager, main_window), or Nones when unavailable."""
+        manager = _APP_ACTIVE_SOURCE_MANAGER
+        window = _APP_ACTIVE_SOURCE_MAIN_WINDOW
+        if manager is not None and window is not None:
+            return manager, window
+        app = QApplication.instance()
+        if app is not None:
+            manager = manager or getattr(app, "active_source_manager", None)
+            window = window or getattr(app, "active_source_main_window", None)
+        return manager, window
+
+    def promote_source(self, widget: object) -> None:
+        """Select ``widget`` as the active source when appropriate."""
+        manager, main_window = self._resolve()
+        if manager is None or main_window is None:
+            return
+        try:
+            if manager._active_widget is None:
+                manager._set_active_widget(main_window, widget)
+                return
+            if manager._active_widget not in manager._source_widgets():
+                manager._set_active_widget(main_window, widget)
+            else:
+                manager.ensure_active_source(main_window)
+        except Exception:
+            return
+
+    def raise_canvas(self) -> None:
+        """Bring the canvas window to the front and activate it."""
+        _, window = self._resolve()
+        if window is None:
+            return
+        with suppress(RuntimeError):
+            window.raise_()
+            window.activateWindow()
+
+
+_APP_SHELL_SERVICE = _AppShellService()
+
+
 class DerZugMainWindow(OrangeMainWindow):
     """Orange main window customized for DerZug."""
 
@@ -2923,6 +2974,7 @@ class DerZugMainWindow(OrangeMainWindow):
     def __init__(self, *args, **kwargs):
         """Initialize the DerZug main window."""
         ensure_canvas_patches_installed()
+        register_app_shell_service(_APP_SHELL_SERVICE)
         super().__init__(*args, **kwargs)
         self.setWindowTitle("DerZug")
         self.set_float_widgets_on_top_enabled(False)

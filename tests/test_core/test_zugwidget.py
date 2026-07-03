@@ -15,9 +15,9 @@ from AnyQt.QtWidgets import (
     QMenu,
     QWidget,
 )
+from derzug.core.error_dialog import DerZugErrorDialog
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.utils.testing import wait_for_widget_idle, widget_context
-from derzug.views.orange_errors import DerZugErrorDialog
 from derzug.widgets.aggregate import Aggregate
 from derzug.widgets.analytic import Analytic
 from derzug.widgets.calculus import Calculus

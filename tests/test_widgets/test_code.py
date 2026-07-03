@@ -7,13 +7,13 @@ import numpy as np
 import pytest
 from AnyQt.QtCore import Qt
 from AnyQt.QtWidgets import QWidget
+from derzug.core.error_dialog import DerZugErrorDialog
 from derzug.utils.testing import (
     TestWidgetDefaults,
     capture_output,
     wait_for_output,
     widget_context,
 )
-from derzug.views.orange_errors import DerZugErrorDialog
 from derzug.widgets.code import Code
 from orangewidget.utils.signals import PartialSummary
 
