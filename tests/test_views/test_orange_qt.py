@@ -824,7 +824,7 @@ class TestDerZugMainWindow:
 
         monkeypatch.setattr(sys, "excepthook", hook)
         monkeypatch.setattr(
-            orange_view, "handle_derzug_exception", _fake_derzug_handler
+            "derzug.views.platform.handle_derzug_exception", _fake_derzug_handler
         )
         monkeypatch.setattr(
             orange_view, "orange_handle_exception", _fake_orange_handler
