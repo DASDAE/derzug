@@ -687,7 +687,6 @@ class SpoolParams(BaseModel):
     spool_input: Any = None
     example_parameters: dict = Field(default_factory=dict)
     file_input: str = ""
-    recent_directories: list = Field(default_factory=list)
     raw_input: str = ""
     chunk_dim: str = ""
     chunk_enabled: bool = True
@@ -710,6 +709,7 @@ class Spool(ZugWidget):
 
     name = "Spool"
     params_model = SpoolParams
+    authoritative_state = True
     description = "Interact with DASCore Spools"
     icon = "icons/Spool.svg"
     category = "IO"
@@ -717,27 +717,10 @@ class Spool(ZugWidget):
     priority = 15
     is_source = True
 
-    spool_input = Setting(None)
-    # These overrides must round-trip through saved workflows because example
-    # functions are now configurable from a generated dialog.
-    example_parameters = Setting({})
-    file_input = Setting("")
+    # App-level MRU of directories: a global remembered default
+    # (schema_only=False), not a workflow parameter, so it stays a flat Setting
+    # rather than moving into the authoritative _state blob.
     recent_directories = Setting([], schema_only=False)
-    raw_input = Setting("")
-    chunk_dim = Setting("")
-    chunk_enabled = Setting(True)
-    chunk_value = Setting("")
-    chunk_overlap = Setting("")
-    chunk_keep_partial = Setting(False)
-    chunk_snap_coords = Setting(True)
-    chunk_tolerance = Setting(1.5)
-    chunk_conflict = Setting("raise")
-    select_filters = Setting([])
-    select_col = Setting("")
-    select_val = Setting("")
-    selected_source_row = Setting(None)
-    selected_source_patch_name = Setting("")
-    unpack_single_patch = Setting(True)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
