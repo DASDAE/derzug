@@ -34,15 +34,27 @@ hand straight to an agent.
 | `get_focused_node()` | `str \| None` | Id of the node whose widget window is focused, or `None` on the canvas. |
 | `get_focus()` | `FocusState` | Shared user/agent context: focused node + window title, and the pointer (`screen_xy`, `over_node_id`, `data_position`). |
 
-## Write API (configure existing nodes)
+## Write API
+
+Configure existing nodes:
 
 | Method | Returns | Purpose |
 |---|---|---|
-| `set_params(node_id, params, run=True)` | `dict` | Apply typed parameters (a `params_model` or its dict) to one node, validated against the model. Returns the prior params so the change can be undone by re-applying them. |
-| `set_view(node_id, view, run=False)` | `dict` | Same, for a visual widget's `view_model` (colormap, view range, ...). Returns the prior view state. |
+| `set_params(node_id, params, run=True)` | `dict` | Apply typed parameters to one node, validated against its `params_model`. A dict is a **partial update** merged onto current values (unknown keys rejected); a model instance replaces. Returns the prior params so the change can be undone by re-applying them. |
+| `set_view(node_id, view, run=False)` | `dict` | Same, for a visual widget's `view_model` (colormap, view range, ...). |
 
-Graph authoring (`add_node` / `remove_node` / `connect` / `run`) and undo-stack
-integration land next; see the roadmap below.
+Author the graph:
+
+| Method | Returns | Purpose |
+|---|---|---|
+| `add_node(widget_type, title=, position=)` | `str` | Place a node of a display or qualified widget-type name; returns its node id. |
+| `remove_node(node_id)` | — | Remove a node (and its links). |
+| `connect(src_id, src_port, sink_id, sink_port)` | — | Link two node ports by name. |
+| `disconnect(src_id, src_port, sink_id, sink_port)` | — | Remove a link (raises if absent). |
+| `run(node_id)` | — | Re-run one node's widget; sources re-emit and propagate downstream. |
+
+Undo-stack integration (Ctrl+Z), Code-widget safety gating, off-thread dispatch,
+and the MCP transport land next; see the roadmap below.
 
 Node ids prefer the persisted DerZug node id (`__derzug_node_id`) when present
 and otherwise fall back to a session-stable object id.

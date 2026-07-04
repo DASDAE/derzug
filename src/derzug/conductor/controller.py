@@ -1,17 +1,19 @@
-"""Read-only controller over a live DerZug canvas (Conductor Phase 1).
+"""Controller over a live DerZug canvas (Conductor).
 
 ``CanvasController`` wraps a running ``DerZugMainWindow`` and exposes its
 workflow as typed observations (the node/link graph, placeable widget types
-with their param schemas, per-node detail, a compile check) plus a first write
-surface for configuring existing nodes (``set_params`` / ``set_view``). It
+with their param schemas, per-node detail, a compile check) plus a write surface
+to configure nodes (``set_params`` / ``set_view``) and author the graph
+(``add_node`` / ``remove_node`` / ``connect`` / ``disconnect`` / ``run``). It
 reuses the same primitives the rest of the app uses to read the scheme
-(``scheme.nodes`` / ``scheme.links`` / ``scheme.widget_for_node``), compile it
+(``scheme.nodes`` / ``scheme.links`` / ``scheme.widget_for_node``), edit it
+(``scheme.new_node`` / ``scheme.new_link`` / ...), compile it
 (``compile_workflow``), and set widget state (``apply_params`` /
 ``apply_view``).
 
-All methods are expected to be called on the Qt main thread. Off-thread
-marshalling, graph authoring (add/connect/remove nodes), and the MCP transport
-arrive in later phases.
+All methods are expected to be called on the Qt main thread. Undo-stack
+integration, Code-widget safety gating, off-thread marshalling, and the MCP
+transport arrive in later phases.
 """
 
 from __future__ import annotations
@@ -145,8 +147,10 @@ class CanvasController:
       and pointing to, for shared user/agent context.
     - :meth:`set_params` / :meth:`set_view` — apply typed, validated state to a
       node, returning the prior state for undo.
+    - :meth:`add_node` / :meth:`remove_node` / :meth:`connect` /
+      :meth:`disconnect` / :meth:`run` — author and drive the graph.
 
-    Must be called on the Qt main thread. Graph authoring and off-thread
+    Must be called on the Qt main thread. Undo-stack integration and off-thread
     dispatch arrive in later phases; see this package's ``README.md``.
 
     Examples
@@ -324,6 +328,68 @@ class CanvasController:
         current = widget.get_view().model_dump()
         widget.apply_view(self._merge(model, "view", current, view), run=run)
         return _json_safe(current)
+
+    # -- Write surface (Phase 2): author the graph ---------------------------
+
+    def _description_for(self, widget_type: str) -> Any:
+        """Return the registry description for a display or qualified name."""
+        registry = getattr(self._window, "widget_registry", None)
+        for description in registry.widgets() if registry else ():
+            if widget_type in (description.name, description.qualified_name):
+                return description
+        raise ValueError(f"unknown widget type: {widget_type!r}")
+
+    def add_node(
+        self,
+        widget_type: str,
+        *,
+        title: str | None = None,
+        position: tuple[float, float] = (0.0, 0.0),
+    ) -> str:
+        """Add a node of ``widget_type`` (display or qualified name); return its id."""
+        description = self._description_for(widget_type)
+        node = self._scheme().new_node(
+            description, title=title or description.name, position=tuple(position)
+        )
+        return _node_id(node)
+
+    def remove_node(self, node_id: str) -> None:
+        """Remove one node (and its links) from the canvas."""
+        self._scheme().remove_node(self._node_for_id(node_id))
+
+    def connect(
+        self, source_id: str, source_port: str, sink_id: str, sink_port: str
+    ) -> None:
+        """Link ``source_id:source_port`` to ``sink_id:sink_port``."""
+        scheme = self._scheme()
+        source = self._node_for_id(source_id)
+        sink = self._node_for_id(sink_id)
+        scheme.new_link(
+            source,
+            source.output_channel(source_port),
+            sink,
+            sink.input_channel(sink_port),
+        )
+
+    def disconnect(
+        self, source_id: str, source_port: str, sink_id: str, sink_port: str
+    ) -> None:
+        """Remove the link matching the given endpoints, or raise ``KeyError``."""
+        scheme = self._scheme()
+        for link in list(scheme.links):
+            if (
+                _node_id(link.source_node) == source_id
+                and link.source_channel.name == source_port
+                and _node_id(link.sink_node) == sink_id
+                and link.sink_channel.name == sink_port
+            ):
+                scheme.remove_link(link)
+                return
+        raise KeyError(f"no link {source_id}:{source_port} -> {sink_id}:{sink_port}")
+
+    def run(self, node_id: str) -> None:
+        """Re-run one node's widget; sources re-emit and propagate downstream."""
+        self._widget_for_id(node_id).run()
 
     def _node_for_window(self, window: object | None) -> Any | None:
         """Return the node whose widget owns ``window``, or None."""

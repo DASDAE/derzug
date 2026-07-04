@@ -408,3 +408,78 @@ class TestWriteSurface:
         params = controller.describe_node(node_id).node.params
         assert params["kind"] == "notch_filter"
         assert params["frequency"] == "60 Hz"
+
+
+class TestGraphAuthoring:
+    """The controller can author the canvas graph (add/connect/remove/run)."""
+
+    def test_add_node_returns_id_and_appears(self, blank_canvas):
+        """add_node places a node reachable in the canvas state."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        node_id = controller.add_node("Detrend", title="dt", position=(10.0, 20.0))
+        state = controller.get_canvas_state()
+        node = next(n for n in state.nodes if n.id == node_id)
+        assert node.type == "Detrend"
+        assert node.title == "dt"
+        assert node.position == (10.0, 20.0)
+
+    def test_add_node_unknown_type_raises(self, blank_canvas):
+        """An unregistered widget type is rejected."""
+        window, _ = blank_canvas
+        with pytest.raises(ValueError, match="unknown widget type"):
+            CanvasController(window).add_node("NotAWidget")
+
+    def test_connect_and_disconnect(self, blank_canvas):
+        """Connect adds a typed link; disconnect removes it."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        src = controller.add_node("Spool", title="src")
+        sink = controller.add_node("Waterfall", title="view", position=(300.0, 0.0))
+
+        controller.connect(src, "Patch", sink, "Patch")
+        links = controller.get_canvas_state().links
+        assert any(
+            link.source_id == src and link.sink_id == sink and link.sink_port == "Patch"
+            for link in links
+        )
+
+        controller.disconnect(src, "Patch", sink, "Patch")
+        assert controller.get_canvas_state().links == []
+
+    def test_connect_invalid_port_raises(self, blank_canvas):
+        """Connecting a non-existent port surfaces an error."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        src = controller.add_node("Spool", title="src")
+        sink = controller.add_node("Waterfall", title="view", position=(300.0, 0.0))
+        with pytest.raises(Exception):
+            controller.connect(src, "NoSuchPort", sink, "Patch")
+
+    def test_disconnect_missing_link_raises(self, blank_canvas):
+        """Disconnecting an absent link is an explicit error."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        src = controller.add_node("Spool", title="src")
+        sink = controller.add_node("Waterfall", title="view", position=(300.0, 0.0))
+        with pytest.raises(KeyError):
+            controller.disconnect(src, "Patch", sink, "Patch")
+
+    def test_remove_node(self, blank_canvas):
+        """remove_node deletes the node from the canvas."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        node_id = controller.add_node("Detrend", title="dt")
+        assert any(n.id == node_id for n in controller.get_canvas_state().nodes)
+        controller.remove_node(node_id)
+        assert all(n.id != node_id for n in controller.get_canvas_state().nodes)
+
+    def test_run_configured_source_is_clean(self, blank_canvas, qtbot):
+        """Configuring and running a source executes without raising or erroring."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        spool = controller.add_node("Spool", title="src")
+        controller.set_params(spool, {"spool_input": "example_event_1"})
+        controller.run(spool)
+        qtbot.wait(20)
+        assert controller.describe_node(spool).node.error is None
