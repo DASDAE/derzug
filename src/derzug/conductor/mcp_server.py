@@ -13,6 +13,7 @@ app never depends on ``mcp``.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ from mcp.server.fastmcp import FastMCP
 
 from derzug.conductor.controller import CanvasController
 from derzug.conductor.dispatch import MainThreadDispatcher
+
+log = logging.getLogger(__name__)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4319
@@ -149,3 +152,30 @@ def write_mcp_config(
     config = {"mcpServers": {name: {"type": "http", "url": url}}}
     Path(path).write_text(json.dumps(config, indent=2))
     return url
+
+
+def start_conductor(
+    window: Any,
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    config_path: str | Path | None = None,
+) -> tuple[threading.Thread, str]:
+    """Wire and start the in-app Conductor MCP server for ``window``.
+
+    Builds a ``CanvasController`` + ``MainThreadDispatcher``, serves the MCP tools
+    over streamable-http in a daemon thread (which keeps them alive), and
+    optionally writes an ``.mcp.json`` so a client auto-connects. Returns the
+    server thread and its URL.
+    """
+    controller = CanvasController(window)
+    dispatcher = MainThreadDispatcher()
+    mcp = build_conductor_mcp(controller, dispatcher, host=host, port=port)
+    thread = serve_in_thread(mcp)
+    url = f"http://{host}:{port}/mcp"
+    if config_path is not None:
+        write_mcp_config(config_path, host=host, port=port)
+        log.info("Conductor MCP server at %s (client config: %s)", url, config_path)
+    else:
+        log.info("Conductor MCP server at %s", url)
+    return thread, url

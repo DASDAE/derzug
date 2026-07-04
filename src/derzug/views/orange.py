@@ -2778,6 +2778,7 @@ class DerZugMain(OMain):
     active_source_manager = None
     show_demo = False
     dev_mode = False
+    conductor_enabled = False
     startup_workflow_path: str | None = None
     startup_open_widget_ids: ClassVar[list[int]] = []
 
@@ -2883,7 +2884,31 @@ class DerZugMain(OMain):
         window.install_dev_controls()
         if self.show_demo:
             QTimer.singleShot(0, window.examples_dialog)
+        if self.conductor_enabled:
+            self._start_conductor(window)
         return window
+
+    def _start_conductor(self, window) -> None:
+        """Start the in-app Conductor MCP server (optional ``conductor`` extra)."""
+        import logging
+        import os
+
+        try:
+            from derzug.conductor.mcp_server import start_conductor
+        except ImportError:
+            logging.getLogger(__name__).error(
+                "Conductor requires the 'mcp' extra: pip install 'derzug[conductor]'"
+            )
+            return
+        try:
+            config_path = os.path.join(os.getcwd(), ".mcp.json")
+            self._conductor_thread, _url = start_conductor(
+                window, config_path=config_path
+            )
+        except Exception:
+            logging.getLogger(__name__).error(
+                "Failed to start the Conductor MCP server", exc_info=True
+            )
 
     def main_window_stylesheet(self):
         """

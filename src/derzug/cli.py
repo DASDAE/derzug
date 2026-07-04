@@ -22,6 +22,11 @@ def main(
     dev: bool = typer.Option(
         False, "--dev", help="Enable development UI features such as hot reload."
     ),
+    conductor: bool = typer.Option(
+        False,
+        "--conductor",
+        help="Start the in-app Conductor MCP server for agent control of the canvas.",
+    ),
     open_widgets: str = typer.Option(
         "",
         "--open-widgets",
@@ -39,6 +44,7 @@ def main(
     runner = DerZugMain()
     runner.show_demo = demo
     runner.dev_mode = dev
+    runner.conductor_enabled = conductor
     runner.startup_workflow_path = None if workflow is None else str(workflow)
     runner.startup_open_widget_ids = [
         int(x) for x in open_widgets.split(",") if x.strip().isdigit()
