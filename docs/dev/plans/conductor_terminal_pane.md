@@ -9,7 +9,7 @@ experience *without* DerZug taking on any model-provider, API-key, or billing
 dependency — the pane is just a shell, the agent is the user's own client, and
 the transport is the MCP server we already built (`derzug --conductor`).
 
-Branch base: `dev`.
+Branch base: `main` (continuing on `feature/conductor-mcp`).
 
 ## Why this shape
 
