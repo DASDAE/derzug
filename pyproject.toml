@@ -112,6 +112,11 @@ zug = "derzug.dascore.namespace:ZugSpoolNameSpace"
 
 [project.optional-dependencies]
 
+# The Conductor's in-app MCP server (agent control of the live canvas).
+conductor = [
+    "mcp>=1.2",
+]
+
 test = [
     "coverage>=7.4,<8",
     "duckdb",

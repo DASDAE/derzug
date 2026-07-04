@@ -483,3 +483,50 @@ class TestGraphAuthoring:
         controller.run(spool)
         qtbot.wait(20)
         assert controller.describe_node(spool).node.error is None
+
+    def test_add_node_is_undoable(self, blank_canvas):
+        """An agent's add_node lands on the document undo stack (Ctrl+Z)."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        node_id = controller.add_node("Detrend")
+        assert any(n.id == node_id for n in controller.get_canvas_state().nodes)
+
+        window.current_document().undoStack().undo()
+        assert all(n.id != node_id for n in controller.get_canvas_state().nodes)
+
+    def test_connect_is_undoable(self, blank_canvas):
+        """Connect is undoable via the document undo stack."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        src = controller.add_node("Spool", title="src")
+        sink = controller.add_node("Waterfall", title="view", position=(300.0, 0.0))
+        controller.connect(src, "Patch", sink, "Patch")
+        assert controller.get_canvas_state().links
+
+        window.current_document().undoStack().undo()
+        assert controller.get_canvas_state().links == []
+
+    def test_add_node_auto_layout_is_compact(self, blank_canvas):
+        """Nodes added without a position flow right by a fixed compact gap."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        controller.add_node("Spool", title="a")
+        controller.add_node("Detrend", title="b")
+        controller.add_node("Waterfall", title="c")
+        by_title = {n.title: n for n in controller.get_canvas_state().nodes}
+        xs = [by_title[t].position[0] for t in ("a", "b", "c")]
+        assert xs[1] - xs[0] == xs[2] - xs[1] > 0  # evenly spaced left to right
+
+    def test_show_move_and_hide_node_window(self, blank_canvas):
+        """show_node reveals the widget window; move repositions; hide closes it."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        node_id = controller.add_node("Detrend", title="dt")
+        widget = controller._widget_for_id(node_id)
+
+        controller.show_node(node_id)
+        assert widget.isVisible()
+        controller.move_node_window(node_id, 123, 45)
+        assert (widget.pos().x(), widget.pos().y()) == (123, 45)
+        controller.hide_node(node_id)
+        assert not widget.isVisible()

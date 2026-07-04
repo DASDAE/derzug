@@ -1,12 +1,15 @@
-"""DerZug Conductor: a programmatic, agent-facing view of a live canvas.
+"""DerZug Conductor: a programmatic, agent-facing control surface over a live canvas.
 
-Phase 1 provides a read-only ``CanvasController`` over a running
-``DerZugMainWindow`` plus JSON-serializable observation models. Mutation and the
-MCP transport are added in later phases; this layer is intentionally a thin,
-well-typed observation surface so its shape can be reviewed first.
+``CanvasController`` wraps a running ``DerZugMainWindow`` to observe the workflow
+(typed, JSON-serializable state + widget schemas), configure nodes
+(``set_params`` / ``set_view``), and author the graph (``add_node`` / ``connect``
+/ ...), with structural edits registered on the undo stack.
+``MainThreadDispatcher`` marshals those calls onto the Qt main thread for the
+off-thread MCP transport. The MCP server itself is added in a later phase.
 """
 
 from derzug.conductor.controller import CanvasController
+from derzug.conductor.dispatch import MainThreadDispatcher
 from derzug.conductor.schema import (
     CanvasState,
     CursorState,
@@ -24,6 +27,7 @@ __all__ = (
     "CursorState",
     "FocusState",
     "LinkState",
+    "MainThreadDispatcher",
     "NodeDetail",
     "NodeState",
     "PortInfo",

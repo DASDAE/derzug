@@ -11,9 +11,15 @@ reuses the same primitives the rest of the app uses to read the scheme
 (``compile_workflow``), and set widget state (``apply_params`` /
 ``apply_view``).
 
-All methods are expected to be called on the Qt main thread. Undo-stack
-integration, Code-widget safety gating, off-thread marshalling, and the MCP
-transport arrive in later phases.
+Graph edits (add/remove nodes, connect/disconnect) are registered on the
+document's undo stack, so the user can ``Ctrl+Z`` an agent's structural changes.
+Widget parameter/view changes are not put on the stack (Orange's crash-recovery
+swap file pickles the stack, and a widget-state command can't be cleanly
+serialized); ``set_params`` / ``set_view`` instead return the prior state so the
+caller can undo by re-applying it.
+
+All methods are expected to be called on the Qt main thread. Code-widget safety
+gating, off-thread marshalling, and the MCP transport arrive in later phases.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from typing import Any, get_args
 import dascore as dc
 from AnyQt.QtGui import QCursor
 from AnyQt.QtWidgets import QApplication
+from orangecanvas.scheme import SchemeLink, SchemeNode
 
 from derzug.conductor.schema import (
     CanvasState,
@@ -37,6 +44,9 @@ from derzug.conductor.schema import (
 )
 from derzug.widgets.composite import NODE_ID_KEY
 from derzug.workflow.compiler import compile_workflow
+
+# Horizontal gap (scheme units) between auto-placed nodes; keeps chains compact.
+_NODE_GAP = 150.0
 
 
 def _widget_class(qualified_name: str) -> type | None:
@@ -163,9 +173,13 @@ class CanvasController:
     def __init__(self, window: object) -> None:
         self._window = window
 
+    def _document(self) -> Any:
+        """Return the window's current document (undoable scheme editor)."""
+        return self._window.current_document()
+
     def _scheme(self) -> Any:
         """Return the live scheme backing the window's current document."""
-        return self._window.current_document().scheme()
+        return self._document().scheme()
 
     def _active_source_widget(self) -> object | None:
         """Return the current active-source widget, if any."""
@@ -339,57 +353,97 @@ class CanvasController:
                 return description
         raise ValueError(f"unknown widget type: {widget_type!r}")
 
+    def _auto_position(self) -> tuple[float, float]:
+        """A compact spot for a new node: just right of the rightmost one."""
+        nodes = list(self._scheme().nodes)
+        if not nodes:
+            return (0.0, 0.0)
+        x, y = max((node.position or (0.0, 0.0) for node in nodes), key=lambda p: p[0])
+        return (x + _NODE_GAP, y)
+
     def add_node(
         self,
         widget_type: str,
         *,
         title: str | None = None,
-        position: tuple[float, float] = (0.0, 0.0),
+        position: tuple[float, float] | None = None,
     ) -> str:
-        """Add a node of ``widget_type`` (display or qualified name); return its id."""
+        """Add a node of ``widget_type`` (display or qualified name); return its id.
+
+        When ``position`` is omitted the node is auto-placed a compact gap to the
+        right of the current rightmost node, so an agent building a chain gets a
+        tidy left-to-right layout without computing coordinates.
+
+        Undoable: registered on the document's undo stack, so the user can
+        ``Ctrl+Z`` an agent's addition.
+        """
         description = self._description_for(widget_type)
-        node = self._scheme().new_node(
-            description, title=title or description.name, position=tuple(position)
+        placement = self._auto_position() if position is None else tuple(position)
+        node = SchemeNode(
+            description, title=title or description.name, position=placement
         )
+        self._document().addNode(node)
         return _node_id(node)
 
     def remove_node(self, node_id: str) -> None:
-        """Remove one node (and its links) from the canvas."""
-        self._scheme().remove_node(self._node_for_id(node_id))
+        """Remove one node (and its links) from the canvas (undoable)."""
+        self._document().removeNode(self._node_for_id(node_id))
 
     def connect(
         self, source_id: str, source_port: str, sink_id: str, sink_port: str
     ) -> None:
-        """Link ``source_id:source_port`` to ``sink_id:sink_port``."""
-        scheme = self._scheme()
+        """Link ``source_id:source_port`` to ``sink_id:sink_port`` (undoable)."""
         source = self._node_for_id(source_id)
         sink = self._node_for_id(sink_id)
-        scheme.new_link(
+        link = SchemeLink(
             source,
             source.output_channel(source_port),
             sink,
             sink.input_channel(sink_port),
         )
+        self._document().addLink(link)
 
     def disconnect(
         self, source_id: str, source_port: str, sink_id: str, sink_port: str
     ) -> None:
-        """Remove the link matching the given endpoints, or raise ``KeyError``."""
-        scheme = self._scheme()
-        for link in list(scheme.links):
+        """Remove the link matching the given endpoints (undoable); else KeyError."""
+        for link in list(self._scheme().links):
             if (
                 _node_id(link.source_node) == source_id
                 and link.source_channel.name == source_port
                 and _node_id(link.sink_node) == sink_id
                 and link.sink_channel.name == sink_port
             ):
-                scheme.remove_link(link)
+                self._document().removeLink(link)
                 return
         raise KeyError(f"no link {source_id}:{source_port} -> {sink_id}:{sink_port}")
 
     def run(self, node_id: str) -> None:
         """Re-run one node's widget; sources re-emit and propagate downstream."""
         self._widget_for_id(node_id).run()
+
+    def show_node(
+        self, node_id: str, *, x: float | None = None, y: float | None = None
+    ) -> None:
+        """Pop up (show, raise, focus) a node's widget window, optionally at (x, y).
+
+        ``x``/``y`` are screen coordinates; when given, the window is moved there
+        before it is shown.
+        """
+        widget = self._widget_for_id(node_id)
+        if x is not None and y is not None:
+            widget.move(int(x), int(y))
+        widget.show()
+        widget.raise_()
+        widget.activateWindow()
+
+    def move_node_window(self, node_id: str, x: float, y: float) -> None:
+        """Move a node's widget window to screen coordinates ``(x, y)``."""
+        self._widget_for_id(node_id).move(int(x), int(y))
+
+    def hide_node(self, node_id: str) -> None:
+        """Hide (close) a node's widget window."""
+        self._widget_for_id(node_id).hide()
 
     def _node_for_window(self, window: object | None) -> Any | None:
         """Return the node whose widget owns ``window``, or None."""
