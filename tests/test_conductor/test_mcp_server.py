@@ -62,3 +62,26 @@ def test_write_mcp_config(tmp_path):
     assert url == "http://127.0.0.1:4321/mcp"
     assert config["mcpServers"]["derzug-conductor"]["url"] == url
     assert config["mcpServers"]["derzug-conductor"]["type"] == "http"
+
+
+def test_write_codex_config_is_idempotent(tmp_path, monkeypatch):
+    """The Codex MCP bridge is written once, under ~/.codex/config.toml."""
+    from derzug.conductor.mcp_server import _write_codex_config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _write_codex_config("127.0.0.1", 4319)
+    config = (tmp_path / ".codex" / "config.toml").read_text()
+    assert "[mcp_servers.derzug-conductor]" in config
+    assert "mcp-remote" in config
+    assert "http://127.0.0.1:4319/mcp" in config
+
+    _write_codex_config("127.0.0.1", 4319)  # again -> no duplicate section
+    again = (tmp_path / ".codex" / "config.toml").read_text()
+    assert again.count("[mcp_servers.derzug-conductor]") == 1
+
+
+def test_launch_agent_missing_binary_is_safe(tmp_path):
+    """Launching an agent that is not on PATH fails cleanly (no spawn)."""
+    from derzug.conductor.mcp_server import launch_agent_in_terminal
+
+    assert launch_agent_in_terminal("no-such-agent-xyz", str(tmp_path)) is False

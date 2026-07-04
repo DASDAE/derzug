@@ -29,6 +29,17 @@ handles model credentials.
    claude
    ```
 
+   Or let DerZug launch it for you in a new terminal, pre-wired:
+
+   ```bash
+   derzug --agent claude   # or: derzug --agent codex
+   ```
+
+   `--agent` implies `--conductor`. `claude` connects via the `.mcp.json`;
+   `codex` is bridged to the HTTP server through `mcp-remote` (a
+   `[mcp_servers.derzug-conductor]` entry is added to `~/.codex/config.toml`,
+   which needs `npx` at runtime).
+
 4. Ask it to build a pipeline, e.g.:
 
    > Load the `example_event_1` spool, bandpass filter it 5–40 Hz, and show a

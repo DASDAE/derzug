@@ -14,6 +14,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shlex
+import shutil
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -154,28 +159,107 @@ def write_mcp_config(
     return url
 
 
+# Agents we know how to auto-launch. The command runs in the config directory.
+_AGENT_COMMANDS = {
+    "claude": ["claude"],  # reads the .mcp.json we drop in the launch cwd
+    "codex": ["codex"],  # needs an mcp-remote bridge entry (written below)
+}
+
+
+def _write_codex_config(host: str, port: int, name: str = "derzug-conductor") -> None:
+    """Add an mcp-remote bridge for the server to ``~/.codex/config.toml``.
+
+    Codex speaks stdio MCP, so it reaches our HTTP server through ``mcp-remote``.
+    Appends the section only when absent (best effort; needs ``npx`` at runtime).
+    """
+    path = Path.home() / ".codex" / "config.toml"
+    section = f"[mcp_servers.{name}]"
+    existing = path.read_text() if path.exists() else ""
+    if section in existing:
+        return
+    url = f"http://{host}:{port}/mcp"
+    block = (
+        f"\n{section}\n" 'command = "npx"\n' f'args = ["-y", "mcp-remote", "{url}"]\n'
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(existing + block)
+    log.info("Wrote Codex MCP bridge for %s to %s", url, path)
+
+
+def _open_in_terminal(command: list[str], cwd: str) -> bool:
+    """Best-effort: open a new terminal window running ``command`` in ``cwd``."""
+    joined = " ".join(shlex.quote(part) for part in command)
+
+    def _spawn(argv: list[str], spawn_cwd: str | None = None) -> bool:
+        try:
+            subprocess.Popen(argv, cwd=spawn_cwd)
+            return True
+        except Exception:
+            log.error("Failed to launch terminal: %s", argv, exc_info=True)
+            return False
+
+    if sys.platform == "darwin":
+        script = (
+            f'tell application "Terminal" to do script '
+            f'"cd {shlex.quote(cwd)} && exec {joined}"'
+        )
+        return _spawn(["osascript", "-e", script])
+    if os.name == "nt":
+        if shutil.which("wt"):
+            return _spawn(["wt", "-d", cwd, *command])
+        return _spawn(["cmd", "/c", "start", "", "cmd", "/k", joined], spawn_cwd=cwd)
+    for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
+        exe = shutil.which(term)
+        if exe is None:
+            continue
+        if term == "gnome-terminal":
+            return _spawn([exe, "--working-directory", cwd, "--", *command])
+        return _spawn([exe, "-e", joined], spawn_cwd=cwd)
+    log.error("No terminal emulator found; run '%s' in %s yourself", joined, cwd)
+    return False
+
+
+def launch_agent_in_terminal(
+    agent: str, cwd: str, *, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
+) -> bool:
+    """Wire the named agent's MCP config and launch it in a new terminal in ``cwd``."""
+    command = _AGENT_COMMANDS.get(agent, [agent])
+    if shutil.which(command[0]) is None:
+        log.error("Agent %r not found on PATH; run it yourself in %s", agent, cwd)
+        return False
+    if agent == "codex":
+        _write_codex_config(host, port)
+    return _open_in_terminal(command, cwd)
+
+
 def start_conductor(
     window: Any,
     *,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     config_path: str | Path | None = None,
+    agent: str | None = None,
 ) -> tuple[threading.Thread, str]:
     """Wire and start the in-app Conductor MCP server for ``window``.
 
     Builds a ``CanvasController`` + ``MainThreadDispatcher``, serves the MCP tools
     over streamable-http in a daemon thread (which keeps them alive), and
-    optionally writes an ``.mcp.json`` so a client auto-connects. Returns the
-    server thread and its URL.
+    optionally writes an ``.mcp.json`` so a client auto-connects. When ``agent``
+    is given (e.g. ``"claude"`` / ``"codex"``), it is launched in a new terminal
+    in the config directory. Returns the server thread and its URL.
     """
     controller = CanvasController(window)
     dispatcher = MainThreadDispatcher()
     mcp = build_conductor_mcp(controller, dispatcher, host=host, port=port)
     thread = serve_in_thread(mcp)
     url = f"http://{host}:{port}/mcp"
+    cwd = os.getcwd()
     if config_path is not None:
         write_mcp_config(config_path, host=host, port=port)
+        cwd = str(Path(config_path).resolve().parent)
         log.info("Conductor MCP server at %s (client config: %s)", url, config_path)
     else:
         log.info("Conductor MCP server at %s", url)
+    if agent:
+        launch_agent_in_terminal(agent, cwd, host=host, port=port)
     return thread, url

@@ -2779,6 +2779,7 @@ class DerZugMain(OMain):
     show_demo = False
     dev_mode = False
     conductor_enabled = False
+    conductor_agent: str | None = None
     startup_workflow_path: str | None = None
     startup_open_widget_ids: ClassVar[list[int]] = []
 
@@ -2903,7 +2904,7 @@ class DerZugMain(OMain):
         try:
             config_path = os.path.join(os.getcwd(), ".mcp.json")
             self._conductor_thread, _url = start_conductor(
-                window, config_path=config_path
+                window, config_path=config_path, agent=self.conductor_agent
             )
         except Exception:
             logging.getLogger(__name__).error(
