@@ -483,3 +483,25 @@ class TestGraphAuthoring:
         controller.run(spool)
         qtbot.wait(20)
         assert controller.describe_node(spool).node.error is None
+
+    def test_add_node_is_undoable(self, blank_canvas):
+        """An agent's add_node lands on the document undo stack (Ctrl+Z)."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        node_id = controller.add_node("Detrend")
+        assert any(n.id == node_id for n in controller.get_canvas_state().nodes)
+
+        window.current_document().undoStack().undo()
+        assert all(n.id != node_id for n in controller.get_canvas_state().nodes)
+
+    def test_connect_is_undoable(self, blank_canvas):
+        """Connect is undoable via the document undo stack."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        src = controller.add_node("Spool", title="src")
+        sink = controller.add_node("Waterfall", title="view", position=(300.0, 0.0))
+        controller.connect(src, "Patch", sink, "Patch")
+        assert controller.get_canvas_state().links
+
+        window.current_document().undoStack().undo()
+        assert controller.get_canvas_state().links == []

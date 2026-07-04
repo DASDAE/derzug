@@ -11,9 +11,15 @@ reuses the same primitives the rest of the app uses to read the scheme
 (``compile_workflow``), and set widget state (``apply_params`` /
 ``apply_view``).
 
-All methods are expected to be called on the Qt main thread. Undo-stack
-integration, Code-widget safety gating, off-thread marshalling, and the MCP
-transport arrive in later phases.
+Graph edits (add/remove nodes, connect/disconnect) are registered on the
+document's undo stack, so the user can ``Ctrl+Z`` an agent's structural changes.
+Widget parameter/view changes are not put on the stack (Orange's crash-recovery
+swap file pickles the stack, and a widget-state command can't be cleanly
+serialized); ``set_params`` / ``set_view`` instead return the prior state so the
+caller can undo by re-applying it.
+
+All methods are expected to be called on the Qt main thread. Code-widget safety
+gating, off-thread marshalling, and the MCP transport arrive in later phases.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from typing import Any, get_args
 import dascore as dc
 from AnyQt.QtGui import QCursor
 from AnyQt.QtWidgets import QApplication
+from orangecanvas.scheme import SchemeLink, SchemeNode
 
 from derzug.conductor.schema import (
     CanvasState,
@@ -163,9 +170,13 @@ class CanvasController:
     def __init__(self, window: object) -> None:
         self._window = window
 
+    def _document(self) -> Any:
+        """Return the window's current document (undoable scheme editor)."""
+        return self._window.current_document()
+
     def _scheme(self) -> Any:
         """Return the live scheme backing the window's current document."""
-        return self._window.current_document().scheme()
+        return self._document().scheme()
 
     def _active_source_widget(self) -> object | None:
         """Return the current active-source widget, if any."""
@@ -346,44 +357,48 @@ class CanvasController:
         title: str | None = None,
         position: tuple[float, float] = (0.0, 0.0),
     ) -> str:
-        """Add a node of ``widget_type`` (display or qualified name); return its id."""
+        """Add a node of ``widget_type`` (display or qualified name); return its id.
+
+        Undoable: registered on the document's undo stack, so the user can
+        ``Ctrl+Z`` an agent's addition.
+        """
         description = self._description_for(widget_type)
-        node = self._scheme().new_node(
+        node = SchemeNode(
             description, title=title or description.name, position=tuple(position)
         )
+        self._document().addNode(node)
         return _node_id(node)
 
     def remove_node(self, node_id: str) -> None:
-        """Remove one node (and its links) from the canvas."""
-        self._scheme().remove_node(self._node_for_id(node_id))
+        """Remove one node (and its links) from the canvas (undoable)."""
+        self._document().removeNode(self._node_for_id(node_id))
 
     def connect(
         self, source_id: str, source_port: str, sink_id: str, sink_port: str
     ) -> None:
-        """Link ``source_id:source_port`` to ``sink_id:sink_port``."""
-        scheme = self._scheme()
+        """Link ``source_id:source_port`` to ``sink_id:sink_port`` (undoable)."""
         source = self._node_for_id(source_id)
         sink = self._node_for_id(sink_id)
-        scheme.new_link(
+        link = SchemeLink(
             source,
             source.output_channel(source_port),
             sink,
             sink.input_channel(sink_port),
         )
+        self._document().addLink(link)
 
     def disconnect(
         self, source_id: str, source_port: str, sink_id: str, sink_port: str
     ) -> None:
-        """Remove the link matching the given endpoints, or raise ``KeyError``."""
-        scheme = self._scheme()
-        for link in list(scheme.links):
+        """Remove the link matching the given endpoints (undoable); else KeyError."""
+        for link in list(self._scheme().links):
             if (
                 _node_id(link.source_node) == source_id
                 and link.source_channel.name == source_port
                 and _node_id(link.sink_node) == sink_id
                 and link.sink_channel.name == sink_port
             ):
-                scheme.remove_link(link)
+                self._document().removeLink(link)
                 return
         raise KeyError(f"no link {source_id}:{source_port} -> {sink_id}:{sink_port}")
 
