@@ -49,11 +49,34 @@ def test_params_are_not_flat_settings(widget_cls, qtbot):
             assert not widget._is_setting(attr), f"{widget_cls.__name__}.{attr}"
 
 
-@pytest.mark.parametrize("widget_cls", _AUTHORITATIVE)
-def test_state_survives_ows_roundtrip(widget_cls, qtbot):
-    """Applied params round-trip through a save/reload of the scheme."""
+@pytest.fixture
+def make_window(qapp):
+    """Create DerZug main windows and delete them on teardown.
+
+    Windows created via ``ns._create_main_window()`` are full Orange canvas main
+    windows; leaking them makes PyQt tear down C++ objects after the
+    QApplication at interpreter exit, which segfaults. Deleting them here keeps
+    shutdown clean.
+    """
     from derzug.dascore import namespace as ns
 
+    windows = []
+
+    def _make():
+        window = ns._create_main_window()
+        windows.append(window)
+        return window
+
+    yield _make
+
+    for window in windows:
+        window.deleteLater()
+    qapp.processEvents()
+
+
+@pytest.mark.parametrize("widget_cls", _AUTHORITATIVE)
+def test_state_survives_ows_roundtrip(widget_cls, qtbot, make_window):
+    """Applied params round-trip through a save/reload of the scheme."""
     qualified = f"{widget_cls.__module__}.{widget_cls.__name__}"
 
     def _desc(window):
@@ -62,7 +85,7 @@ def test_state_survives_ows_roundtrip(widget_cls, qtbot):
                 return desc
         raise LookupError(qualified)
 
-    window = ns._create_main_window()
+    window = make_window()
     scheme = window.current_document().scheme()
     node = scheme.new_node(_desc(window), title="w", position=(0.0, 0.0))
     widget = scheme.widget_for_node(node)
@@ -77,7 +100,7 @@ def test_state_survives_ows_roundtrip(widget_cls, qtbot):
     # reload must reproduce.
     expected = widget.get_params()
 
-    reloaded = ns._create_main_window()
+    reloaded = make_window()
     # Auto-accept the arbitrary-Python confirmation dialog (Code widget) that
     # would otherwise block a headless scheme load.
     reloaded.maybe_confirm_code_widget_load = lambda: True
