@@ -45,11 +45,30 @@ def build_conductor_mcp(
     mcp = FastMCP(
         "DerZug Conductor",
         instructions=(
-            "Observe and drive a live DerZug DAS workflow canvas. Use "
-            "list_widget_types to discover node types and their parameter "
-            "schemas, get_canvas_state to see the graph, then add_node / connect "
-            "/ set_params / run to build and drive a pipeline. Structural edits "
-            "are undoable in the app."
+            "Drive a live DerZug DAS (distributed acoustic sensing) workflow "
+            "canvas of connected widget nodes.\n\n"
+            "COMMON RECIPE (view data): add_node('Spool') -> "
+            "set_params(spool_id, {'spool_input': 'example_event_1'}) -> "
+            "add_node('Waterfall') -> connect(spool_id, waterfall_id) -> "
+            "run(spool_id).\n\n"
+            "CONVENTIONS:\n"
+            "- Almost every node has one input port 'Patch' and one output port "
+            "'Patch'; connect(source_id, sink_id) defaults to them, so you rarely "
+            "need port names.\n"
+            "- Omit x/y on add_node; nodes auto-place in a tidy left-to-right "
+            "row.\n"
+            "- set_params/set_view take PARTIAL updates, are validated against the "
+            "node's schema, and return the prior value.\n"
+            "- Structural edits (add/remove/connect) are undoable in the app "
+            "(Ctrl+Z).\n"
+            "- show_node pops up a node's widget window to display results.\n\n"
+            "DISCOVERY: list_widget_types = the catalog with each type's "
+            "params/view schema; get_canvas_state = the current graph; "
+            "describe_node = one node's detail incl. its output patch shape.\n\n"
+            "COMMON NODE TYPES: Spool (source; loads data/examples), Filter "
+            "(bandpass etc.), Waterfall (2D image view), Wiggle (trace view), "
+            "Detrend, Taper, Resample, Select, Aggregate. See list_widget_types "
+            "for the full set and parameters."
         ),
         host=host,
         port=port,
@@ -118,15 +137,23 @@ def build_conductor_mcp(
         call(controller.remove_node, node_id)
 
     @mcp.tool()
-    def connect(source_id: str, source_port: str, sink_id: str, sink_port: str) -> None:
-        """Link source_id:source_port -> sink_id:sink_port. Undoable."""
+    def connect(
+        source_id: str,
+        sink_id: str,
+        source_port: str = "Patch",
+        sink_port: str = "Patch",
+    ) -> None:
+        """Link source -> sink. Ports default to 'Patch' (the common case). Undoable."""
         call(controller.connect, source_id, source_port, sink_id, sink_port)
 
     @mcp.tool()
     def disconnect(
-        source_id: str, source_port: str, sink_id: str, sink_port: str
+        source_id: str,
+        sink_id: str,
+        source_port: str = "Patch",
+        sink_port: str = "Patch",
     ) -> None:
-        """Remove the matching link. Undoable."""
+        """Remove the matching link (ports default to 'Patch'). Undoable."""
         call(controller.disconnect, source_id, source_port, sink_id, sink_port)
 
     @mcp.tool()

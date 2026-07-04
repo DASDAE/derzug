@@ -88,3 +88,14 @@ def test_launch_agent_missing_binary_is_safe(tmp_path):
     from derzug.conductor.mcp_server import launch_agent_in_terminal
 
     assert launch_agent_in_terminal("no-such-agent-xyz", str(tmp_path)) is False
+
+
+def test_connect_tool_defaults_ports_to_patch(blank_canvas):
+    """The connect tool links two nodes using the default 'Patch' ports."""
+    window, _ = blank_canvas
+    mcp, controller = _server(window)
+    spool = controller.add_node("Spool", title="s")
+    view = controller.add_node("Waterfall", title="v")
+    asyncio.run(mcp.call_tool("connect", {"source_id": spool, "sink_id": view}))
+    links = controller.get_canvas_state().links
+    assert any(link.source_id == spool and link.sink_id == view for link in links)
