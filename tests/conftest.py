@@ -214,3 +214,27 @@ def derzug_app(qapp, tmp_path_factory) -> DerZugAppContext:
     window.deleteLater()
     qapp.processEvents()
     QCoreApplication.sendPostedEvents()
+
+
+@pytest.fixture()
+def make_window(qapp):
+    """Create DerZug main windows and delete them on teardown.
+
+    ``ns._create_main_window()`` builds full Orange canvas main windows; leaking
+    them makes PyQt tear down C++ objects after the QApplication at interpreter
+    exit, which segfaults. Deleting them here keeps shutdown clean.
+    """
+    from derzug.dascore import namespace as ns
+
+    windows = []
+
+    def _make():
+        window = ns._create_main_window()
+        windows.append(window)
+        return window
+
+    yield _make
+
+    for window in windows:
+        window.deleteLater()
+    qapp.processEvents()

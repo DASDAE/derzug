@@ -49,31 +49,6 @@ def test_params_are_not_flat_settings(widget_cls, qtbot):
             assert not widget._is_setting(attr), f"{widget_cls.__name__}.{attr}"
 
 
-@pytest.fixture
-def make_window(qapp):
-    """Create DerZug main windows and delete them on teardown.
-
-    Windows created via ``ns._create_main_window()`` are full Orange canvas main
-    windows; leaking them makes PyQt tear down C++ objects after the
-    QApplication at interpreter exit, which segfaults. Deleting them here keeps
-    shutdown clean.
-    """
-    from derzug.dascore import namespace as ns
-
-    windows = []
-
-    def _make():
-        window = ns._create_main_window()
-        windows.append(window)
-        return window
-
-    yield _make
-
-    for window in windows:
-        window.deleteLater()
-    qapp.processEvents()
-
-
 @pytest.mark.parametrize("widget_cls", _AUTHORITATIVE)
 def test_state_survives_ows_roundtrip(widget_cls, qtbot, make_window):
     """Applied params round-trip through a save/reload of the scheme."""
