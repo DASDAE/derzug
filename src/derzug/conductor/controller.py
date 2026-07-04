@@ -151,7 +151,7 @@ class CanvasController:
       :meth:`disconnect` / :meth:`run` — author and drive the graph.
 
     Must be called on the Qt main thread. Undo-stack integration and off-thread
-    dispatch arrive in later phases; see this package's ``README.md``.
+    dispatch arrive in later phases.
 
     Examples
     --------
