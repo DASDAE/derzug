@@ -28,7 +28,7 @@ from AnyQt.QtWidgets import (
     QWidget,
 )
 from Orange.widgets.widget import OWWidget
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from derzug.core.services import get_app_shell_service
 from derzug.core.widget_execution import WorkflowExecutionMixin
@@ -801,19 +801,23 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         }
         return self.apply_settings(settings, run=run)
 
-    def get_params(self):
+    def get_params(self) -> BaseModel:
         """Return this widget's parameters as its typed ``params_model``."""
         return self._read_model(
             self.params_model, self._params_field_map(), "params_model"
         )
 
     def apply_params(self, params, *, run: bool = True) -> dict[str, object]:
-        """Apply a ``params_model`` (or dict); returns prior settings (for undo)."""
+        """Apply a ``params_model`` (or dict); returns prior settings (for undo).
+
+        To undo a change, snapshot ``before = get_params()`` first and call
+        ``apply_params(before)``; the returned dict is the lower-level primitive.
+        """
         return self._write_model(
             params, self.params_model, self._params_field_map(), "params_model", run=run
         )
 
-    def get_view(self):
+    def get_view(self) -> BaseModel:
         """Return this widget's presentation state as its typed ``view_model``."""
         return self._read_model(self.view_model, self._view_field_map(), "view_model")
 
@@ -822,6 +826,29 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         return self._write_model(
             view, self.view_model, self._view_field_map(), "view_model", run=run
         )
+
+    @staticmethod
+    def _model_json_schema(model) -> dict[str, object] | None:
+        """JSON schema for a params/view model, or ``None``.
+
+        Uses ``TypeAdapter`` so plain models and discriminated unions (e.g.
+        Filter's) are handled the same way.
+        """
+        return None if model is None else TypeAdapter(model).json_schema()
+
+    @classmethod
+    def params_schema(cls) -> dict[str, object] | None:
+        """JSON schema of this widget's ``params_model`` for agents/tools.
+
+        A class method so a widget type can be introspected without being
+        instantiated. ``None`` when the widget declares no params model.
+        """
+        return cls._model_json_schema(cls.params_model)
+
+    @classmethod
+    def view_schema(cls) -> dict[str, object] | None:
+        """JSON schema of this widget's ``view_model`` (or ``None``)."""
+        return cls._model_json_schema(cls.view_model)
 
     # -- Authoritative state (models as the sole persisted state) --------------
 

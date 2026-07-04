@@ -115,6 +115,20 @@ def test_view_roundtrip(widget_cls, qtbot):
         assert widget.get_view() == stabilized
 
 
+@pytest.mark.parametrize("widget_cls", _MODELED)
+def test_params_schema_is_uniform(widget_cls):
+    """Every widget exposes a JSON schema uniformly (plain models and unions)."""
+    schema = widget_cls.params_schema()
+    assert isinstance(schema, dict) and schema, widget_cls.__name__
+
+
+def test_discriminated_union_schema_via_uniform_accessor():
+    """Filter's union schema is reachable through params_schema() (agent surface)."""
+    classes = _all_widget_classes()
+    schema = classes["Filter"].params_schema()
+    assert "oneOf" in schema and schema.get("discriminator"), schema.keys()
+
+
 def test_view_model_coverage():
     """Visual widgets declare a view_model; processing widgets do not."""
     classes = _all_widget_classes()
