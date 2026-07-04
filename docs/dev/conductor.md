@@ -57,7 +57,10 @@ The server exposes the `CanvasController` as MCP tools:
   view JSON schema), `describe_node`, `compile_check`, `get_focus`.
 - **Configure** — `set_params`, `set_view` (partial updates, validated against
   the widget's model, returning the prior state).
-- **Author** — `add_node`, `remove_node`, `connect`, `disconnect`, `run`.
+- **Author** — `add_node` (auto-placed compactly when x/y are omitted),
+  `remove_node`, `connect`, `disconnect`, `run`.
+- **Windows** — `show_node` (pop up / raise / focus a widget window, optionally at
+  screen x/y), `move_node_window`, `hide_node`.
 
 An agent's loop is: discover the schemas → read the graph → add/connect nodes →
 configure them → run. `get_focus` reports what the user is looking at and

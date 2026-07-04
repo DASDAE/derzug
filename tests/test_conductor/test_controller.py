@@ -505,3 +505,28 @@ class TestGraphAuthoring:
 
         window.current_document().undoStack().undo()
         assert controller.get_canvas_state().links == []
+
+    def test_add_node_auto_layout_is_compact(self, blank_canvas):
+        """Nodes added without a position flow right by a fixed compact gap."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        controller.add_node("Spool", title="a")
+        controller.add_node("Detrend", title="b")
+        controller.add_node("Waterfall", title="c")
+        by_title = {n.title: n for n in controller.get_canvas_state().nodes}
+        xs = [by_title[t].position[0] for t in ("a", "b", "c")]
+        assert xs[1] - xs[0] == xs[2] - xs[1] > 0  # evenly spaced left to right
+
+    def test_show_move_and_hide_node_window(self, blank_canvas):
+        """show_node reveals the widget window; move repositions; hide closes it."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        node_id = controller.add_node("Detrend", title="dt")
+        widget = controller._widget_for_id(node_id)
+
+        controller.show_node(node_id)
+        assert widget.isVisible()
+        controller.move_node_window(node_id, 123, 45)
+        assert (widget.pos().x(), widget.pos().y()) == (123, 45)
+        controller.hide_node(node_id)
+        assert not widget.isVisible()

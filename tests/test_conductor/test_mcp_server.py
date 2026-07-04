@@ -28,6 +28,9 @@ _EXPECTED_TOOLS = {
     "connect",
     "disconnect",
     "run",
+    "show_node",
+    "move_node_window",
+    "hide_node",
 }
 
 

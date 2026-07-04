@@ -99,10 +99,18 @@ def build_conductor_mcp(
 
     @mcp.tool()
     def add_node(
-        widget_type: str, title: str | None = None, x: float = 0.0, y: float = 0.0
+        widget_type: str,
+        title: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
     ) -> str:
-        """Add a node (display or qualified type name); returns its id. Undoable."""
-        return call(controller.add_node, widget_type, title=title, position=(x, y))
+        """Add a node (display or qualified type name); returns its id.
+
+        Omit x/y to auto-place it compactly to the right of existing nodes.
+        Undoable.
+        """
+        position = (x, y) if x is not None and y is not None else None
+        return call(controller.add_node, widget_type, title=title, position=position)
 
     @mcp.tool()
     def remove_node(node_id: str) -> None:
@@ -125,6 +133,21 @@ def build_conductor_mcp(
     def run(node_id: str) -> None:
         """Re-run a node; sources re-emit and propagate downstream."""
         call(controller.run, node_id)
+
+    @mcp.tool()
+    def show_node(node_id: str, x: float | None = None, y: float | None = None) -> None:
+        """Pop up a node's widget window (show/raise/focus), optionally at (x, y)."""
+        call(controller.show_node, node_id, x=x, y=y)
+
+    @mcp.tool()
+    def move_node_window(node_id: str, x: float, y: float) -> None:
+        """Move a node's widget window to screen coordinates (x, y)."""
+        call(controller.move_node_window, node_id, x, y)
+
+    @mcp.tool()
+    def hide_node(node_id: str) -> None:
+        """Hide (close) a node's widget window."""
+        call(controller.hide_node, node_id)
 
     return mcp
 

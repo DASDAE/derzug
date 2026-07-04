@@ -45,6 +45,9 @@ from derzug.conductor.schema import (
 from derzug.widgets.composite import NODE_ID_KEY
 from derzug.workflow.compiler import compile_workflow
 
+# Horizontal gap (scheme units) between auto-placed nodes; keeps chains compact.
+_NODE_GAP = 150.0
+
 
 def _widget_class(qualified_name: str) -> type | None:
     """Load a widget class from its ``module.Class`` qualified name, or None."""
@@ -350,21 +353,34 @@ class CanvasController:
                 return description
         raise ValueError(f"unknown widget type: {widget_type!r}")
 
+    def _auto_position(self) -> tuple[float, float]:
+        """A compact spot for a new node: just right of the rightmost one."""
+        nodes = list(self._scheme().nodes)
+        if not nodes:
+            return (0.0, 0.0)
+        x, y = max((node.position or (0.0, 0.0) for node in nodes), key=lambda p: p[0])
+        return (x + _NODE_GAP, y)
+
     def add_node(
         self,
         widget_type: str,
         *,
         title: str | None = None,
-        position: tuple[float, float] = (0.0, 0.0),
+        position: tuple[float, float] | None = None,
     ) -> str:
         """Add a node of ``widget_type`` (display or qualified name); return its id.
+
+        When ``position`` is omitted the node is auto-placed a compact gap to the
+        right of the current rightmost node, so an agent building a chain gets a
+        tidy left-to-right layout without computing coordinates.
 
         Undoable: registered on the document's undo stack, so the user can
         ``Ctrl+Z`` an agent's addition.
         """
         description = self._description_for(widget_type)
+        placement = self._auto_position() if position is None else tuple(position)
         node = SchemeNode(
-            description, title=title or description.name, position=tuple(position)
+            description, title=title or description.name, position=placement
         )
         self._document().addNode(node)
         return _node_id(node)
@@ -405,6 +421,29 @@ class CanvasController:
     def run(self, node_id: str) -> None:
         """Re-run one node's widget; sources re-emit and propagate downstream."""
         self._widget_for_id(node_id).run()
+
+    def show_node(
+        self, node_id: str, *, x: float | None = None, y: float | None = None
+    ) -> None:
+        """Pop up (show, raise, focus) a node's widget window, optionally at (x, y).
+
+        ``x``/``y`` are screen coordinates; when given, the window is moved there
+        before it is shown.
+        """
+        widget = self._widget_for_id(node_id)
+        if x is not None and y is not None:
+            widget.move(int(x), int(y))
+        widget.show()
+        widget.raise_()
+        widget.activateWindow()
+
+    def move_node_window(self, node_id: str, x: float, y: float) -> None:
+        """Move a node's widget window to screen coordinates ``(x, y)``."""
+        self._widget_for_id(node_id).move(int(x), int(y))
+
+    def hide_node(self, node_id: str) -> None:
+        """Hide (close) a node's widget window."""
+        self._widget_for_id(node_id).hide()
 
     def _node_for_window(self, window: object | None) -> Any | None:
         """Return the node whose widget owns ``window``, or None."""
