@@ -17,7 +17,7 @@ arrive in later phases.
 from __future__ import annotations
 
 import importlib
-from typing import Any
+from typing import Any, get_args
 
 import dascore as dc
 from AnyQt.QtGui import QCursor
@@ -62,6 +62,20 @@ def _node_id(node: Any) -> str:
     properties = getattr(node, "properties", None) or {}
     node_id = str(properties.get(NODE_ID_KEY, "")).strip()
     return node_id or str(id(node))
+
+
+def _model_field_names(model: object) -> set[str]:
+    """All valid field names for a model, combining discriminated-union members."""
+    fields = getattr(model, "model_fields", None)
+    if fields is not None:
+        return set(fields)
+    names: set[str] = set()
+    for arg in get_args(model):  # Annotated[Union[...], FieldInfo]
+        for member in get_args(arg):  # the union members
+            member_fields = getattr(member, "model_fields", None)
+            if member_fields:
+                names |= set(member_fields)
+    return names
 
 
 def _read_params(widget: object) -> dict[str, Any]:
@@ -266,30 +280,50 @@ class CanvasController:
 
     # -- Write surface (Phase 2): configure existing nodes -------------------
 
+    def _merge(self, model: object, kind: str, current: dict[str, Any], update: Any):
+        """Merge a partial dict update onto current state, or take a full model.
+
+        A dict is a partial update: unknown keys are rejected and the rest are
+        layered onto the current values, so setting one field never silently
+        resets the others to model defaults. A model instance replaces wholesale.
+        """
+        if not isinstance(update, dict):
+            return update
+        unknown = set(update) - _model_field_names(model)
+        if unknown:
+            raise ValueError(f"unknown {kind} field(s): {sorted(unknown)}")
+        return {**current, **update}
+
     def set_params(
         self, node_id: str, params: Any, *, run: bool = True
     ) -> dict[str, Any]:
         """Apply typed parameters to one node; return its prior params.
 
-        ``params`` is a ``params_model`` instance or its dict form and is
-        validated against the widget's model. Re-apply the returned prior dict
-        to undo the change. Must be called on the Qt main thread.
+        ``params`` is a ``params_model`` instance (full replacement) or a dict
+        (a partial update merged onto current values, with unknown keys
+        rejected). It is validated against the widget's model. Re-apply the
+        returned prior dict to undo. Must be called on the Qt main thread.
         """
         widget = self._widget_for_id(node_id)
-        if getattr(type(widget), "params_model", None) is None:
+        model = getattr(type(widget), "params_model", None)
+        if model is None:
             raise ValueError(f"node {node_id!r} has no params model")
-        prior = _json_safe(widget.get_params().model_dump())
-        widget.apply_params(params, run=run)
-        return prior
+        current = widget.get_params().model_dump()
+        widget.apply_params(self._merge(model, "params", current, params), run=run)
+        return _json_safe(current)
 
     def set_view(self, node_id: str, view: Any, *, run: bool = False) -> dict[str, Any]:
-        """Apply presentation state to one node; return its prior view state."""
+        """Apply presentation state to one node; return its prior view state.
+
+        Like :meth:`set_params`, a dict is a partial update merged onto current.
+        """
         widget = self._widget_for_id(node_id)
-        if getattr(type(widget), "view_model", None) is None:
+        model = getattr(type(widget), "view_model", None)
+        if model is None:
             raise ValueError(f"node {node_id!r} has no view model")
-        prior = _json_safe(widget.get_view().model_dump())
-        widget.apply_view(view, run=run)
-        return prior
+        current = widget.get_view().model_dump()
+        widget.apply_view(self._merge(model, "view", current, view), run=run)
+        return _json_safe(current)
 
     def _node_for_window(self, window: object | None) -> Any | None:
         """Return the node whose widget owns ``window``, or None."""

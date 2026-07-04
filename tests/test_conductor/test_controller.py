@@ -369,3 +369,42 @@ class TestWriteSurface:
         node_id = self._first_node_id(window)
         with pytest.raises(ValueError):
             controller.set_view(node_id, {"anything": 1})
+
+    def test_partial_update_preserves_other_fields(self, blank_canvas):
+        """A partial dict merges onto current state, not model defaults."""
+        window, scheme = blank_canvas
+        _add_node(scheme, window, "Detrend", "detrend", (0.0, 0.0))
+        controller = CanvasController(window)
+        node_id = self._first_node_id(window)
+
+        controller.set_params(node_id, {"dim": "time"}, run=False)
+        # Setting only detrend_type must not reset the dim set above.
+        controller.set_params(node_id, {"detrend_type": "constant"}, run=False)
+        params = controller.describe_node(node_id).node.params
+        assert params["dim"] == "time"
+        assert params["detrend_type"] == "constant"
+
+    def test_set_params_rejects_unknown_field(self, blank_canvas):
+        """An unknown field name is rejected (agent typo feedback)."""
+        window, scheme = blank_canvas
+        _add_node(scheme, window, "Detrend", "detrend", (0.0, 0.0))
+        controller = CanvasController(window)
+        node_id = self._first_node_id(window)
+        with pytest.raises(ValueError, match="unknown params"):
+            controller.set_params(node_id, {"not_a_field": 1}, run=False)
+
+    def test_set_params_switches_discriminated_type(self, blank_canvas):
+        """A partial update can switch a discriminated-union (Filter) type."""
+        window, scheme = blank_canvas
+        _add_node(scheme, window, "Filter", "filter", (0.0, 0.0))
+        controller = CanvasController(window)
+        node_id = self._first_node_id(window)
+
+        controller.set_params(
+            node_id,
+            {"kind": "notch_filter", "frequency": "60 Hz", "q": 30.0},
+            run=False,
+        )
+        params = controller.describe_node(node_id).node.params
+        assert params["kind"] == "notch_filter"
+        assert params["frequency"] == "60 Hz"
