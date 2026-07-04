@@ -27,8 +27,8 @@ hand straight to an agent.
 
 | Method | Returns | Purpose |
 |---|---|---|
-| `get_canvas_state()` | `CanvasState` | Whole-graph snapshot: nodes (id, type, title, category, position, current settings, typed ports, `is_source`, `is_active_source`, error) + links (source/sink id + port, enabled) + the active-source id. |
-| `list_widget_types()` | `list[WidgetTypeInfo]` | The placeable widget catalog from the window's registry (name, qualified name, category, description, keywords, typed ports). |
+| `get_canvas_state()` | `CanvasState` | Whole-graph snapshot: nodes (id, type, title, category, position, typed `params` + `view` state, typed ports, `is_source`, `is_active_source`, error) + links (source/sink id + port, enabled) + the active-source id. |
+| `list_widget_types()` | `list[WidgetTypeInfo]` | The placeable widget catalog from the window's registry (name, qualified name, category, description, keywords, typed ports, and JSON `params_schema` / `view_schema` for discovering valid parameters up front). |
 | `describe_node(node_id)` | `NodeDetail` | One node's full state plus a best-effort input-patch summary (`{"shape": [...], "dims": [...]}`). |
 | `compile_check()` | `dict` | Whether the current canvas compiles (`compile_workflow`), as `{ok, error, task_count, edge_count}`. |
 | `get_focused_node()` | `str \| None` | Id of the node whose widget window is focused, or `None` on the canvas. |

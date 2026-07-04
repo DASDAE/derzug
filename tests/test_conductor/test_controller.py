@@ -59,9 +59,18 @@ class TestObservations:
         assert waterfall.qualified_name == "derzug.widgets.waterfall.Waterfall"
         assert any(port.kind == "input" for port in waterfall.inputs)
         assert any(port.kind == "output" for port in waterfall.outputs)
+        # Param/view schemas let an agent discover valid parameters up front.
+        assert waterfall.params_schema and "properties" in waterfall.params_schema
+        assert (
+            waterfall.view_schema and "colormap" in waterfall.view_schema["properties"]
+        )
 
-    def test_nodes_settings_and_ports(self, blank_canvas):
-        """Placed nodes report type, title, settings, and ports."""
+        # Filter's discriminated-union schema comes through the same accessor.
+        filter_type = next(t for t in types if t.name == "Filter")
+        assert "oneOf" in filter_type.params_schema
+
+    def test_nodes_params_view_and_ports(self, blank_canvas):
+        """Placed nodes report type, title, typed params/view, and ports."""
         window, scheme = blank_canvas
         _add_node(scheme, window, "Spool", "source", (0.0, 0.0))
         _add_node(scheme, window, "Waterfall", "view", (300.0, 0.0))
@@ -73,8 +82,9 @@ class TestObservations:
         waterfall = by_title["view"]
         assert waterfall.type == "Waterfall"
         assert waterfall.category == "Visualize"
-        # A known Waterfall Setting is surfaced in the settings dict.
-        assert "colormap" in waterfall.settings
+        # colormap is presentation state (view model); selection is a param.
+        assert waterfall.view is not None and "colormap" in waterfall.view
+        assert "saved_selection_basis" in waterfall.params
         assert any(port.name == "Patch" for port in waterfall.inputs)
 
         assert by_title["source"].is_source is True

@@ -31,7 +31,11 @@ class NodeState(BaseModel):
     title: str
     category: str
     position: tuple[float, float] | None
-    settings: dict[str, Any]
+    # Typed parameters (from the widget's params_model) and presentation state
+    # (from its view_model), as JSON-safe dicts. ``view`` is None for widgets
+    # with no view model.
+    params: dict[str, Any]
+    view: dict[str, Any] | None
     inputs: list[PortInfo]
     outputs: list[PortInfo]
     is_source: bool
@@ -70,6 +74,10 @@ class WidgetTypeInfo(BaseModel):
     keywords: tuple[str, ...]
     inputs: list[PortInfo]
     outputs: list[PortInfo]
+    # JSON schema of the widget's params_model / view_model, so an agent can
+    # discover valid parameters for this type without placing a node.
+    params_schema: dict[str, Any] | None
+    view_schema: dict[str, Any] | None
 
 
 class NodeDetail(BaseModel):

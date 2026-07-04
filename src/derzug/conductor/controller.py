@@ -12,12 +12,12 @@ marshalling and mutation arrive in later phases.
 
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
 import dascore as dc
 from AnyQt.QtGui import QCursor
 from AnyQt.QtWidgets import QApplication
-from orangewidget.settings import Setting
 
 from derzug.conductor.schema import (
     CanvasState,
@@ -32,10 +32,14 @@ from derzug.conductor.schema import (
 from derzug.widgets.composite import NODE_ID_KEY
 from derzug.workflow.compiler import compile_workflow
 
-# Orange base-widget settings that are noise for an agent view.
-_SETTINGS_BLOCKLIST = frozenset(
-    {"savedWidgetGeometry", "controlAreaVisible", "widgetGeometry", "__version__"}
-)
+
+def _widget_class(qualified_name: str) -> type | None:
+    """Load a widget class from its ``module.Class`` qualified name, or None."""
+    try:
+        module_name, class_name = qualified_name.rsplit(".", 1)
+        return getattr(importlib.import_module(module_name), class_name)
+    except Exception:
+        return None
 
 
 def _json_safe(value: Any) -> Any:
@@ -56,30 +60,24 @@ def _node_id(node: Any) -> str:
     return node_id or str(id(node))
 
 
-def _iter_setting_names(widget: object) -> list[str]:
-    """Return the ordered, de-duplicated ``Setting`` names on a widget class."""
-    names: list[str] = []
-    seen: set[str] = set()
-    for klass in type(widget).__mro__:
-        for name, value in vars(klass).items():
-            if isinstance(value, Setting) and name not in seen:
-                seen.add(name)
-                names.append(name)
-    return names
+def _read_params(widget: object) -> dict[str, Any]:
+    """Return the widget's typed parameters as JSON-safe data."""
+    if getattr(type(widget), "params_model", None) is None:
+        return {}
+    try:
+        return _json_safe(widget.get_params().model_dump())
+    except Exception:
+        return {}
 
 
-def _read_settings(widget: object) -> dict[str, Any]:
-    """Return the widget's current DerZug-relevant settings as JSON-safe data."""
-    out: dict[str, Any] = {}
-    for name in _iter_setting_names(widget):
-        if name in _SETTINGS_BLOCKLIST:
-            continue
-        try:
-            value = getattr(widget, name)
-        except Exception:
-            continue
-        out[name] = _json_safe(value)
-    return out
+def _read_view(widget: object) -> dict[str, Any] | None:
+    """Return the widget's typed presentation state as JSON-safe data, or None."""
+    if getattr(type(widget), "view_model", None) is None:
+        return None
+    try:
+        return _json_safe(widget.get_view().model_dump())
+    except Exception:
+        return None
 
 
 def _signal_type_name(signal: object) -> str:
@@ -169,7 +167,8 @@ class CanvasController:
             title=getattr(node, "title", ""),
             category=getattr(description, "category", "") or "",
             position=tuple(position) if position else None,
-            settings=_read_settings(widget),
+            params=_read_params(widget),
+            view=_read_view(widget),
             inputs=_ports(getattr(description, "inputs", ()), "input"),
             outputs=_ports(getattr(description, "outputs", ()), "output"),
             is_source=bool(getattr(widget, "is_source", False)),
@@ -208,22 +207,31 @@ class CanvasController:
             active_source_id=node_ids.get(active),
         )
 
+    @staticmethod
+    def _widget_type_info(description: Any) -> WidgetTypeInfo:
+        """Build one WidgetTypeInfo, with param/view schemas when discoverable."""
+        cls = _widget_class(getattr(description, "qualified_name", "") or "")
+        params_schema = cls.params_schema() if hasattr(cls, "params_schema") else None
+        view_schema = cls.view_schema() if hasattr(cls, "view_schema") else None
+        return WidgetTypeInfo(
+            name=description.name,
+            qualified_name=description.qualified_name,
+            category=getattr(description, "category", "") or "",
+            description=getattr(description, "description", "") or "",
+            keywords=tuple(getattr(description, "keywords", ()) or ()),
+            inputs=_ports(getattr(description, "inputs", ()), "input"),
+            outputs=_ports(getattr(description, "outputs", ()), "output"),
+            params_schema=params_schema,
+            view_schema=view_schema,
+        )
+
     def list_widget_types(self) -> list[WidgetTypeInfo]:
         """Return the placeable widget types from the window's registry."""
         registry = getattr(self._window, "widget_registry", None)
         if registry is None:
             return []
         types = [
-            WidgetTypeInfo(
-                name=description.name,
-                qualified_name=description.qualified_name,
-                category=getattr(description, "category", "") or "",
-                description=getattr(description, "description", "") or "",
-                keywords=tuple(getattr(description, "keywords", ()) or ()),
-                inputs=_ports(getattr(description, "inputs", ()), "input"),
-                outputs=_ports(getattr(description, "outputs", ()), "output"),
-            )
-            for description in registry.widgets()
+            self._widget_type_info(description) for description in registry.widgets()
         ]
         return sorted(
             types, key=lambda widget_type: (widget_type.category, widget_type.name)
