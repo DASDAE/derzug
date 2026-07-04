@@ -1,13 +1,17 @@
 """Read-only controller over a live DerZug canvas (Conductor Phase 1).
 
 ``CanvasController`` wraps a running ``DerZugMainWindow`` and exposes its
-workflow as typed observations: the node/link graph, the placeable widget
-types, per-node detail, and a compile check. It reuses the same primitives the
-rest of the app uses to read the scheme (``scheme.nodes`` / ``scheme.links`` /
-``scheme.widget_for_node``) and to compile it (``compile_workflow``).
+workflow as typed observations (the node/link graph, placeable widget types
+with their param schemas, per-node detail, a compile check) plus a first write
+surface for configuring existing nodes (``set_params`` / ``set_view``). It
+reuses the same primitives the rest of the app uses to read the scheme
+(``scheme.nodes`` / ``scheme.links`` / ``scheme.widget_for_node``), compile it
+(``compile_workflow``), and set widget state (``apply_params`` /
+``apply_view``).
 
-Phase 1 is read-only and expected to be called on the Qt main thread. Off-thread
-marshalling and mutation arrive in later phases.
+All methods are expected to be called on the Qt main thread. Off-thread
+marshalling, graph authoring (add/connect/remove nodes), and the MCP transport
+arrive in later phases.
 """
 
 from __future__ import annotations
@@ -114,20 +118,22 @@ def _widget_error(widget: object) -> str | None:
 
 
 class CanvasController:
-    """Read-only observation surface over one live ``DerZugMainWindow``.
+    """Observation + configure surface over one live ``DerZugMainWindow``.
 
     Wraps a running window and projects its workflow as JSON-serializable
-    observations for an agent:
+    observations for an agent, and lets the agent configure existing nodes:
 
     - :meth:`get_canvas_state` — the whole node/link graph and active source.
-    - :meth:`list_widget_types` — the placeable widget catalog.
+    - :meth:`list_widget_types` — the placeable widget catalog + param schemas.
     - :meth:`describe_node` — one node's detail plus an input-patch summary.
     - :meth:`compile_check` — whether the canvas currently compiles.
     - :meth:`get_focused_node` / :meth:`get_focus` — what the user is looking at
       and pointing to, for shared user/agent context.
+    - :meth:`set_params` / :meth:`set_view` — apply typed, validated state to a
+      node, returning the prior state for undo.
 
-    Phase 1 is read-only and must be called on the Qt main thread. See this
-    package's ``README.md`` for the return shapes and the roadmap.
+    Must be called on the Qt main thread. Graph authoring and off-thread
+    dispatch arrive in later phases; see this package's ``README.md``.
 
     Examples
     --------
@@ -237,18 +243,53 @@ class CanvasController:
             types, key=lambda widget_type: (widget_type.category, widget_type.name)
         )
 
+    def _node_for_id(self, node_id: str) -> Any:
+        """Return the scheme node with ``node_id``, or raise ``KeyError``."""
+        for node in self._scheme().nodes:
+            if _node_id(node) == node_id:
+                return node
+        raise KeyError(f"no node with id {node_id!r}")
+
+    def _widget_for_id(self, node_id: str) -> Any:
+        """Return the widget for ``node_id``, or raise ``KeyError``."""
+        return self._scheme().widget_for_node(self._node_for_id(node_id))
+
     def describe_node(self, node_id: str) -> NodeDetail:
         """Return one node's full state plus a best-effort input-patch summary."""
-        scheme = self._scheme()
-        for node in scheme.nodes:
-            if _node_id(node) == node_id:
-                widget = scheme.widget_for_node(node)
-                state = self._node_state(node, widget, self._active_source_widget())
-                return NodeDetail(
-                    node=state,
-                    input_patch=_patch_summary(getattr(widget, "_patch", None)),
-                )
-        raise KeyError(f"no node with id {node_id!r}")
+        node = self._node_for_id(node_id)
+        widget = self._scheme().widget_for_node(node)
+        state = self._node_state(node, widget, self._active_source_widget())
+        return NodeDetail(
+            node=state,
+            input_patch=_patch_summary(getattr(widget, "_patch", None)),
+        )
+
+    # -- Write surface (Phase 2): configure existing nodes -------------------
+
+    def set_params(
+        self, node_id: str, params: Any, *, run: bool = True
+    ) -> dict[str, Any]:
+        """Apply typed parameters to one node; return its prior params.
+
+        ``params`` is a ``params_model`` instance or its dict form and is
+        validated against the widget's model. Re-apply the returned prior dict
+        to undo the change. Must be called on the Qt main thread.
+        """
+        widget = self._widget_for_id(node_id)
+        if getattr(type(widget), "params_model", None) is None:
+            raise ValueError(f"node {node_id!r} has no params model")
+        prior = _json_safe(widget.get_params().model_dump())
+        widget.apply_params(params, run=run)
+        return prior
+
+    def set_view(self, node_id: str, view: Any, *, run: bool = False) -> dict[str, Any]:
+        """Apply presentation state to one node; return its prior view state."""
+        widget = self._widget_for_id(node_id)
+        if getattr(type(widget), "view_model", None) is None:
+            raise ValueError(f"node {node_id!r} has no view model")
+        prior = _json_safe(widget.get_view().model_dump())
+        widget.apply_view(view, run=run)
+        return prior
 
     def _node_for_window(self, window: object | None) -> Any | None:
         """Return the node whose widget owns ``window``, or None."""

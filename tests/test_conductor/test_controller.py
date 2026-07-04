@@ -11,6 +11,7 @@ from derzug.conductor import CanvasController, CanvasState, FocusState, NodeDeta
 from derzug.conductor import controller as controller_module
 from derzug.conductor.controller import _json_safe
 from derzug.widgets.composite import NODE_ID_KEY
+from pydantic import ValidationError
 
 
 def _description(window, name):
@@ -313,3 +314,58 @@ class TestCompileCheckAndHelpers:
         coerced = _json_safe({"obj": object()})
         assert isinstance(coerced["obj"], str)
         json.dumps(coerced)  # must not raise
+
+
+class TestWriteSurface:
+    """The controller configures existing nodes through the typed interface."""
+
+    def _first_node_id(self, window):
+        return CanvasController(window).get_canvas_state().nodes[0].id
+
+    def test_set_params_applies_and_returns_prior(self, blank_canvas):
+        """set_params validates + applies params and returns the prior (for undo)."""
+        window, scheme = blank_canvas
+        _add_node(scheme, window, "Detrend", "detrend", (0.0, 0.0))
+        controller = CanvasController(window)
+        node_id = self._first_node_id(window)
+
+        prior = controller.set_params(
+            node_id, {"dim": "time", "detrend_type": "constant"}, run=False
+        )
+        params = controller.describe_node(node_id).node.params
+        assert params["detrend_type"] == "constant"
+
+        # Re-applying the returned prior undoes the change.
+        controller.set_params(node_id, prior, run=False)
+        assert (
+            controller.describe_node(node_id).node.params["detrend_type"]
+            == prior["detrend_type"]
+        )
+
+    def test_set_params_rejects_invalid(self, blank_canvas):
+        """An out-of-schema value is rejected by model validation."""
+        window, scheme = blank_canvas
+        _add_node(scheme, window, "Detrend", "detrend", (0.0, 0.0))
+        controller = CanvasController(window)
+        node_id = self._first_node_id(window)
+        with pytest.raises(ValidationError):
+            controller.set_params(node_id, {"detrend_type": "not_a_type"}, run=False)
+
+    def test_set_view_applies_presentation_state(self, blank_canvas):
+        """set_view updates a visual widget's view model."""
+        window, scheme = blank_canvas
+        _add_node(scheme, window, "Waterfall", "wf", (0.0, 0.0))
+        controller = CanvasController(window)
+        node_id = self._first_node_id(window)
+
+        controller.set_view(node_id, {"colormap": "viridis"})
+        assert controller.describe_node(node_id).node.view["colormap"] == "viridis"
+
+    def test_set_view_without_view_model_raises(self, blank_canvas):
+        """A widget with no view model rejects set_view."""
+        window, scheme = blank_canvas
+        _add_node(scheme, window, "Detrend", "detrend", (0.0, 0.0))
+        controller = CanvasController(window)
+        node_id = self._first_node_id(window)
+        with pytest.raises(ValueError):
+            controller.set_view(node_id, {"anything": 1})

@@ -34,6 +34,16 @@ hand straight to an agent.
 | `get_focused_node()` | `str \| None` | Id of the node whose widget window is focused, or `None` on the canvas. |
 | `get_focus()` | `FocusState` | Shared user/agent context: focused node + window title, and the pointer (`screen_xy`, `over_node_id`, `data_position`). |
 
+## Write API (configure existing nodes)
+
+| Method | Returns | Purpose |
+|---|---|---|
+| `set_params(node_id, params, run=True)` | `dict` | Apply typed parameters (a `params_model` or its dict) to one node, validated against the model. Returns the prior params so the change can be undone by re-applying them. |
+| `set_view(node_id, view, run=False)` | `dict` | Same, for a visual widget's `view_model` (colormap, view range, ...). Returns the prior view state. |
+
+Graph authoring (`add_node` / `remove_node` / `connect` / `run`) and undo-stack
+integration land next; see the roadmap below.
+
 Node ids prefer the persisted DerZug node id (`__derzug_node_id`) when present
 and otherwise fall back to a session-stable object id.
 
