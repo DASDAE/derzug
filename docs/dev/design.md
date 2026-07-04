@@ -3,11 +3,25 @@
 
 ## Widget Architecture
 
-Widgets are the primary unit of work. Each widget is a self-contained `OWWidget` subclass that owns its data, UI, and signal wiring. There is no enforced separation between model, view, and control layers — that separation adds abstraction overhead that isn't justified at this project's scale.
+Widgets are the primary unit of work. Each widget is a self-contained
+`OWWidget` (`ZugWidget`) subclass that owns its data, UI, and signal wiring.
+There is no heavyweight model/view/controller split, but each widget does
+declare its state as typed pydantic models: a `params_model` (parameters that
+affect the workflow output, compiled into the portable `Pipe` via `get_task()`)
+and, for visual widgets, a `view_model` (presentation-only state such as
+colormap or view range). These models are the authoritative, serialized state —
+each widget persists a single `_state` blob rather than many flat Orange
+`Setting`s. See
+[plans/widget_state_schema_migration.md](plans/widget_state_schema_migration.md).
 
 In practice this means:
 
-- A widget directly holds its state as instance attributes.
+- A widget holds live working state as instance attributes, restored from and
+  serialized to its typed models before/after `__init__`.
+- Parameters are read and written through `get_params()` / `apply_params()`
+  (and `get_view()` / `apply_view()`) — the single typed entry points used by
+  code, tests, and the Conductor. `apply_settings(mapping)` is the lower-level
+  primitive they build on.
 - Input handlers receive data, update state, and trigger a re-render.
 - Output signals are sent directly from wherever the selection changes.
 - Error/warning reporting uses Orange's built-in `Error` and `Warning` message classes.
@@ -39,15 +53,20 @@ To keep node interoperability predictable:
   in [annotations.md](annotations.md)
   rather than introducing widget-specific overlay schemas.
 
-## Auto-Generation (Future)
+## Auto-Generation
 
-Auto-generating widgets from typed DASCore function signatures is a potential future optimization, not a current requirement. Pursue it only once several hand-written processing widgets exist and a clear, repetitive pattern emerges.
+The declarative `PatchMethodWidget` family already maps a small `_OPTIONS` spec
+to both its Qt controls and an auto-derived `params_model`, using these
+conventions:
 
-If pursued, parameter-to-UI mapping should follow these conventions:
   - `bool` -> checkbox
   - `int`/`float` -> numeric spin box
   - `str` -> text field
   - `Literal`/enum -> dropdown
+
+Fully auto-generating widgets from typed DASCore function signatures builds on
+this but remains a future optimization, not a current requirement — pursue it
+only once the repetitive pattern clearly justifies it.
 
 ## Reproducibility
 

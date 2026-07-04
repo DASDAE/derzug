@@ -1889,6 +1889,9 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
 
     def _persist_annotation_settings(self) -> None:
         """Mirror the current Waterfall annotation set into workflow settings."""
+        if self._patch is None:
+            # Keep restored/pre-set annotations until a patch arrives.
+            return
         annotation_set = self._annotation_set
         self.saved_annotation_set = (
             None if annotation_set is None else annotation_set.model_dump(mode="json")
@@ -1896,6 +1899,9 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
 
     def _persist_view_range_settings(self) -> None:
         """Mirror the current Waterfall plot extents into workflow settings."""
+        if self._patch is None:
+            # Keep the restored/pre-set view range until a patch arrives.
+            return
         view_range = self._get_view_range()
         self.saved_view_range = (
             None if view_range is None else [list(view_range[0]), list(view_range[1])]
