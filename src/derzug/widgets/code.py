@@ -27,9 +27,9 @@ from Orange.widgets.data.utils.pythoneditor.editor import PythonEditor
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
-from derzug.settings import Setting
 from derzug.utils.code2widget import INPUTS_NOT_READY, task_from_callable
 from derzug.workflow import Task
 
@@ -106,18 +106,24 @@ def _create_editor(parent: QWidget) -> QPlainTextEdit:
         return _FallbackPythonEditor(parent)
 
 
+class CodeParams(BaseModel):
+    """Parameters for the Code widget."""
+
+    script_text: str = DEFAULT_SCRIPT
+
+
 class Code(ZugWidget):
     """Run custom Python code against an input patch."""
 
     name = "Code"
+    params_model = CodeParams
+    authoritative_state = True
     description = "Run custom Python code on a patch"
     icon = "icons/PythonScript.svg"
     category = "Processing"
     keywords = ("code", "python", "script", "custom")
     priority = 21.7
     want_main_area = True
-
-    script_text = Setting(DEFAULT_SCRIPT)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -228,6 +234,10 @@ class Code(ZugWidget):
             self._status_label.setText("Auto-run enabled")
         else:
             self._status_label.setText("Run failed")
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {"script_text": self._editor}
 
     def _on_editor_text_changed(self) -> None:
         """Persist editor text and disable sticky auto-run after user edits."""

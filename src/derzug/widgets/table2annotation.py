@@ -17,7 +17,7 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.models.annotations import (
@@ -26,7 +26,6 @@ from derzug.models.annotations import (
     PointGeometry,
     SpanGeometry,
 )
-from derzug.settings import Setting
 from derzug.utils.annotation_metadata import LABEL_SLOTS, optional_text
 from derzug.workflow import Task
 
@@ -164,10 +163,27 @@ class TableToAnnotationTask(Task):
         return AnnotationSet(dims=dims, annotations=tuple(annotations))
 
 
+class Table2AnnotationParams(BaseModel):
+    """Parameters for the Table to Annotations widget."""
+
+    geometry_type: int = 0
+    line_axis_dim: str = ""
+    dims_text: str = ""
+    col_map: dict = Field(default_factory=dict)
+    semantic_type_text: str = "generic"
+    notes_col: str = ""
+    label_mode: int = 0
+    fixed_label: str = ""
+    label_col: str = ""
+    tags_col: str = ""
+
+
 class Table2Annotation(ZugWidget):
     """Orange widget that converts each DataFrame row into an Annotation."""
 
     name = "Table to Annotations"
+    params_model = Table2AnnotationParams
+    authoritative_state = True
     description = (
         "Convert rows of a DataFrame into an AnnotationSet. "
         "Each row becomes one annotation (dot or line)."
@@ -179,16 +195,6 @@ class Table2Annotation(ZugWidget):
     want_main_area = False
 
     # --- settings ---
-    geometry_type: int = Setting(_GEOM_DOT)  # 0=dot, 1=line
-    line_axis_dim: str = Setting("")  # which dim the line is pinned to
-    dims_text: str = Setting("")  # comma-separated dims
-    col_map: dict = Setting({})  # {dim_name: col_name}
-    semantic_type_text: str = Setting("generic")
-    notes_col: str = Setting(_NO_COLUMN)
-    label_mode: int = Setting(_LABEL_MODE_FIXED)  # 0=fixed, 1=column
-    fixed_label: str = Setting("")
-    label_col: str = Setting(_NO_COLUMN)
-    tags_col: str = Setting(_NO_COLUMN)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -364,6 +370,16 @@ class Table2Annotation(ZugWidget):
             input_values={"data": df},
             output_names=("annotation_set",),
         )
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "line_axis_dim": self._line_axis_combo,
+            "notes_col": self._notes_col_combo,
+            "fixed_label": self._fixed_label_combo,
+            "label_col": self._label_col_combo,
+            "tags_col": self._tags_col_combo,
+        }
 
     def get_task(self) -> Task:
         """Return the configured table-to-annotation task."""

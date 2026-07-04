@@ -42,18 +42,26 @@ def _patch_with_datetime_time() -> dc.Patch:
 
 
 def _stored_set_coords_settings() -> dict[str, object]:
-    """Return stored settings matching the checked-in basic DSS workflow."""
+    """Return stored settings matching the checked-in basic DSS workflow.
+
+    Coords stores its params in the authoritative ``_state`` blob, so the params
+    live under ``_state["params"]`` rather than as flat top-level settings.
+    """
     return {
-        "operation": "set_coords",
-        "set_coords_applied_dim": "distance",
-        "set_coords_applied_start": "0",
-        "set_coords_applied_step": "",
-        "set_coords_applied_stop": "",
-        "set_coords_dim": "distance",
-        "set_coords_start": "0",
-        "set_coords_step": "",
-        "set_coords_stop": "",
-        "transpose_order": ["distance", "time"],
+        "_state": {
+            "params": {
+                "operation": "set_coords",
+                "set_coords_applied_dim": "distance",
+                "set_coords_applied_start": "0",
+                "set_coords_applied_step": "",
+                "set_coords_applied_stop": "",
+                "set_coords_dim": "distance",
+                "set_coords_start": "0",
+                "set_coords_step": "",
+                "set_coords_stop": "",
+                "transpose_order": ["distance", "time"],
+            }
+        }
     }
 
 

@@ -34,11 +34,11 @@ from dascore.viz.waterfall import _get_scale as get_dascore_waterfall_scale
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.models.selection import SelectParams
-from derzug.settings import Setting
 from derzug.utils.display import format_nd_coord_value
 from derzug.utils.plot_axes import (
     CursorField,
@@ -308,6 +308,31 @@ class _WaterfallViewBox(pg.ViewBox):
                     self.state["mouseMode"] = restore_mode
 
 
+class WaterfallParams(BaseModel):
+    """Output-affecting parameters for Waterfall: selection and annotations.
+
+    Presentation state (colormap, colour limits, view range, plot dims) is the
+    view model, not params — Waterfall emits selection and annotations as
+    downstream outputs, but its colouring never leaves the widget.
+    """
+
+    saved_selection_basis: str = ""
+    saved_selection_ranges: list = Field(default_factory=list)
+    saved_selection_has_roi: bool | None = None
+    saved_annotation_set: Any = None
+
+
+class WaterfallView(BaseModel):
+    """Presentation-only state for Waterfall (never leaves the widget)."""
+
+    colormap: str = "CET-D1"
+    color_limits: Any = None
+    reset_on_new: bool = True
+    saved_view_range: Any = None
+    saved_plot_y_dim: str = ""
+    saved_plot_x_dim: str = ""
+
+
 class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     """
     Display a 2D DAS patch as an interactive pyqtgraph waterfall image.
@@ -318,6 +343,9 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     """
 
     name = "Waterfall"
+    params_model = WaterfallParams
+    view_model = WaterfallView
+    authoritative_state = True
     description = "Interactive pyqtgraph waterfall view for DAS patches"
     icon = "icons/Waterfall.svg"
     category = "Visualize"
@@ -335,18 +363,6 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         "plasma",
         "turbo",
     )
-    colormap = Setting(_COLORMAPS[0])
-    color_limits = Setting(None)
-    reset_on_new = Setting(True)
-    # Keep selection state inside saved workflows only; do not promote it to
-    # future widget defaults.
-    saved_selection_basis = Setting("", schema_only=True)
-    saved_selection_ranges = Setting([], schema_only=True)
-    saved_selection_has_roi = Setting(None, schema_only=True)
-    saved_annotation_set = Setting(None, schema_only=True)
-    saved_view_range = Setting(None, schema_only=True)
-    saved_plot_y_dim = Setting("", schema_only=True)
-    saved_plot_x_dim = Setting("", schema_only=True)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -1873,6 +1889,9 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
 
     def _persist_annotation_settings(self) -> None:
         """Mirror the current Waterfall annotation set into workflow settings."""
+        if self._patch is None:
+            # Keep restored/pre-set annotations until a patch arrives.
+            return
         annotation_set = self._annotation_set
         self.saved_annotation_set = (
             None if annotation_set is None else annotation_set.model_dump(mode="json")
@@ -1880,6 +1899,9 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
 
     def _persist_view_range_settings(self) -> None:
         """Mirror the current Waterfall plot extents into workflow settings."""
+        if self._patch is None:
+            # Keep the restored/pre-set view range until a patch arrives.
+            return
         view_range = self._get_view_range()
         self.saved_view_range = (
             None if view_range is None else [list(view_range[0]), list(view_range[1])]
@@ -2067,6 +2089,11 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         """Mirror the current shared selection state into schema-backed settings."""
         payload = self._selection_state.patch_settings_payload(include_inactive=True)
         if payload is None:
+            # With no patch to derive a selection from, keep any restored or
+            # pre-set selection state rather than wiping it (it should survive a
+            # save/reload before the input patch arrives).
+            if self._patch is None:
+                return
             self.saved_selection_basis = ""
             self.saved_selection_ranges = []
             self.saved_selection_has_roi = False

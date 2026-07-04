@@ -2,36 +2,42 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QSpinBox, QStackedWidget, QVBoxLayout, QWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
+
+
+class CalculusParams(BaseModel):
+    """Parameters for the Calculus widget."""
+
+    transform: Literal["differentiate", "integrate"] = "differentiate"
+    selected_dim: str = ""
+    order: int = 2
+    step: int = 1
+    definite: bool = False
 
 
 class Calculus(PatchDimWidget):
     """Apply differentiation and integration transforms to an input patch."""
 
     name = "Calculus"
+    params_model = CalculusParams
+    authoritative_state = True
     description = "Apply differentiation and integration transforms to a patch"
     icon = "icons/Calculus.svg"
     category = "Transform"
     keywords = ("transform", "differentiate", "integrate", "derivative", "integral")
     priority = 21.3
     want_main_area = False
-
-    transform = Setting("differentiate")
-    selected_dim = Setting("")
-    order = Setting(2)
-    step = Setting(1)
-    definite = Setting(False)
 
     _TRANSFORMS: ClassVar[tuple[str, ...]] = ("differentiate", "integrate")
 
@@ -154,6 +160,19 @@ class Calculus(PatchDimWidget):
         self._transform_combo.blockSignals(False)
         self._stack.setCurrentIndex(0)
         return self.transform
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "transform": self._transform_combo,
+            "selected_dim": self._dim_combo,
+            "order": self._order_spin,
+            "step": self._step_spin,
+        }
+
+    def _linked_stacks(self) -> dict[object, object]:
+        """The transform combo selects the parameter page."""
+        return {self._transform_combo: self._stack}
 
     def get_task(self) -> Task:
         """Return the current calculus operation as a workflow task."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtCore import Qt
@@ -19,9 +19,9 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel, Field
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
@@ -34,22 +34,28 @@ _REAL_OPTIONS: tuple[tuple[str, str | bool | None], ...] = (
 _REAL_OPTION_MAP = dict(_REAL_OPTIONS)
 
 
+class FourierParams(BaseModel):
+    """Parameters for the Fourier widget."""
+
+    transform: Literal["dft", "idft"] = "dft"
+    selected_dim: str = ""
+    selected_dims: list[str] = Field(default_factory=list)
+    real_mode: Literal["Auto", "Real", "Complex"] = "Auto"
+    pad: bool = True
+
+
 class Fourier(PatchDimWidget):
     """Apply DASCore Fourier transforms to an input patch."""
 
     name = "Fourier"
+    params_model = FourierParams
+    authoritative_state = True
     description = "Apply DASCore Fourier transforms to a patch"
     icon = "icons/Fourier.svg"
     category = "Transform"
     keywords = ("transform", "fourier", "fft", "dft", "idft")
     priority = 21.1
     want_main_area = False
-
-    transform = Setting("dft")
-    selected_dim = Setting("")
-    selected_dims = Setting([])
-    real_mode = Setting("Auto")
-    pad = Setting(True)
 
     _TRANSFORMS: ClassVar[tuple[str, ...]] = _TRANSFORMS
 
@@ -239,6 +245,19 @@ class Fourier(PatchDimWidget):
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the transform-specific banner."""
         self._show_exception("transform_failed", exc)
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "transform": self._transform_combo,
+            "selected_dim": self._dim_combo,
+            "real_mode": self._real_combo,
+            "pad": self._pad_checkbox,
+        }
+
+    def _linked_stacks(self) -> dict[object, object]:
+        """The transform combo selects the parameter page."""
+        return {self._transform_combo: self._stack}
 
     def get_task(self) -> Task:
         """Return the current Fourier operation as a workflow task."""

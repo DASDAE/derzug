@@ -2,25 +2,38 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchRollingTask
+
+
+class RollingParams(BaseModel):
+    """Parameters for the Rolling widget."""
+
+    selected_dim: str = ""
+    rolling_window: str = "0.01"
+    step: str = ""
+    center: bool = False
+    dropna: bool = False
+    aggregation: Literal["mean", "median", "sum", "min", "max", "std"] = "mean"
 
 
 class Rolling(PatchDimWidget):
     """Apply DASCore rolling aggregations to an input patch."""
 
     name = "Rolling"
+    params_model = RollingParams
+    authoritative_state = True
     description = "Apply DASCore rolling aggregation to a patch"
     icon = "icons/Rolling.svg"
     category = "Processing"
@@ -29,13 +42,6 @@ class Rolling(PatchDimWidget):
 
     # This is a non-graphical widget; we dont need main area.
     want_main_area = False
-
-    selected_dim = Setting("")
-    rolling_window = Setting("0.01")
-    step = Setting("")
-    center = Setting(False)
-    dropna = Setting(False)
-    aggregation = Setting("mean")
 
     _AGGREGATIONS: ClassVar[tuple[str, ...]] = (
         "mean",
@@ -176,6 +182,13 @@ class Rolling(PatchDimWidget):
             dropna=bool(self.dropna),
             aggregation=aggregation,
         )
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "selected_dim": self._dim_combo,
+            "aggregation": self._agg_combo,
+        }
 
     def get_task(self) -> Task:
         """Return the current rolling aggregation as a workflow task."""

@@ -25,6 +25,7 @@ from AnyQt.QtWidgets import (
 )
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.utils.display import format_display
@@ -48,10 +49,20 @@ class _NodeDescriptor:
     summary: str = ""
 
 
+class PatchViewerParams(BaseModel):
+    """Parameters for the PatchViewer widget.
+
+    PatchViewer is a pure viewer with no persisted state; it passes the patch
+    through unchanged and has no output-affecting parameters.
+    """
+
+
 class PatchViewer(ZugWidget):
     """Inspect patch structure and preview selected arrays."""
 
     name = "PatchViewer"
+    params_model = PatchViewerParams
+    authoritative_state = True
     description = "Inspect a DAS patch and preview its arrays"
     want_control_area = False
     icon = "icons/PatchViewer.svg"

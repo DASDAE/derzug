@@ -62,6 +62,16 @@ now than later. The long-term direction should be a model-driven widget design
 where `ZugModel` becomes the canonical state object and `ZugWidget` becomes
 the Qt/Orange shell around it.
 
+**Status — partially delivered.** Every widget now declares typed pydantic
+`params_model` / `view_model` state that is the authoritative, serialized source
+of truth (one `_state` blob per widget; the flat per-parameter Orange `Setting`s
+are gone), read and written through `get_params`/`apply_params` and
+`get_view`/`apply_view`. This covers the "canonical state object" half of the
+goal. Still outstanding: background execution and rendering still run from
+widget instance attributes / `get_task()` snapshots rather than directly from
+the model, so the request-snapshot background API remains transitional. See
+[plans/widget_state_schema_migration.md](plans/widget_state_schema_migration.md).
+
 ### Target architecture
 
 - `ZugModel` is the primary source of truth for widget inputs, parameters,

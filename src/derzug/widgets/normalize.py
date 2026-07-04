@@ -2,34 +2,40 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QLabel, QStackedWidget, QVBoxLayout, QWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
+
+
+class NormalizeParams(BaseModel):
+    """Parameters for the Normalize widget."""
+
+    operation: Literal["normalize", "standardize"] = "normalize"
+    selected_dim: str = ""
+    norm: Literal["l1", "l2", "max", "bit"] = "l2"
 
 
 class Normalize(PatchDimWidget):
     """Apply DASCore normalize and standardize operations to a patch."""
 
     name = "Normalize"
+    params_model = NormalizeParams
+    authoritative_state = True
     description = "Apply DASCore normalize or standardize to a patch"
     icon = "icons/Normalize.svg"
     category = "Processing"
     keywords = ("normalize", "standardize", "scale", "amplitude")
     priority = 21.5
     want_main_area = False
-
-    operation = Setting("normalize")
-    selected_dim = Setting("")
-    norm = Setting("l2")
 
     _OPERATIONS: ClassVar[tuple[str, ...]] = ("normalize", "standardize")
     _NORMS: ClassVar[tuple[str, ...]] = ("l1", "l2", "max", "bit")
@@ -146,6 +152,18 @@ class Normalize(PatchDimWidget):
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the normalize-specific banner."""
         self._show_exception("operation_failed", exc)
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "operation": self._operation_combo,
+            "selected_dim": self._dim_combo,
+            "norm": self._norm_combo,
+        }
+
+    def _linked_stacks(self) -> dict[object, object]:
+        """The operation combo selects the parameter page."""
+        return {self._operation_combo: self._stack}
 
     def get_task(self) -> Task:
         """Return the current normalize/standardize operation as a workflow task."""

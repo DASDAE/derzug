@@ -25,3 +25,10 @@ affected widgets will not load and must be rebuilt.
   call `patch.normalize`, and `Normalize` additionally offers standardize).
   Workflows referencing `derzug.widgets.norm.Norm` will not load; rebuild them
   with `Normalize`.
+- Widget parameters are now stored as a single serialized pydantic model
+  (`_state` blob) instead of many flat per-parameter `Setting`s. Every widget
+  exposes typed `params` (and, for visual widgets, `view`) models via
+  `get_params`/`apply_params` (and `get_view`/`apply_view`). `.ows` workflows
+  saved by an earlier version store parameters in the old flat layout and will
+  load with default parameters; re-save them to migrate. This is a
+  compatibility break and warrants a minor version bump (0.0.x → 0.1.0).

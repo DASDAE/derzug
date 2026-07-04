@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtCore import Qt
@@ -28,9 +28,9 @@ from dascore.core.coords import get_coord
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.settings import Setting
 from derzug.utils.parsing import parse_coord_text_value
 from derzug.workflow import Task
 
@@ -238,10 +238,46 @@ class CoordsTask(Task):
         raise ValueError(f"Unknown coords operation '{operation}'")
 
 
+class CoordsParams(BaseModel):
+    """Parameters for the Coords widget (all affect the output patch)."""
+
+    operation: Literal[
+        "rename_coords",
+        "drop_coords",
+        "sort_coords",
+        "snap_coords",
+        "set_coords",
+        "set_dims",
+        "flip",
+        "transpose",
+    ] = "rename_coords"
+    rename_rows: list = Field(default_factory=lambda: [["", ""]])
+    set_dims_rows: list = Field(default_factory=lambda: [["", ""]])
+    set_coords_dim: str = ""
+    set_coords_start: str = ""
+    set_coords_stop: str = ""
+    set_coords_step: str = ""
+    set_coords_applied_dim: str = ""
+    set_coords_applied_start: str = ""
+    set_coords_applied_stop: str = ""
+    set_coords_applied_step: str = ""
+    drop_coords_selected: list = Field(default_factory=list)
+    sort_coords_selected: list = Field(default_factory=list)
+    sort_reverse: bool = False
+    snap_coords_selected: list = Field(default_factory=list)
+    snap_reverse: bool = False
+    flip_dims_selected: list = Field(default_factory=list)
+    flip_data: bool = True
+    flip_coords: bool = True
+    transpose_order: list = Field(default_factory=list)
+
+
 class Coords(ZugWidget):
     """Apply coordinate-structure operations to an input patch."""
 
     name = "Coords"
+    params_model = CoordsParams
+    authoritative_state = True
     description = "Apply coordinate operations to a patch"
     icon = "icons/Coords.svg"
     category = "Processing"
@@ -256,27 +292,6 @@ class Coords(ZugWidget):
         "set_coords",
     )
     priority = 24.5
-
-    operation = Setting("rename_coords")
-    rename_rows = Setting([["", ""]])
-    set_dims_rows = Setting([["", ""]])
-    set_coords_dim = Setting("")
-    set_coords_start = Setting("")
-    set_coords_stop = Setting("")
-    set_coords_step = Setting("")
-    set_coords_applied_dim = Setting("")
-    set_coords_applied_start = Setting("")
-    set_coords_applied_stop = Setting("")
-    set_coords_applied_step = Setting("")
-    drop_coords_selected = Setting([])
-    sort_coords_selected = Setting([])
-    sort_reverse = Setting(False)
-    snap_coords_selected = Setting([])
-    snap_reverse = Setting(False)
-    flip_dims_selected = Setting([])
-    flip_data = Setting(True)
-    flip_coords = Setting(True)
-    transpose_order = Setting([])
 
     _OPERATIONS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("rename_coords", "Rename"),

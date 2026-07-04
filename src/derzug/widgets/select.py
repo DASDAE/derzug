@@ -10,11 +10,11 @@ from AnyQt.QtCore import QTimer
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
 from derzug.models.selection import SelectParams
-from derzug.settings import Setting
 from derzug.utils.spool import (
     extract_single_patch,
     filter_contents_by_annotations,
@@ -88,21 +88,28 @@ class SelectTask(Task):
         return {"patch": None, "spool": None}
 
 
+class SelectWidgetParams(BaseModel):
+    """Parameters for the Select widget (named to avoid the models.SelectParams)."""
+
+    unpack_single_patch: bool = True
+    saved_patch_selection: dict = Field(default_factory=dict)
+    saved_selection_basis: str = ""
+    saved_selection_ranges: list = Field(default_factory=list)
+    saved_spool_filters: list = Field(default_factory=list)
+
+
 class Select(SelectionControlsMixin, ZugWidget):
     """Select subsets of patches or spools using shared left-side controls."""
 
     name = "Select"
+    params_model = SelectWidgetParams
+    authoritative_state = True
     want_main_area = False
     description = "Select subsets of patches or spools"
     icon = "icons/SelectRows.svg"
     category = "Processing"
     keywords = ("select", "patch", "spool", "subset", "filter")
     priority = 23
-    unpack_single_patch = Setting(True)
-    saved_patch_selection = Setting({}, schema_only=True)
-    saved_selection_basis = Setting("", schema_only=True)
-    saved_selection_ranges = Setting([], schema_only=True)
-    saved_spool_filters = Setting([], schema_only=True)
 
     def __setattr__(self, name, value) -> None:
         """Track restored settings so late patch selection restore stays atomic."""

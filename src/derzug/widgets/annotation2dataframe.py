@@ -11,10 +11,10 @@ import pandas as pd
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.models.annotations import AnnotationSet, PointGeometry
-from derzug.settings import Setting
 from derzug.utils.annotation_metadata import annotation_metadata_row
 from derzug.workflow import Task
 
@@ -53,17 +53,23 @@ class AnnotationSetToDataFrameTask(Task):
         return pd.DataFrame(rows)
 
 
+class Annotation2DataFrameParams(BaseModel):
+    """Parameters for the Annotations to DataFrame widget."""
+
+    include_properties: bool = False
+
+
 class Annotation2DataFrame(ZugWidget):
     """Orange widget that extracts point annotations into a DataFrame."""
 
     name = "Annotations to DataFrame"
+    params_model = Annotation2DataFrameParams
+    authoritative_state = True
     description = "Extract point annotations from an AnnotationSet into a DataFrame."
     icon = "icons/Annotation2DataFrame.svg"
     category = "Table"
     keywords = ("annotation", "table", "dataframe", "convert", "point")
     priority = 26
-
-    include_properties: bool = Setting(False)
 
     class Warning(ZugWidget.Warning):
         """Warnings shown by this widget."""

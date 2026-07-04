@@ -7,7 +7,6 @@ from typing import ClassVar
 from Orange.widgets.widget import Msg
 
 from derzug.core.patchmethodwidget import ComboOption, PatchMethodWidget, SpinOption
-from derzug.settings import Setting
 
 
 class Taper(PatchMethodWidget):
@@ -21,8 +20,7 @@ class Taper(PatchMethodWidget):
     priority = 21.4
     want_main_area = False
 
-    p = Setting(0.05)
-    window_type = Setting("hann")
+    authoritative_state = True
 
     method_name = "taper"
     call_style = "keyword_dim"
@@ -37,6 +35,7 @@ class Taper(PatchMethodWidget):
             role="dim_value",
             label="Taper fraction (p):",
             spin_attr="_p_spin",
+            default=0.05,
         ),
         ComboOption(
             "window_type",

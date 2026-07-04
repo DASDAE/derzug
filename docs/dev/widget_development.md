@@ -24,6 +24,36 @@ Widgets can be internal DerZug widgets or written in their own stand-along progr
 - Widgets should have an icon in the form of a small svg. Be sure to include the icon in the source, and specify its path.
 - When code programmatically pushes scalar values into text boxes, format them with `derzug.utils.display.format_display()` rather than `str(...)`. The shared float precision is controlled by `derzug.constants.DISPLAY_SIGFIGS`. Do not use this to rewrite in-progress user input.
 
+## Widget state (params & view models)
+
+A widget's persisted state is a typed pydantic model, not a pile of flat Orange
+`Setting`s. When adding a widget:
+
+- Declare a `params_model` (a `pydantic.BaseModel`) with the parameters that
+  affect the widget's output — the ones that feed `get_task()`. For visual
+  widgets, also declare a `view_model` for presentation-only state (colormap,
+  view range, plot dims). Prefer `Literal[...]` fields for fixed-choice options.
+- Set `authoritative_state = True`. The models then become the single source of
+  truth: they persist as one serialized `_state` blob, and the base restores the
+  widget's attributes from it (or the model defaults) before controls are built.
+  Do **not** declare a flat `Setting` per parameter. (An app-level convenience
+  that is genuinely not a workflow parameter — e.g. `Spool.recent_directories`,
+  a global MRU — may stay a flat `Setting`.)
+- Model field names should match the widget attribute names the controls and
+  `get_task()` already use; the base then wires them up automatically. Override
+  `_params_field_map()` / `_view_field_map()` only to rename (e.g. `dim` ->
+  `selected_dim`), and override `get_params`/`apply_params` only for a
+  discriminated-union model (see `Filter`).
+- Read and write state through `get_params()` / `apply_params()` (and
+  `get_view()` / `apply_view()`); never assign model-backed attributes or drive
+  Qt controls directly from code.
+- Declarative `PatchMethodWidget` widgets auto-derive their `params_model` from
+  the `_OPTIONS` spec — you only add the option, not a model.
+- Every widget must have a params model; `tests/test_core/test_params_model_coverage.py`
+  enforces it. See
+  [plans/widget_state_schema_migration.md](plans/widget_state_schema_migration.md)
+  for the full design.
+
 ## Example workflows
 
 - Help menu example workflows live in [src/derzug/workflows](/home/derrick/Gits/derzug/src/derzug/workflows).

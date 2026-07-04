@@ -18,12 +18,13 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import TypeAdapter
 
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.core.zugwidget import WidgetExecutionRequest
-from derzug.settings import Setting
 from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.parsing import parse_patch_text_value
+from derzug.widgets.filter_params import _FILTER_MODELS, FilterParams
 from derzug.workflow import Task
 
 _FILTER_NAMES: tuple[str, ...] = (
@@ -224,55 +225,15 @@ class Filter(PatchDimWidget):
 
     name = "Filter"
     description = "Apply a DASCore filter function to a patch"
+    params_model = FilterParams
+    authoritative_state = True
     icon = "icons/Filter.svg"
     category = "Processing"
     keywords = ("filter", "bandpass", "gaussian", "notch", "median", "sobel")
     priority = 22
 
-    selected_filter: str = Setting("pass_filter")
-    selected_dim: str = Setting("")
-
     # This is a non-graphical widget; we dont need main area.
     want_main_area = False
-
-    # pass_filter
-    low_bound: str = Setting("")
-    high_bound: str = Setting("")
-    corners: int = Setting(4)
-    zerophase: bool = Setting(True)
-
-    # window-based filters
-    filter_window: str = Setting("0.01")
-    apply_taper: bool = Setting(True)
-    taper_window: str = Setting("0.01")
-
-    # gaussian / median / savgol / sobel
-    samples: bool = Setting(False)
-    mode: str = Setting("reflect")
-    cval: float = Setting(0.0)
-    truncate: float = Setting(4.0)
-    gaussian_dim_windows = Setting([{"dim": "", "window": ""}])
-
-    # hampel
-    threshold: float = Setting(10.0)
-    approximate: bool = Setting(True)
-
-    # notch
-    q: float = Setting(35.0)
-
-    # savgol
-    polyorder: int = Setting(3)
-
-    # wiener
-    noise: str = Setting("")
-
-    # slope_filter
-    slope_filt: str = Setting("")
-    slope_dim0: str = Setting("distance")
-    slope_dim1: str = Setting("time")
-    slope_directional: bool = Setting(False)
-    slope_notch: bool = Setting(False)
-    slope_invert: bool = Setting(False)
 
     _FILTER_NAMES: ClassVar[tuple[str, ...]] = _FILTER_NAMES
 
@@ -837,6 +798,143 @@ class Filter(PatchDimWidget):
 
     def _on_result(self, result) -> None:
         self.Outputs.patch.send(result)
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "selected_filter": self._filter_combo,
+            "selected_dim": self._dim_combo,
+        }
+
+    def _linked_stacks(self) -> dict[object, object]:
+        """The filter combo selects the per-filter parameter page."""
+        return {self._filter_combo: self._stack}
+
+    # model field -> widget setting, per filter type (shared dim/taper fields and
+    # the special gaussian windows are handled separately).
+    _PARAM_FIELDS: ClassVar[dict[str, dict[str, str]]] = {
+        "pass_filter": {
+            "low_bound": "low_bound",
+            "high_bound": "high_bound",
+            "corners": "corners",
+            "zerophase": "zerophase",
+        },
+        "notch_filter": {"frequency": "filter_window", "q": "q"},
+        "median_filter": {
+            "window": "filter_window",
+            "samples": "samples",
+            "mode": "mode",
+            "cval": "cval",
+        },
+        "hampel_filter": {
+            "window": "filter_window",
+            "threshold": "threshold",
+            "samples": "samples",
+            "approximate": "approximate",
+        },
+        "savgol_filter": {
+            "window": "filter_window",
+            "polyorder": "polyorder",
+            "samples": "samples",
+            "mode": "mode",
+            "cval": "cval",
+        },
+        "wiener_filter": {
+            "window": "filter_window",
+            "noise": "noise",
+            "samples": "samples",
+        },
+        "gaussian_filter": {
+            "samples": "samples",
+            "mode": "mode",
+            "cval": "cval",
+            "truncate": "truncate",
+        },
+        "sobel_filter": {"mode": "mode", "cval": "cval"},
+        "slope_filter": {
+            "slope_filt": "slope_filt",
+            "slope_dim0": "slope_dim0",
+            "slope_dim1": "slope_dim1",
+            "directional": "slope_directional",
+            "notch": "slope_notch",
+            "invert": "slope_invert",
+        },
+    }
+
+    def get_params(self) -> FilterParams:
+        """Return the current filter parameters as a typed pydantic model."""
+        kind = self.selected_filter
+        data: dict[str, object] = {
+            "kind": kind,
+            "dim": self.selected_dim,
+            "apply_taper": bool(self.apply_taper),
+            "taper_window": self.taper_window,
+        }
+        for model_field, setting in self._PARAM_FIELDS[kind].items():
+            data[model_field] = getattr(self, setting)
+        if kind == "gaussian_filter":
+            data["windows"] = list(self.gaussian_dim_windows or [])
+        return TypeAdapter(FilterParams).validate_python(data)
+
+    def _settings_from_params(self, params) -> dict[str, object]:
+        """Return the widget-attribute mapping for a typed filter model."""
+        kind = params.kind
+        settings: dict[str, object] = {
+            "selected_filter": kind,
+            "selected_dim": params.dim,
+            "apply_taper": params.apply_taper,
+            "taper_window": params.taper_window,
+        }
+        for model_field, setting in self._PARAM_FIELDS[kind].items():
+            settings[setting] = getattr(params, model_field)
+        if kind == "gaussian_filter":
+            settings["gaussian_dim_windows"] = [w.model_dump() for w in params.windows]
+        return settings
+
+    def apply_params(self, params: object, *, run: bool = True) -> dict[str, object]:
+        """Apply a typed filter-parameter model (or its dict form) and re-run.
+
+        Returns the prior widget settings (for undo), like ``apply_settings``.
+        """
+        if isinstance(params, dict):
+            params = TypeAdapter(FilterParams).validate_python(params)
+        return self.apply_settings(self._settings_from_params(params), run=run)
+
+    def _model_backed_attrs(self) -> set[str]:
+        """Every attribute the filter models back (spanning all filter types)."""
+        attrs = {
+            "selected_filter",
+            "selected_dim",
+            "apply_taper",
+            "taper_window",
+            "gaussian_dim_windows",
+        }
+        for fields in self._PARAM_FIELDS.values():
+            attrs.update(fields.values())
+        return attrs
+
+    def _init_authoritative_state(self) -> None:
+        """Restore Filter's attributes from the ``_state`` blob or model defaults.
+
+        Filter holds attributes for every filter type at once, so seed them all
+        from the member-model defaults, then overlay the persisted active type
+        (active-type-only storage: inactive types reset to defaults on reload).
+        """
+        self.selected_filter = "pass_filter"
+        for model_cls in _FILTER_MODELS:
+            for setting, value in self._settings_from_params(model_cls()).items():
+                if setting != "selected_filter":
+                    setattr(self, setting, value)
+        params = (self._state or {}).get("params")
+        if params:
+            model = TypeAdapter(FilterParams).validate_python(params)
+            for setting, value in self._settings_from_params(model).items():
+                setattr(self, setting, value)
+
+    def _sync_dependent_controls(self) -> None:
+        """Re-derive dim visibility and mode from the selected filter."""
+        self._sync_primary_dim_visibility(self.selected_filter)
+        self._coerce_mode_for_filter(self.selected_filter)
 
     def get_task(self) -> Task:
         """Return the current filter semantics as a workflow task."""
