@@ -825,28 +825,33 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
 
     # -- Authoritative state (models as the sole persisted state) --------------
 
-    def _default_params(self):
-        """Return a default params-model instance (override for unions)."""
-        model = self.params_model
+    def _default_for(self, model):
+        """Return a default instance for a model, or ``None``.
+
+        Discriminated-union models can't be default-constructed; a widget with
+        one overrides ``_init_authoritative_state`` to seed its attributes.
+        """
         if model is None:
             return None
         try:
             return model()
         except TypeError:
-            # Discriminated-union models can't be default-constructed; the
-            # widget must override this to pick a default member.
             return None
 
-    def _default_view(self):
-        """Return a default view-model instance."""
-        model = self.view_model
-        return model() if model is not None else None
+    def _model_slots(self) -> tuple[tuple[str, object, dict[str, str]], ...]:
+        """Return each model slot as ``(state_key, model, field_map)``."""
+        return (
+            ("params", self.params_model, self._params_field_map()),
+            ("view", self.view_model, self._view_field_map()),
+        )
 
     def _model_backed_attrs(self) -> set[str]:
         """Attribute names backed by the params/view models (authoritative)."""
-        return set(self._params_field_map().values()) | set(
-            self._view_field_map().values()
-        )
+        return {
+            attr
+            for _, _, field_map in self._model_slots()
+            for attr in field_map.values()
+        }
 
     def _init_authoritative_state(self) -> None:
         """Restore model-backed attributes from ``_state`` or model defaults.
@@ -857,24 +862,19 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         ``Setting`` values used to.
         """
         state = self._state or {}
-        params = state.get("params")
-        default = (
-            TypeAdapter(self.params_model).validate_python(params)
-            if params
-            else self._default_params()
-        )
-        if default is not None:
-            for field, attr in self._params_field_map().items():
-                setattr(self, attr, getattr(default, field))
-        view = state.get("view")
-        default_view = (
-            TypeAdapter(self.view_model).validate_python(view)
-            if view
-            else self._default_view()
-        )
-        if default_view is not None:
-            for field, attr in self._view_field_map().items():
-                setattr(self, attr, getattr(default_view, field))
+        for key, model, field_map in self._model_slots():
+            if model is None:
+                continue
+            stored = state.get(key)
+            source = (
+                TypeAdapter(model).validate_python(stored)
+                if stored
+                else self._default_for(model)
+            )
+            if source is None:
+                continue
+            for field, attr in field_map.items():
+                setattr(self, attr, getattr(source, field))
 
     def _serialize_authoritative_state(self) -> None:
         """Serialize the models into ``_state`` before Orange packs settings.
@@ -883,12 +883,12 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         ``pack_data`` when saving), so the blob is current at every save.
         """
         self._sync_settings_from_controls()
-        state: dict[str, object] = {}
-        if self.params_model is not None:
-            state["params"] = self.get_params().model_dump()
-        if self.view_model is not None:
-            state["view"] = self.get_view().model_dump()
-        self._state = state
+        readers = {"params": self.get_params, "view": self.get_view}
+        self._state = {
+            key: readers[key]().model_dump()
+            for key, model, _ in self._model_slots()
+            if model is not None
+        }
 
     def _build_execution_request(self) -> WidgetExecutionRequest | None:
         """Return a worker-safe execution request or None for an empty result."""
