@@ -7,7 +7,6 @@ from typing import ClassVar
 from Orange.widgets.widget import Msg
 
 from derzug.core.patchmethodwidget import ComboOption, PatchMethodWidget
-from derzug.settings import Setting
 
 
 class Analytic(PatchMethodWidget):
@@ -21,7 +20,7 @@ class Analytic(PatchMethodWidget):
     priority = 21.2
     want_main_area = False
 
-    transform = Setting("hilbert")
+    authoritative_state = True
 
     call_style = "positional_dim"
     error_key = "transform_failed"

@@ -11,31 +11,37 @@ from dascore.units import percent
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
+
+
+class StftParams(BaseModel):
+    """Parameters for the Stft widget."""
+
+    selected_dim: str = ""
+    window_length: str = "0.01"
+    overlap: str = "50 %"
+    taper_window: str = "hann"
+    samples: bool = False
+    detrend: bool = False
 
 
 class Stft(PatchDimWidget):
     """Apply a DASCore short-time Fourier transform to an input patch."""
 
     name = "Stft"
+    params_model = StftParams
+    authoritative_state = True
     description = "Apply a short-time Fourier transform to a patch"
     icon = "icons/Stft.svg"
     category = "Transform"
     keywords = ("stft", "spectrogram", "fourier", "transform")
     priority = 21.15
     want_main_area = False
-
-    selected_dim = Setting("")
-    window_length = Setting("0.01")
-    overlap = Setting("50 %")
-    taper_window = Setting("hann")
-    samples = Setting(False)
-    detrend = Setting(False)
 
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""
@@ -191,6 +197,10 @@ class Stft(PatchDimWidget):
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the transform-specific banner."""
         self._show_exception("transform_failed", exc)
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {"selected_dim": self._dim_combo}
 
     def get_task(self) -> Task:
         """Return the current STFT operation as a workflow task."""

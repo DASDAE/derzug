@@ -97,6 +97,18 @@ def pytest_configure(config):
     # "Widgets left: ... Max widgets: ..."
     global _TEST_QAPP
     _TEST_QAPP = QApplication.instance() or QApplication(["-"])
+
+    # PyQt destroys its wrapped C++ objects at interpreter exit. If any top-level
+    # Qt object outlives the QApplication (e.g. a leaked canvas main window),
+    # that teardown order segfaults during finalization. Individual tests should
+    # still delete the windows they create; this leaves final C++ cleanup to the
+    # OS at process exit as a safety net, so a leak can never crash the run.
+    try:
+        from PyQt6 import sip
+
+        sip.setdestroyonexit(False)
+    except Exception:
+        pass
     if os.environ.get("QT_QPA_PLATFORM") == "offscreen" and not _show_mode_requested(
         sys.argv
     ):
@@ -202,3 +214,27 @@ def derzug_app(qapp, tmp_path_factory) -> DerZugAppContext:
     window.deleteLater()
     qapp.processEvents()
     QCoreApplication.sendPostedEvents()
+
+
+@pytest.fixture()
+def make_window(qapp):
+    """Create DerZug main windows and delete them on teardown.
+
+    ``ns._create_main_window()`` builds full Orange canvas main windows; leaking
+    them makes PyQt tear down C++ objects after the QApplication at interpreter
+    exit, which segfaults. Deleting them here keeps shutdown clean.
+    """
+    from derzug.dascore import namespace as ns
+
+    windows = []
+
+    def _make():
+        window = ns._create_main_window()
+        windows.append(window)
+        return window
+
+    yield _make
+
+    for window in windows:
+        window.deleteLater()
+    qapp.processEvents()

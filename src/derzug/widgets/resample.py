@@ -2,39 +2,47 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QStackedWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.utils.parsing import parse_patch_text_value, parse_text_value
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
+
+
+class ResampleParams(BaseModel):
+    """Parameters for the Resample widget."""
+
+    mode: Literal["decimate", "resample"] = "decimate"
+    selected_dim: str = ""
+    decimate_factor: str = "2"
+    decimate_filter_type: Literal["iir", "fir", "none"] = "iir"
+    resample_target: str = "10 ms"
+    resample_samples: bool = False
+    resample_interp_kind: Literal[
+        "linear", "nearest", "zero", "slinear", "quadratic", "cubic"
+    ] = "linear"
 
 
 class Resample(PatchDimWidget):
     """Decimate or resample an input patch along a chosen dimension."""
 
     name = "Resample"
+    params_model = ResampleParams
+    authoritative_state = True
     description = "Decimate or resample a patch along a dimension"
     icon = "icons/Resample.svg"
     category = "Processing"
     keywords = ("resample", "decimate", "downsample", "upsample", "interpolate")
     priority = 24
     want_main_area = False
-
-    mode = Setting("decimate")
-    selected_dim = Setting("")
-    decimate_factor = Setting("2")
-    decimate_filter_type = Setting("iir")
-    resample_target = Setting("10 ms")
-    resample_samples = Setting(False)
-    resample_interp_kind = Setting("linear")
 
     _MODE_NAMES: ClassVar[tuple[str, ...]] = ("decimate", "resample")
     _DECIMATE_FILTER_TYPES: ClassVar[tuple[str, ...]] = ("iir", "fir", "none")
@@ -238,6 +246,24 @@ class Resample(PatchDimWidget):
             dim_value=factor,
             method_kwargs={"filter_type": filter_type},
         )
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "selected_dim": self._dim_combo,
+            "decimate_filter_type": self._decimate_filter_combo,
+            "resample_interp_kind": self._interp_combo,
+        }
+
+    def _sync_dependent_controls(self) -> None:
+        """Sync the index-based mode combo (label != value) and its page."""
+        index = (
+            self._MODE_NAMES.index(self.mode) if self.mode in self._MODE_NAMES else 0
+        )
+        self._mode_combo.blockSignals(True)
+        self._mode_combo.setCurrentIndex(index)
+        self._mode_combo.blockSignals(False)
+        self._stack.setCurrentIndex(index)
 
     def get_task(self) -> Task:
         """Return the current decimate/resample operation as a workflow task."""

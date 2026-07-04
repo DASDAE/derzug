@@ -1077,14 +1077,18 @@ class TestSpool:
         with widget_context(
             Spool,
             stored_settings={
-                "file_input": str(directory),
-                "raw_input": "",
-                "spool_input": None,
-                "chunk_enabled": False,
-                "chunk_dim": "",
-                "chunk_value": "",
-                "selected_source_row": None,
-                "selected_source_patch_name": "",
+                "_state": {
+                    "params": {
+                        "file_input": str(directory),
+                        "raw_input": "",
+                        "spool_input": None,
+                        "chunk_enabled": False,
+                        "chunk_dim": "",
+                        "chunk_value": "",
+                        "selected_source_row": None,
+                        "selected_source_patch_name": "",
+                    }
+                }
             },
         ) as spool_widget:
             spool_widget.show()
@@ -1131,11 +1135,15 @@ class TestSpool:
         with widget_context(
             Spool,
             stored_settings={
-                "file_input": str(directory),
-                "raw_input": "",
-                "spool_input": None,
-                "selected_source_row": None,
-                "selected_source_patch_name": "",
+                "_state": {
+                    "params": {
+                        "file_input": str(directory),
+                        "raw_input": "",
+                        "spool_input": None,
+                        "selected_source_row": None,
+                        "selected_source_patch_name": "",
+                    }
+                }
             },
         ) as spool_widget:
             spool_widget.show()
@@ -1187,11 +1195,15 @@ class TestSpool:
         with widget_context(
             Spool,
             stored_settings={
-                "file_input": str(directory),
-                "raw_input": "",
-                "spool_input": None,
-                "selected_source_row": None,
-                "selected_source_patch_name": "",
+                "_state": {
+                    "params": {
+                        "file_input": str(directory),
+                        "raw_input": "",
+                        "spool_input": None,
+                        "selected_source_row": None,
+                        "selected_source_patch_name": "",
+                    }
+                }
             },
         ) as spool_widget:
             spool_widget.show()
@@ -1230,25 +1242,29 @@ class TestSpool:
     def test_cold_restore_invalid_chunk_falls_back_to_loaded_source(self, qtbot):
         """Cold restore should keep the loaded source when saved chunking is invalid."""
         stored_settings = {
-            "chunk_conflict": "drop",
-            "chunk_dim": "time",
-            "chunk_keep_partial": False,
-            "chunk_overlap": "",
-            "chunk_snap_coords": True,
-            "chunk_tolerance": 1.5,
-            "chunk_value": "3600",
-            "example_parameters": {},
-            "file_input": "",
-            "raw_input": "",
-            "select_col": "",
-            "select_filters": [{"key": "", "raw": ""}],
-            "select_val": "",
-            "selected_source_patch_name": (
-                "path:DAS_________2022_07_30T02_00_08__2022_07_30T02_04_38"
-            ),
-            "selected_source_row": 30,
-            "spool_input": "chirp",
-            "unpack_single_patch": True,
+            "_state": {
+                "params": {
+                    "chunk_conflict": "drop",
+                    "chunk_dim": "time",
+                    "chunk_keep_partial": False,
+                    "chunk_overlap": "",
+                    "chunk_snap_coords": True,
+                    "chunk_tolerance": 1.5,
+                    "chunk_value": "3600",
+                    "example_parameters": {},
+                    "file_input": "",
+                    "raw_input": "",
+                    "select_col": "",
+                    "select_filters": [{"key": "", "raw": ""}],
+                    "select_val": "",
+                    "selected_source_patch_name": (
+                        "path:DAS_________2022_07_30T02_00_08__2022_07_30T02_04_38"
+                    ),
+                    "selected_source_row": 30,
+                    "spool_input": "chirp",
+                    "unpack_single_patch": True,
+                }
+            }
         }
 
         with widget_context(Spool, stored_settings=stored_settings) as spool_widget:
@@ -1297,24 +1313,28 @@ class TestSpool:
         with widget_context(
             Spool,
             stored_settings={
-                "chunk_conflict": "raise",
-                "chunk_dim": "time",
-                "chunk_enabled": True,
-                "chunk_keep_partial": False,
-                "chunk_overlap": "",
-                "chunk_snap_coords": True,
-                "chunk_tolerance": 1.5,
-                "chunk_value": "0.01",
-                "example_parameters": {},
-                "file_input": "",
-                "raw_input": "",
-                "select_col": "",
-                "select_filters": [{"key": "", "raw": ""}],
-                "select_val": "",
-                "selected_source_patch_name": "",
-                "selected_source_row": None,
-                "spool_input": "long_example",
-                "unpack_single_patch": True,
+                "_state": {
+                    "params": {
+                        "chunk_conflict": "raise",
+                        "chunk_dim": "time",
+                        "chunk_enabled": True,
+                        "chunk_keep_partial": False,
+                        "chunk_overlap": "",
+                        "chunk_snap_coords": True,
+                        "chunk_tolerance": 1.5,
+                        "chunk_value": "0.01",
+                        "example_parameters": {},
+                        "file_input": "",
+                        "raw_input": "",
+                        "select_col": "",
+                        "select_filters": [{"key": "", "raw": ""}],
+                        "select_val": "",
+                        "selected_source_patch_name": "",
+                        "selected_source_row": None,
+                        "spool_input": "long_example",
+                        "unpack_single_patch": True,
+                    }
+                }
             },
         ) as spool_widget:
             spool_widget.show()
@@ -1353,19 +1373,23 @@ class TestSpool:
         with widget_context(
             Spool,
             stored_settings={
-                "file_input": str(directory),
-                "raw_input": "",
-                "spool_input": None,
-                "chunk_enabled": True,
-                "chunk_dim": "time",
-                "chunk_value": "3600",
-                "chunk_overlap": "120",
-                "chunk_keep_partial": False,
-                "chunk_snap_coords": True,
-                "chunk_tolerance": 1.5,
-                "chunk_conflict": "drop",
-                "selected_source_row": None,
-                "selected_source_patch_name": "",
+                "_state": {
+                    "params": {
+                        "file_input": str(directory),
+                        "raw_input": "",
+                        "spool_input": None,
+                        "chunk_enabled": True,
+                        "chunk_dim": "time",
+                        "chunk_value": "3600",
+                        "chunk_overlap": "120",
+                        "chunk_keep_partial": False,
+                        "chunk_snap_coords": True,
+                        "chunk_tolerance": 1.5,
+                        "chunk_conflict": "drop",
+                        "selected_source_row": None,
+                        "selected_source_patch_name": "",
+                    }
+                }
             },
         ) as spool_widget:
             spool_widget.show()

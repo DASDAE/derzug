@@ -370,7 +370,9 @@ class TestCode:
 
     def test_stored_settings_restore_script_text(self):
         """Stored settings should restore the saved editor contents."""
-        saved = {"script_text": "def transform(patch):\n    return 5"}
+        saved = {
+            "_state": {"params": {"script_text": "def transform(patch):\n    return 5"}}
+        }
 
         with widget_context(Code, stored_settings=saved) as widget:
             assert "return 5" in widget._editor.toPlainText()

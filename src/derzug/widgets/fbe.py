@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
@@ -10,9 +10,9 @@ from dascore.units import percent
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.settings import Setting
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task
 
@@ -79,25 +79,31 @@ class FBETask(Task):
         )
 
 
+class FBEParams(BaseModel):
+    """Parameters for the FBE widget."""
+
+    selected_dim: str = ""
+    window_length: str = "0.01"
+    overlap: str = "50 %"
+    taper_window: Literal["hann", "hamming", "blackman", "nuttall"] = "hann"
+    samples: bool = False
+    detrend: bool = False
+    fbe_lower: str = ""
+    fbe_upper: str = ""
+
+
 class FBE(PatchDimWidget):
     """Extract one frequency band energy trace via STFT power reduction."""
 
     name = "FBE"
+    params_model = FBEParams
+    authoritative_state = True
     description = "Extract one frequency band energy feature from a patch"
     icon = "icons/FBE.svg"
     category = "Transform"
     keywords = ("fbe", "stft", "frequency", "band", "energy")
     priority = 21.14
     want_main_area = False
-
-    selected_dim = Setting("")
-    window_length = Setting("0.01")
-    overlap = Setting("50 %")
-    taper_window = Setting("hann")
-    samples = Setting(False)
-    detrend = Setting(False)
-    fbe_lower = Setting("")
-    fbe_upper = Setting("")
 
     _WINDOW_TYPES: ClassVar[tuple[str, ...]] = (
         "hann",
@@ -339,6 +345,13 @@ class FBE(PatchDimWidget):
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the transform-specific banner."""
         self._show_exception("transform_failed", exc)
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "selected_dim": self._dim_combo,
+            "taper_window": self._taper_window_combo,
+        }
 
     def get_task(self) -> Task:
         """Return the current FBE semantics as a workflow task."""

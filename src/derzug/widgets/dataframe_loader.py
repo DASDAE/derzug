@@ -25,9 +25,9 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Output
 from Orange.widgets.utils.tableview import TableView
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.settings import Setting
 from derzug.utils.optional_imports import optional_import
 from derzug.workflow import Task
 
@@ -217,10 +217,20 @@ def _cell_alignment(value) -> Qt.AlignmentFlag:
     return Qt.AlignLeft | Qt.AlignVCenter
 
 
+class DataFrameLoaderParams(BaseModel):
+    """Parameters for the DataFrame Loader widget."""
+
+    file_path: str = ""
+    format_name: str = "Auto"
+    table_name: str = ""
+
+
 class DataFrameLoader(ZugWidget):
     """Orange widget for loading a pandas DataFrame from a file on disk."""
 
     name = "DataFrame Loader"
+    params_model = DataFrameLoaderParams
+    authoritative_state = True
     want_control_area = False
     description = (
         "Load a tabular DataFrame from a file. "
@@ -231,10 +241,6 @@ class DataFrameLoader(ZugWidget):
     keywords = ("dataframe", "csv", "parquet", "excel", "table", "file", "load")
     priority = 20
     is_source = True
-
-    file_path = Setting("")
-    format_name = Setting(_AUTO)
-    table_name = Setting("")
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -410,6 +416,13 @@ class DataFrameLoader(ZugWidget):
     def _on_result(self, result: pd.DataFrame | None) -> None:
         """Apply one completed dataframe load result."""
         self._set_output(result)
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "format_name": self.format_combo,
+            "table_name": self.table_combo,
+        }
 
     def get_task(self) -> Task:
         """Return the current bound-source workflow semantics."""

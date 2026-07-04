@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Literal
 
 import dascore as dc
 import numpy as np
@@ -12,9 +13,9 @@ from AnyQt.QtWidgets import QComboBox, QLabel, QSlider, QVBoxLayout, QWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
-from derzug.settings import Setting
 from derzug.utils.plot_axes import (
     CursorField,
     build_plot_axis_spec,
@@ -113,6 +114,27 @@ class _ExpandableGainSlider(QSlider):
             self._last_edge_direction = direction
 
 
+class WiggleParams(BaseModel):
+    """Parameters for the Wiggle widget.
+
+    Wiggle passes the patch through unchanged, so it has no output-affecting
+    parameters; its display state belongs to the view model.
+    """
+
+
+class WiggleView(BaseModel):
+    """Presentation-only state for Wiggle (a passthrough viewer)."""
+
+    mode: Literal["offset", "time series"] = "offset"
+    selected_trace_dim: str = ""
+    selected_x_dim: str = ""
+    stride: int = 8
+    gain: int = 150
+    colormap: str = "viridis"
+    series_color_limits: Any = None
+    percentiles: bool = False
+
+
 class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     """Display DASCore patches as wiggle or time-series plots."""
 
@@ -124,6 +146,9 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     _LINE_COLOR = (15, 15, 15, 255)
 
     name = "Wiggle"
+    params_model = WiggleParams
+    view_model = WiggleView
+    authoritative_state = True
     description = "Interactive pyqtgraph wiggle view for DAS patches"
     icon = "icons/Wiggle.svg"
     category = "Visualize"
@@ -141,15 +166,6 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         "plasma",
         "turbo",
     )
-
-    mode = Setting("offset")
-    selected_trace_dim = Setting("")
-    selected_x_dim = Setting("")
-    stride = Setting(8)
-    gain = Setting(150)
-    colormap = Setting("viridis")
-    series_color_limits = Setting(None)
-    percentiles = Setting(False)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -170,6 +186,15 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         """Output signal definitions."""
 
         patch = Output("Patch", dc.Patch, doc="Patch passed through unchanged")
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "mode": self._mode_combo,
+            "selected_x_dim": self._x_axis_combo,
+            "selected_trace_dim": self._trace_axis_combo,
+            "colormap": self._cmap_combo,
+        }
 
     def get_task(self) -> Task:
         """Return the compiled patch semantics for the widget."""

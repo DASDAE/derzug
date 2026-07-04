@@ -7,7 +7,6 @@ from typing import ClassVar
 from Orange.widgets.widget import Msg
 
 from derzug.core.patchmethodwidget import ComboOption, PatchMethodWidget
-from derzug.settings import Setting
 
 
 class Detrend(PatchMethodWidget):
@@ -21,7 +20,7 @@ class Detrend(PatchMethodWidget):
     priority = 21
     want_main_area = False
 
-    detrend_type = Setting("linear")
+    authoritative_state = True
 
     method_name = "detrend"
     call_style = "positional_dim"

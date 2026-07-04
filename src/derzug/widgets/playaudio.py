@@ -22,9 +22,9 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
-from derzug.settings import Setting
 from derzug.utils.display import format_display
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchPassThroughTask
@@ -131,18 +131,24 @@ class _PreparedAudio:
     sample_count: int
 
 
+class PlayAudioParams(BaseModel):
+    """Parameters for the PlayAudio widget."""
+
+    time_scale: float = 1.0
+    volume_percent: int = 100
+
+
 class PlayAudio(ZugWidget):
     """Play 1D DAS patches as audio with a configurable time scale."""
 
     name = "PlayAudio"
+    params_model = PlayAudioParams
+    authoritative_state = True
     description = "Play a 1D time patch as audio"
     icon = "icons/PlayAudio.svg"
     category = "Visualize"
     keywords = ("audio", "sound", "time", "patch")
     priority = 23
-
-    time_scale = Setting(1.0)
-    volume_percent = Setting(_DEFAULT_VOLUME_PERCENT)
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -358,6 +364,13 @@ class PlayAudio(ZugWidget):
             self._time_scale_spin.setValue(self.time_scale)
         finally:
             self._syncing_time_scale = False
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {
+            "time_scale": self._time_scale_spin,
+            "volume_percent": self._volume_slider,
+        }
 
     def _on_time_scale_changed(self, value: float) -> None:
         """Persist user-selected time-scale changes and refresh readouts."""

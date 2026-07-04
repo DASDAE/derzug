@@ -4,9 +4,13 @@ Base widget class for DerZug.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from AnyQt.QtCore import QPoint, Qt, QTimer
 from AnyQt.QtGui import QKeyEvent, QKeySequence, QShortcut, QShowEvent
 from AnyQt.QtWidgets import (
+    QAbstractButton,
+    QAbstractSlider,
     QAbstractSpinBox,
     QAction,
     QApplication,
@@ -24,11 +28,13 @@ from AnyQt.QtWidgets import (
     QWidget,
 )
 from Orange.widgets.widget import OWWidget
+from pydantic import TypeAdapter
 
 from derzug.core.services import get_app_shell_service
 from derzug.core.widget_execution import WorkflowExecutionMixin
 from derzug.core.widget_messages import WidgetMessageMixin
 from derzug.core.widget_runtime import WidgetExecutionRequest, WidgetExecutionRuntime
+from derzug.settings import Setting
 from derzug.workflow import Pipe, Task
 
 
@@ -76,7 +82,36 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     into settings immediately before execution/export, and
     ``_rebind_dynamic_controls()`` rebuilds option-dependent controls after new
     input metadata arrives without silently discarding saved values.
+
+    Setting parameters from code (Conductor, tests, scripts) goes through the
+    single unified entry point ``apply_settings(mapping)`` — never assign
+    ``Setting`` attributes or drive Qt controls directly, as those skip control
+    sync and are silently reverted by widgets that pull control state at run
+    time. New widgets only need to declare ``_settings_control_map()`` (setting
+    name -> control) so the default ``_apply_settings_to_controls()`` keeps the
+    UI in sync; the base handles combos, spin boxes, sliders, checkboxes, and
+    text edits.
     """
+
+    #: Pydantic model (or discriminated union) describing this widget's
+    #: parameters, the authoritative typed schema for ``get_params`` /
+    #: ``apply_params``. ``None`` until the widget is migrated to a params model.
+    params_model: ClassVar[object | None] = None
+
+    #: Pydantic model describing this widget's presentation-only state
+    #: (colormap, view range, ...), read/written via ``get_view`` /
+    #: ``apply_view``. ``None`` for widgets with no display state.
+    view_model: ClassVar[object | None] = None
+
+    #: When True, the params/view models are the sole persisted state: their
+    #: serialized form is stored in the ``_state`` blob and the flat per-param
+    #: ``Setting``s are removed. Attributes are restored from ``_state`` (or the
+    #: model defaults) before the subclass builds its controls.
+    authoritative_state: ClassVar[bool] = False
+
+    #: The single persisted state blob for authoritative-state widgets:
+    #: ``{"params": <params model_dump>, "view": <view model_dump>}``.
+    _state = Setting({}, schema_only=True)
 
     _FOCUS_EXCLUDE = (
         QLineEdit,
@@ -114,6 +149,9 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     def __init__(self, *args, **kwargs) -> None:
         """Initialize the base widget and install shared window shortcuts."""
         super().__init__(*args, **kwargs)
+        if self.authoritative_state:
+            self._init_authoritative_state()
+            self.settingsAboutToBePacked.connect(self._serialize_authoritative_state)
         self._ui_refresh_pending = False
         self._control_area_width_check_pending = False
         self._dirty_delayed_outputs: set[str] = set()
@@ -554,8 +592,45 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     def _apply_settings_to_controls(self) -> None:
         """Hydrate visible controls from persisted settings.
 
-        Override in widgets whose Qt controls need an explicit restore pass after
-        ``Setting`` values have been loaded.
+        Runs three passes: set each control declared by
+        ``_settings_control_map()``, switch each stacked page declared by
+        ``_linked_stacks()`` to follow its selector combo, then call
+        ``_sync_dependent_controls()`` for any other setting-driven UI state.
+        Widgets whose controls do not map one-to-one to a ``Setting`` (dynamic
+        rows, plot/selection state) may override this and hydrate explicitly.
+        """
+        for name, control in self._settings_control_map().items():
+            self._set_control_value(control, getattr(self, name))
+        for selector, stack in self._linked_stacks().items():
+            stack.setCurrentIndex(selector.currentIndex())
+        self._sync_dependent_controls()
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Return ``{setting_name: control}`` for settings-backed controls.
+
+        Override to declare which visible control backs each ``Setting`` so the
+        base ``_apply_settings_to_controls()`` can keep them in sync. Only simple
+        controls (combo, spin box, slider, checkbox, line/text edit) need appear
+        here.
+        """
+        return {}
+
+    def _linked_stacks(self) -> dict[object, object]:
+        """Return ``{selector_combo: stacked_widget}`` for cascading options.
+
+        The common cascading-options case: a combo (already synced by the
+        control map) selects which page of a ``QStackedWidget`` is shown, with
+        pages added in the same order as the combo's items. The base keeps the
+        page in sync when settings are applied. Override to declare these links.
+        """
+        return {}
+
+    def _sync_dependent_controls(self) -> None:
+        """Sync setting-driven UI that isn't a plain combo-to-stack link.
+
+        Override for cascades that ``_linked_stacks()`` cannot express: index-
+        based selectors (combo label != setting value), enable/disable or
+        show/hide, and dynamic parameter widgets.
         """
 
     def _sync_settings_from_controls(self) -> None:
@@ -596,6 +671,224 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         else:
             widget.setCurrentIndex(-1)
         widget.blockSignals(False)
+
+    @classmethod
+    def _set_control_value(cls, control: object, value: object) -> None:
+        """Assign one control's value from a Setting, without firing handlers."""
+        if isinstance(control, QComboBox):
+            cls._set_combo_value(control, value)
+        elif isinstance(control, QAbstractSpinBox):
+            control.blockSignals(True)
+            try:
+                control.setValue(value)
+            except (TypeError, ValueError):
+                pass
+            control.blockSignals(False)
+        elif isinstance(control, QAbstractSlider):
+            control.blockSignals(True)
+            try:
+                control.setValue(int(value))
+            except (TypeError, ValueError):
+                pass
+            control.blockSignals(False)
+        elif isinstance(control, QAbstractButton):
+            cls._set_checkbox_value(control, value)
+        elif isinstance(control, QLineEdit):
+            cls._set_line_edit_value(control, value)
+        elif isinstance(control, QPlainTextEdit | QTextEdit):
+            control.blockSignals(True)
+            control.setPlainText("" if value is None else str(value))
+            control.blockSignals(False)
+
+    @classmethod
+    def _is_setting(cls, name: str) -> bool:
+        """Return True when ``name`` is a declared ``Setting`` on this widget."""
+        from orangewidget.settings import Setting
+
+        return any(
+            isinstance(klass.__dict__.get(name), Setting) for klass in cls.__mro__
+        )
+
+    def apply_settings(
+        self, values: dict[str, object], *, run: bool = True
+    ) -> dict[str, object]:
+        """Apply one or more ``Setting`` values programmatically and re-run.
+
+        This is the single supported way to set a widget's parameters from code
+        (the Conductor, tests, scripts): it updates the ``Setting`` values,
+        hydrates the visible controls via ``_apply_settings_to_controls()``, and
+        re-runs unless ``run=False``. Prefer this over assigning ``Setting``
+        attributes or driving Qt controls directly — those skip control-sync and,
+        for widgets that pull control state back at run time, are silently
+        reverted.
+
+        Parameters
+        ----------
+        values
+            Mapping of ``Setting`` name to new value.
+        run
+            When True (default), re-run the widget after applying the values.
+
+        Returns
+        -------
+        dict
+            The prior values for each applied setting, so the change can be
+            reverted (e.g. wrapped in a canvas undo command).
+        """
+        allowed_extra = (
+            self._model_backed_attrs() if self.authoritative_state else set()
+        )
+        unknown = sorted(
+            name
+            for name in values
+            if not self._is_setting(name) and name not in allowed_extra
+        )
+        if unknown:
+            raise KeyError(
+                f"{type(self).__name__} has no setting(s): {', '.join(unknown)}"
+            )
+        prior = {name: getattr(self, name) for name in values}
+        for name, value in values.items():
+            setattr(self, name, value)
+        self._apply_settings_to_controls()
+        if run:
+            self.run()
+        return prior
+
+    def _params_field_map(self) -> dict[str, str]:
+        """Return ``{model_field: attribute_name}`` backing ``params_model``.
+
+        The default maps each model field to a same-named widget attribute, so a
+        widget whose model fields match its attribute names only needs to declare
+        ``params_model``. Override to rename (e.g. ``dim`` -> ``selected_dim``);
+        discriminated-union widgets override ``get_params``/``apply_params``. The
+        attribute need not be an Orange ``Setting`` (authoritative-state widgets
+        back these attributes with the serialized-model blob instead).
+        """
+        fields = getattr(self.params_model, "model_fields", None)
+        if not fields:
+            return {}
+        return {name: name for name in fields}
+
+    def _view_field_map(self) -> dict[str, str]:
+        """Return ``{model_field: attribute_name}`` backing ``view_model``.
+
+        Like ``_params_field_map``, maps each model field to a same-named
+        widget attribute.
+        """
+        fields = getattr(self.view_model, "model_fields", None)
+        if not fields:
+            return {}
+        return {name: name for name in fields}
+
+    def _read_model(self, model, field_map: dict[str, str], label: str):
+        """Build a typed model instance from the widget's current settings."""
+        if model is None:
+            raise NotImplementedError(f"{type(self).__name__} has no {label}")
+        data = {field: getattr(self, setting) for field, setting in field_map.items()}
+        return TypeAdapter(model).validate_python(data)
+
+    def _write_model(
+        self, value, model, field_map: dict[str, str], label: str, *, run: bool
+    ) -> dict[str, object]:
+        """Apply a typed model (or its dict form) back onto the widget settings."""
+        if model is None:
+            raise NotImplementedError(f"{type(self).__name__} has no {label}")
+        if isinstance(value, dict):
+            value = TypeAdapter(model).validate_python(value)
+        settings = {
+            setting: getattr(value, field) for field, setting in field_map.items()
+        }
+        return self.apply_settings(settings, run=run)
+
+    def get_params(self):
+        """Return this widget's parameters as its typed ``params_model``."""
+        return self._read_model(
+            self.params_model, self._params_field_map(), "params_model"
+        )
+
+    def apply_params(self, params, *, run: bool = True) -> dict[str, object]:
+        """Apply a ``params_model`` (or dict); returns prior settings (for undo)."""
+        return self._write_model(
+            params, self.params_model, self._params_field_map(), "params_model", run=run
+        )
+
+    def get_view(self):
+        """Return this widget's presentation state as its typed ``view_model``."""
+        return self._read_model(self.view_model, self._view_field_map(), "view_model")
+
+    def apply_view(self, view, *, run: bool = False) -> dict[str, object]:
+        """Apply a ``view_model`` (or dict); returns prior settings."""
+        return self._write_model(
+            view, self.view_model, self._view_field_map(), "view_model", run=run
+        )
+
+    # -- Authoritative state (models as the sole persisted state) --------------
+
+    def _default_for(self, model):
+        """Return a default instance for a model, or ``None``.
+
+        Discriminated-union models can't be default-constructed; a widget with
+        one overrides ``_init_authoritative_state`` to seed its attributes.
+        """
+        if model is None:
+            return None
+        try:
+            return model()
+        except TypeError:
+            return None
+
+    def _model_slots(self) -> tuple[tuple[str, object, dict[str, str]], ...]:
+        """Return each model slot as ``(state_key, model, field_map)``."""
+        return (
+            ("params", self.params_model, self._params_field_map()),
+            ("view", self.view_model, self._view_field_map()),
+        )
+
+    def _model_backed_attrs(self) -> set[str]:
+        """Attribute names backed by the params/view models (authoritative)."""
+        return {
+            attr
+            for _, _, field_map in self._model_slots()
+            for attr in field_map.values()
+        }
+
+    def _init_authoritative_state(self) -> None:
+        """Restore model-backed attributes from ``_state`` or model defaults.
+
+        Runs before the subclass builds its controls. Because Orange restores
+        ``_state`` prior to ``__init__``, the attributes end up holding either
+        the persisted values or the model defaults, exactly as the flat
+        ``Setting`` values used to.
+        """
+        state = self._state or {}
+        for key, model, field_map in self._model_slots():
+            if model is None:
+                continue
+            stored = state.get(key)
+            source = (
+                TypeAdapter(model).validate_python(stored)
+                if stored
+                else self._default_for(model)
+            )
+            if source is None:
+                continue
+            for field, attr in field_map.items():
+                setattr(self, attr, getattr(source, field))
+
+    def _serialize_authoritative_state(self) -> None:
+        """Serialize the models into ``_state`` before Orange packs settings.
+
+        Connected to ``settingsAboutToBePacked`` (the hook Orange emits from
+        ``pack_data`` when saving), so the blob is current at every save.
+        """
+        self._sync_settings_from_controls()
+        readers = {"params": self.get_params, "view": self.get_view}
+        self._state = {
+            key: readers[key]().model_dump()
+            for key, model, _ in self._model_slots()
+            if model is not None
+        }
 
     def _build_execution_request(self) -> WidgetExecutionRequest | None:
         """Return a worker-safe execution request or None for an empty result."""

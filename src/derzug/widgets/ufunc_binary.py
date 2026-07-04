@@ -12,9 +12,9 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
+from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.settings import Setting
 from derzug.workflow import Task
 
 
@@ -35,17 +35,23 @@ class UFuncBinaryTask(Task):
         return ufunc(x, y)
 
 
+class UFuncBinaryParams(BaseModel):
+    """Parameters for the binary UFunc operator."""
+
+    selected_op: str = "x+y"
+
+
 class UFuncBinary(ZugWidget):
     """Apply a selected binary NumPy ufunc to two generic inputs."""
 
     name = "UFuncBinary"
+    params_model = UFuncBinaryParams
+    authoritative_state = True
     description = "Apply selected NumPy ufunc to x and y inputs"
     icon = "icons/UFunc.svg"
     category = "Processing"
     keywords = ("ufunc", "numpy", "binary", "operator", "math")
     priority = 23
-
-    selected_op = Setting("x+y")
 
     # This is a non-graphical widget; we dont need main area.
     want_main_area = False
@@ -164,6 +170,10 @@ class UFuncBinary(ZugWidget):
             input_values={"x": x, "y": y},
             output_names=("result",),
         )
+
+    def _settings_control_map(self) -> dict[str, object]:
+        """Map settings to their controls for unified apply_settings sync."""
+        return {"selected_op": self._op_combo}
 
     def get_task(self) -> Task:
         """Return the configured binary ufunc task."""
