@@ -35,6 +35,14 @@ def main(
             "Conductor. Implies --conductor, e.g. derzug --agent claude."
         ),
     ),
+    conductor_allow_code: bool = typer.Option(
+        False,
+        "--conductor-allow-code",
+        help=(
+            "Let Conductor agents add/configure the Code widget, whose "
+            "parameters execute arbitrary Python. Off by default."
+        ),
+    ),
     open_widgets: str = typer.Option(
         "",
         "--open-widgets",
@@ -54,6 +62,7 @@ def main(
     runner.dev_mode = dev
     runner.conductor_enabled = conductor or agent is not None
     runner.conductor_agent = agent
+    runner.conductor_allow_code = conductor_allow_code
     runner.startup_workflow_path = None if workflow is None else str(workflow)
     runner.startup_open_widget_ids = [
         int(x) for x in open_widgets.split(",") if x.strip().isdigit()

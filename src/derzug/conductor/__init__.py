@@ -5,7 +5,8 @@
 (``set_params`` / ``set_view``), and author the graph (``add_node`` / ``connect``
 / ...), with structural edits registered on the undo stack.
 ``MainThreadDispatcher`` marshals those calls onto the Qt main thread for the
-off-thread MCP transport. The MCP server itself is added in a later phase.
+off-thread MCP transport. The MCP server lives in ``mcp_server`` (optional
+``mcp`` extra) and is owned by a ``ConductorService``.
 """
 
 from derzug.conductor.controller import CanvasController

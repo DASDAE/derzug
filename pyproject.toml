@@ -113,13 +113,15 @@ zug = "derzug.dascore.namespace:ZugSpoolNameSpace"
 [project.optional-dependencies]
 
 # The Conductor's in-app MCP server (agent control of the live canvas).
+# Streamable HTTP needs SDK >= 1.8; stay below the breaking v2 release.
 conductor = [
-    "mcp>=1.2",
+    "mcp>=1.27,<2",
 ]
 
 test = [
     "coverage>=7.4,<8",
     "duckdb",
+    "mcp>=1.27,<2",
     "pytest-cov>=4",
     "prek",
     "pytest",

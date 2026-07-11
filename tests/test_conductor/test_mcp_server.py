@@ -12,6 +12,7 @@ pytest.importorskip("mcp")
 from derzug.conductor import CanvasController, MainThreadDispatcher  # noqa: E402
 from derzug.conductor.mcp_server import (  # noqa: E402
     build_conductor_mcp,
+    start_conductor,
     write_mcp_config,
 )
 
@@ -28,6 +29,7 @@ _EXPECTED_TOOLS = {
     "connect",
     "disconnect",
     "run",
+    "wait_for_idle",
     "show_node",
     "move_node_window",
     "hide_node",
@@ -67,27 +69,89 @@ def test_write_mcp_config(tmp_path):
     assert config["mcpServers"]["derzug-conductor"]["type"] == "http"
 
 
-def test_write_codex_config_is_idempotent(tmp_path, monkeypatch):
-    """The Codex MCP bridge is written once, under ~/.codex/config.toml."""
-    from derzug.conductor.mcp_server import _write_codex_config
+def test_write_mcp_config_merges_existing_entries(tmp_path):
+    """An existing .mcp.json keeps its other servers; only ours is replaced."""
+    path = tmp_path / ".mcp.json"
+    path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "other": {"type": "stdio", "command": "other-server"},
+                    "derzug-conductor": {"type": "http", "url": "http://stale"},
+                }
+            }
+        )
+    )
+    url = write_mcp_config(path, port=4321)
+    config = json.loads(path.read_text())
+    assert config["mcpServers"]["other"]["command"] == "other-server"
+    assert config["mcpServers"]["derzug-conductor"]["url"] == url
 
-    monkeypatch.setenv("HOME", str(tmp_path))
-    _write_codex_config("127.0.0.1", 4319)
-    config = (tmp_path / ".codex" / "config.toml").read_text()
-    assert "[mcp_servers.derzug-conductor]" in config
-    assert "mcp-remote" in config
-    assert "http://127.0.0.1:4319/mcp" in config
 
-    _write_codex_config("127.0.0.1", 4319)  # again -> no duplicate section
-    again = (tmp_path / ".codex" / "config.toml").read_text()
-    assert again.count("[mcp_servers.derzug-conductor]") == 1
+def test_write_mcp_config_leaves_invalid_json_untouched(tmp_path):
+    """A hand-edited config that fails to parse is never clobbered."""
+    path = tmp_path / ".mcp.json"
+    path.write_text("{not json")
+    write_mcp_config(path, port=4321)
+    assert path.read_text() == "{not json"
 
 
-def test_launch_agent_missing_binary_is_safe(tmp_path):
-    """Launching an agent that is not on PATH fails cleanly (no spawn)."""
-    from derzug.conductor.mcp_server import launch_agent_in_terminal
+def test_service_reports_port_conflict_on_start(blank_canvas):
+    """A taken port raises immediately from start() instead of dying silently."""
+    import socket
 
-    assert launch_agent_in_terminal("no-such-agent-xyz", str(tmp_path)) is False
+    from derzug.conductor.mcp_server import ConductorService
+
+    window, _ = blank_canvas
+    mcp, _ = _server(window)
+    with socket.create_server(("127.0.0.1", 0)) as sock:
+        taken_port = sock.getsockname()[1]
+        service = ConductorService(mcp, port=taken_port)
+        with pytest.raises(OSError):
+            service.start()
+
+
+def test_service_start_ready_and_stop(blank_canvas):
+    """The service binds an ephemeral port, reports ready, and stops cleanly."""
+    from derzug.conductor.mcp_server import ConductorService
+
+    window, _ = blank_canvas
+    mcp, _ = _server(window)
+    service = ConductorService(mcp, port=0)
+    url = service.start(timeout=30.0)
+    try:
+        assert service.port > 0
+        assert url == f"http://127.0.0.1:{service.port}/mcp"
+    finally:
+        service.stop()
+    assert service._thread is None
+
+
+def test_start_conductor_stops_service_when_config_write_fails(
+    blank_canvas, tmp_path, monkeypatch
+):
+    """Failure after bind/readiness must not leave an orphan listening server."""
+    from derzug.conductor.mcp_server import ConductorService
+
+    window, _ = blank_canvas
+    stopped: list[ConductorService] = []
+    original_stop = ConductorService.stop
+
+    def track_stop(self, timeout=5.0):
+        stopped.append(self)
+        original_stop(self, timeout)
+
+    def fail_write(*args, **kwargs):
+        raise OSError("config is not writable")
+
+    monkeypatch.setattr(ConductorService, "stop", track_stop)
+    monkeypatch.setattr("derzug.conductor.mcp_server.write_mcp_config", fail_write)
+
+    with pytest.raises(OSError, match="not writable"):
+        start_conductor(window, port=0, config_path=tmp_path / ".mcp.json")
+
+    assert len(stopped) == 1
+    assert stopped[0]._thread is None
 
 
 def test_connect_tool_defaults_ports_to_patch(blank_canvas):

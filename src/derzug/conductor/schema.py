@@ -40,6 +40,8 @@ class NodeState(BaseModel):
     outputs: list[PortInfo]
     is_source: bool
     is_active_source: bool
+    # True while the widget's worker is executing (async run in flight).
+    busy: bool
     error: str | None
 
 

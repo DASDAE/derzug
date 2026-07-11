@@ -18,8 +18,10 @@ swap file pickles the stack, and a widget-state command can't be cleanly
 serialized); ``set_params`` / ``set_view`` instead return the prior state so the
 caller can undo by re-applying it.
 
-All methods are expected to be called on the Qt main thread. Code-widget safety
-gating, off-thread marshalling, and the MCP transport arrive in later phases.
+All methods are expected to be called on the Qt main thread; the MCP transport
+marshals onto it via ``MainThreadDispatcher``. The ``Code`` widget (whose
+parameters are executable Python) is excluded from the surface unless the
+controller is built with ``allow_code=True``.
 """
 
 from __future__ import annotations
@@ -42,11 +44,17 @@ from derzug.conductor.schema import (
     PortInfo,
     WidgetTypeInfo,
 )
-from derzug.widgets.composite import NODE_ID_KEY
+from derzug.widgets.composite import ensure_node_id
 from derzug.workflow.compiler import compile_workflow
 
 # Horizontal gap (scheme units) between auto-placed nodes; keeps chains compact.
 _NODE_GAP = 150.0
+
+# Widget types whose parameters are executable Python. Excluded from the
+# Conductor catalog and rejected on add/configure unless the user opts in
+# (``--conductor-allow-code``): a connected agent must not gain arbitrary
+# code execution through widget parameters.
+UNSAFE_WIDGET_QNAMES = frozenset({"derzug.widgets.code.Code"})
 
 
 def _widget_class(qualified_name: str) -> type | None:
@@ -67,13 +75,6 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _json_safe(item) for key, item in value.items()}
     return str(value)
-
-
-def _node_id(node: Any) -> str:
-    """Return a stable id for one node (DerZug node id when present)."""
-    properties = getattr(node, "properties", None) or {}
-    node_id = str(properties.get(NODE_ID_KEY, "")).strip()
-    return node_id or str(id(node))
 
 
 def _model_field_names(model: object) -> set[str]:
@@ -135,6 +136,11 @@ def _patch_summary(obj: object) -> dict[str, Any] | None:
     return {"shape": list(obj.shape), "dims": list(obj.dims)}
 
 
+def _widget_busy(widget: object) -> bool:
+    """Return True while the widget's async execution is in flight."""
+    return bool(getattr(widget, "_async_busy_state", False))
+
+
 def _widget_error(widget: object) -> str | None:
     """Return the widget's last unhandled error message, when tracked."""
     exc = getattr(widget, "_last_error_exc", None)
@@ -170,8 +176,23 @@ class CanvasController:
     {'title': None, 'nodes': [...], 'links': [...], 'active_source_id': None}
     """
 
-    def __init__(self, window: object) -> None:
+    def __init__(self, window: object, *, allow_code: bool = False) -> None:
         self._window = window
+        self._allow_code = allow_code
+
+    def _check_type_allowed(self, qualified_name: str) -> None:
+        """Raise unless ``qualified_name`` may be authored/configured."""
+        if not self._allow_code and qualified_name in UNSAFE_WIDGET_QNAMES:
+            raise PermissionError(
+                f"widget type {qualified_name!r} executes arbitrary Python and is "
+                "disabled for agents; start DerZug with --conductor-allow-code "
+                "to enable it"
+            )
+
+    def _check_widget_allowed(self, widget: object) -> None:
+        """Raise unless ``widget``'s type may be configured by an agent."""
+        widget_type = type(widget)
+        self._check_type_allowed(f"{widget_type.__module__}.{widget_type.__name__}")
 
     def _document(self) -> Any:
         """Return the window's current document (undoable scheme editor)."""
@@ -199,7 +220,7 @@ class CanvasController:
         )
         position = getattr(node, "position", None)
         return NodeState(
-            id=_node_id(node),
+            id=ensure_node_id(node),
             type=widget_type.__name__,
             qualified_name=qualified_name,
             title=getattr(node, "title", ""),
@@ -211,6 +232,7 @@ class CanvasController:
             outputs=_ports(getattr(description, "outputs", ()), "output"),
             is_source=bool(getattr(widget, "is_source", False)),
             is_active_source=widget is active,
+            busy=_widget_busy(widget),
             error=_widget_error(widget),
         )
 
@@ -230,9 +252,9 @@ class CanvasController:
         for link in scheme.links:
             links.append(
                 LinkState(
-                    source_id=_node_id(link.source_node),
+                    source_id=ensure_node_id(link.source_node),
                     source_port=link.source_channel.name,
-                    sink_id=_node_id(link.sink_node),
+                    sink_id=ensure_node_id(link.sink_node),
                     sink_port=link.sink_channel.name,
                     enabled=bool(getattr(link, "enabled", True)),
                 )
@@ -269,7 +291,10 @@ class CanvasController:
         if registry is None:
             return []
         types = [
-            self._widget_type_info(description) for description in registry.widgets()
+            self._widget_type_info(description)
+            for description in registry.widgets()
+            if self._allow_code
+            or description.qualified_name not in UNSAFE_WIDGET_QNAMES
         ]
         return sorted(
             types, key=lambda widget_type: (widget_type.category, widget_type.name)
@@ -278,7 +303,7 @@ class CanvasController:
     def _node_for_id(self, node_id: str) -> Any:
         """Return the scheme node with ``node_id``, or raise ``KeyError``."""
         for node in self._scheme().nodes:
-            if _node_id(node) == node_id:
+            if ensure_node_id(node) == node_id:
                 return node
         raise KeyError(f"no node with id {node_id!r}")
 
@@ -323,6 +348,7 @@ class CanvasController:
         returned prior dict to undo. Must be called on the Qt main thread.
         """
         widget = self._widget_for_id(node_id)
+        self._check_widget_allowed(widget)
         model = getattr(type(widget), "params_model", None)
         if model is None:
             raise ValueError(f"node {node_id!r} has no params model")
@@ -336,6 +362,7 @@ class CanvasController:
         Like :meth:`set_params`, a dict is a partial update merged onto current.
         """
         widget = self._widget_for_id(node_id)
+        self._check_widget_allowed(widget)
         model = getattr(type(widget), "view_model", None)
         if model is None:
             raise ValueError(f"node {node_id!r} has no view model")
@@ -350,6 +377,7 @@ class CanvasController:
         registry = getattr(self._window, "widget_registry", None)
         for description in registry.widgets() if registry else ():
             if widget_type in (description.name, description.qualified_name):
+                self._check_type_allowed(description.qualified_name)
                 return description
         raise ValueError(f"unknown widget type: {widget_type!r}")
 
@@ -382,8 +410,11 @@ class CanvasController:
         node = SchemeNode(
             description, title=title or description.name, position=placement
         )
+        # Persist the id before the node enters the undo stack, so it survives
+        # undo/redo cycles and save/reload.
+        node_id = ensure_node_id(node)
         self._document().addNode(node)
-        return _node_id(node)
+        return node_id
 
     def remove_node(self, node_id: str) -> None:
         """Remove one node (and its links) from the canvas (undoable)."""
@@ -409,9 +440,9 @@ class CanvasController:
         """Remove the link matching the given endpoints (undoable); else KeyError."""
         for link in list(self._scheme().links):
             if (
-                _node_id(link.source_node) == source_id
+                ensure_node_id(link.source_node) == source_id
                 and link.source_channel.name == source_port
-                and _node_id(link.sink_node) == sink_id
+                and ensure_node_id(link.sink_node) == sink_id
                 and link.sink_channel.name == sink_port
             ):
                 self._document().removeLink(link)
@@ -419,8 +450,21 @@ class CanvasController:
         raise KeyError(f"no link {source_id}:{source_port} -> {sink_id}:{sink_port}")
 
     def run(self, node_id: str) -> None:
-        """Re-run one node's widget; sources re-emit and propagate downstream."""
+        """Re-run one node's widget; sources re-emit and propagate downstream.
+
+        Execution is asynchronous: this schedules the run and returns. Poll
+        :meth:`busy_nodes` (or the ``busy`` flag in node state) for completion.
+        """
         self._widget_for_id(node_id).run()
+
+    def busy_nodes(self) -> list[str]:
+        """Return the ids of nodes whose widgets are currently executing."""
+        scheme = self._scheme()
+        return [
+            ensure_node_id(node)
+            for node in scheme.nodes
+            if _widget_busy(scheme.widget_for_node(node))
+        ]
 
     def show_node(
         self, node_id: str, *, x: float | None = None, y: float | None = None
@@ -478,7 +522,7 @@ class CanvasController:
     def get_focused_node(self) -> str | None:
         """Return the id of the node whose widget window is currently focused."""
         node = self._node_for_window(QApplication.activeWindow())
-        return _node_id(node) if node is not None else None
+        return ensure_node_id(node) if node is not None else None
 
     def get_focus(self) -> FocusState:
         """Return what the user is looking at and pointing to (shared context)."""
@@ -489,11 +533,11 @@ class CanvasController:
             widget.window() if (widget := QApplication.widgetAt(position)) else None
         )
         return FocusState(
-            focused_node_id=_node_id(focused_node) if focused_node else None,
+            focused_node_id=ensure_node_id(focused_node) if focused_node else None,
             focused_window_title=active.windowTitle() if active is not None else None,
             cursor=CursorState(
                 screen_xy=(position.x(), position.y()),
-                over_node_id=_node_id(over_node) if over_node else None,
+                over_node_id=ensure_node_id(over_node) if over_node else None,
                 data_position=self._data_position(over_node),
             ),
         )
