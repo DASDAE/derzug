@@ -7,7 +7,6 @@ command for a known agent, and best-effort open it in a new terminal window.
 from __future__ import annotations
 
 import logging
-import os
 import shlex
 import shutil
 import subprocess
@@ -50,7 +49,7 @@ def _open_in_terminal(command: list[str], cwd: str) -> bool:
             f'"cd {shlex.quote(cwd)} && exec {joined}"'
         )
         return _spawn(["osascript", "-e", script])
-    if os.name == "nt":
+    if sys.platform == "win32":
         if shutil.which("wt"):
             return _spawn(["wt", "-d", cwd, *command])
         return _spawn(["cmd", "/c", "start", "", "cmd", "/k", joined], spawn_cwd=cwd)
