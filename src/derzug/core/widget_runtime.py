@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-import weakref
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from threading import RLock
 
 from AnyQt.QtCore import QObject, Signal
 
@@ -35,6 +35,41 @@ class _AsyncExecutionBridge(QObject):
     error_ready = Signal(int, int, object)
 
 
+class _CompletionTarget:
+    """Synchronize worker delivery with QObject teardown."""
+
+    def __init__(self, bridge: _AsyncExecutionBridge) -> None:
+        self._bridge: _AsyncExecutionBridge | None = bridge
+        self._lock = RLock()
+
+    def detach(self) -> None:
+        """Prevent future worker callbacks from touching the Qt bridge."""
+        with self._lock:
+            self._bridge = None
+
+    def emit_result(self, generation: int, token: int, result: object) -> None:
+        """Emit one result while teardown cannot invalidate the bridge."""
+        with self._lock:
+            bridge = self._bridge
+            if bridge is None:
+                return
+            try:
+                bridge.result_ready.emit(generation, token, result)
+            except RuntimeError:
+                return
+
+    def emit_error(self, generation: int, token: int, exc: Exception) -> None:
+        """Emit one error while teardown cannot invalidate the bridge."""
+        with self._lock:
+            bridge = self._bridge
+            if bridge is None:
+                return
+            try:
+                bridge.error_ready.emit(generation, token, exc)
+            except RuntimeError:
+                return
+
+
 class WidgetExecutionRuntime:
     """Own worker-thread execution, lifecycle, and stale-result suppression."""
 
@@ -58,6 +93,7 @@ class WidgetExecutionRuntime:
         self._bridge = _AsyncExecutionBridge(owner)
         self._bridge.result_ready.connect(self._on_result_ready)
         self._bridge.error_ready.connect(self._on_error_ready)
+        self._completion_target = _CompletionTarget(self._bridge)
         self._executor: ThreadPoolExecutor | None = _SHARED_EXECUTOR
         self._future: Future | None = None
         self._execution_generation = 0
@@ -106,7 +142,7 @@ class WidgetExecutionRuntime:
         future = self._future
         if future is not None and not future.done():
             future.cancel()
-        bridge_ref = weakref.ref(self._bridge)
+        completion_target = self._completion_target
 
         def _done_callback(
             done_future: Future,
@@ -114,23 +150,14 @@ class WidgetExecutionRuntime:
             run_generation: int,
             run_token: int,
         ) -> None:
-            bridge = bridge_ref()
-            if bridge is None:
-                return
             try:
                 result = done_future.result()
             except CancelledError:
                 return
             except Exception as exc:  # pragma: no cover
-                try:
-                    bridge.error_ready.emit(run_generation, run_token, exc)
-                except RuntimeError:
-                    return
+                completion_target.emit_error(run_generation, run_token, exc)
                 return
-            try:
-                bridge.result_ready.emit(run_generation, run_token, result)
-            except RuntimeError:
-                return
+            completion_target.emit_result(run_generation, run_token, result)
 
         self._future = executor.submit(self._execute_request, request)
         self._future.add_done_callback(
@@ -147,6 +174,7 @@ class WidgetExecutionRuntime:
         """Invalidate queued completions without blocking the GUI thread."""
         self._teardown_started = True
         self._execution_generation += 1
+        self._completion_target.detach()
         future = self._future
         if future is not None and not future.done():
             future.cancel()
