@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from derzug.models.annotations import (
     Annotation,
@@ -164,3 +165,79 @@ def test_empty_annotation_set_matches_no_rows():
     out = filter_contents_by_annotations(df, annotation_set)
 
     assert out.empty
+
+
+def test_overlap_mask_is_columnar_and_preserves_dataframe_index(monkeypatch):
+    """Overlap filtering should not iterate Series rows or replace index labels."""
+    df = _contents_df().set_axis(["a", "b", "c"])
+    annotation_set = AnnotationSet(
+        dims=("distance",),
+        annotations=(
+            Annotation(
+                id="p1",
+                geometry=PointGeometry(coords={"distance": 125.0}),
+            ),
+        ),
+    )
+
+    def fail_iterrows(self):
+        raise AssertionError("annotation filtering iterated dataframe rows")
+
+    monkeypatch.setattr(pd.DataFrame, "iterrows", fail_iterrows)
+
+    mask = annotation_overlap_mask(df, annotation_set)
+
+    assert list(mask.index) == ["a", "b", "c"]
+    assert list(mask) == [False, True, False]
+
+
+def test_overlap_mask_supports_datetime_bounds_and_reversed_rows():
+    """Datetime extents should compare vectorially and normalize reversed bounds."""
+    start = np.datetime64("2024-01-01T00:00:00")
+    df = pd.DataFrame(
+        {
+            "time_min": [start, start + np.timedelta64(20, "s")],
+            "time_max": [
+                start + np.timedelta64(10, "s"),
+                start + np.timedelta64(15, "s"),
+            ],
+        }
+    )
+    annotation_set = AnnotationSet(
+        dims=("time",),
+        annotations=(
+            Annotation(
+                id="p1",
+                geometry=PointGeometry(
+                    coords={"time": start + np.timedelta64(17, "s")}
+                ),
+            ),
+        ),
+    )
+
+    mask = annotation_overlap_mask(df, annotation_set)
+
+    assert list(mask) == [False, True]
+
+
+def test_overlap_mask_treats_missing_object_bounds_as_non_matches():
+    """Nullable metadata must not break columnar comparisons or match a row."""
+    df = pd.DataFrame(
+        {
+            "distance_min": pd.Series([0.0, pd.NA], dtype=object),
+            "distance_max": pd.Series([10.0, pd.NA], dtype=object),
+        }
+    )
+    annotation_set = AnnotationSet(
+        dims=("distance",),
+        annotations=(
+            Annotation(
+                id="p1",
+                geometry=PointGeometry(coords={"distance": 5.0}),
+            ),
+        ),
+    )
+
+    mask = annotation_overlap_mask(df, annotation_set)
+
+    assert list(mask) == [True, False]

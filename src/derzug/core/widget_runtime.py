@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import weakref
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
@@ -10,6 +11,11 @@ from dataclasses import dataclass
 from AnyQt.QtCore import QObject, Signal
 
 from derzug.workflow import Pipe, Task
+
+_SHARED_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(2, min(4, os.cpu_count() or 2)),
+    thread_name_prefix="DerZugWorker",
+)
 
 
 @dataclass(frozen=True)
@@ -52,10 +58,7 @@ class WidgetExecutionRuntime:
         self._bridge = _AsyncExecutionBridge(owner)
         self._bridge.result_ready.connect(self._on_result_ready)
         self._bridge.error_ready.connect(self._on_error_ready)
-        self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix=f"{type(owner).__name__}Worker",
-        )
+        self._executor: ThreadPoolExecutor | None = _SHARED_EXECUTOR
         self._future: Future | None = None
         self._execution_generation = 0
         self._latest_execution_token = 0
@@ -141,18 +144,15 @@ class WidgetExecutionRuntime:
         )
 
     def shutdown(self) -> None:
-        """Stop the worker pool and invalidate any queued completions."""
+        """Invalidate queued completions without blocking the GUI thread."""
         self._teardown_started = True
         self._execution_generation += 1
         future = self._future
         if future is not None and not future.done():
             future.cancel()
         self._future = None
-        executor = self._executor
         self._executor = None
         self._active_execution_token = None
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
 
     def _on_result_ready(self, generation: int, token: int, result: object) -> None:
         """Apply the newest worker result on the widget thread."""

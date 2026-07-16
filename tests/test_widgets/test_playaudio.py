@@ -251,6 +251,19 @@ class TestPlayAudio:
         assert rate == pytest.approx(1_000_000.0)
         assert PlayAudio._default_time_scale(rate, coord.size) == pytest.approx(5e-6)
 
+    def test_rate_validation_checks_long_coordinates_in_bounded_blocks(
+        self, monkeypatch
+    ):
+        """Uniform-rate validation should avoid one full-length diff allocation."""
+        coord = np.arange(1_100_000, dtype=np.float64) / 1000.0
+
+        def fail_diff(*_args, **_kwargs):
+            raise AssertionError("rate validation called np.diff")
+
+        monkeypatch.setattr(np, "diff", fail_diff)
+
+        assert PlayAudio._infer_native_rate_hz(coord) == pytest.approx(1000.0)
+
     def test_prepare_pcm_audio_zeroes_non_finite_and_normalizes(self):
         """PCM prep should zero invalid samples and normalize finite values."""
         pcm_bytes, sample_count = PlayAudio._prepare_pcm_audio(

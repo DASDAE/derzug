@@ -25,7 +25,7 @@ from derzug.models.selection import SelectParams
 from derzug.utils.display import format_display
 from derzug.utils.misc import ordered_pair
 from derzug.utils.parsing import parse_coord_text_value
-from derzug.utils.spool import normalize_dims_value
+from derzug.utils.spool import normalize_dims_value, series_has_visible_values
 
 
 def _values_equal(left: Any, right: Any) -> bool:
@@ -401,9 +401,7 @@ class SelectionState:
         except Exception:
             options: tuple[str, ...] = ()
         else:
-            visible_cols = [
-                c for c in df.columns if df[c].astype(str).str.strip().ne("").any()
-            ]
+            visible_cols = [c for c in df.columns if series_has_visible_values(df[c])]
             dims: list[str] = []
             if "dims" in df.columns:
                 seen: set[str] = set(visible_cols)
@@ -1055,8 +1053,9 @@ class SelectionPanel(QWidget):
                 remove_button = QPushButton("-", self.spool_rows_container)
                 remove_button.setToolTip("Remove this spool filter row")
                 remove_button.clicked.connect(
-                    lambda _checked=False,
-                    index=row_index: self._handle_spool_remove_clicked(index)
+                    lambda _checked=False, index=row_index: (
+                        self._handle_spool_remove_clicked(index)
+                    )
                 )
                 self.spool_rows_layout.addWidget(combo, row_index, 0)
                 self.spool_rows_layout.addWidget(value_edit, row_index, 1)

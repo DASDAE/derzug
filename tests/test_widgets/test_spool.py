@@ -28,9 +28,12 @@ from derzug.utils.testing import (
 )
 from derzug.widgets.spool import (
     Spool,
+    SpoolTask,
     SpoolTransformTask,
     _apply_select_rows,
+    _execute_spool_snapshot,
     _spool_rows_to_patches,
+    _SpoolExecutionSnapshot,
 )
 
 
@@ -1581,6 +1584,58 @@ class TestSpool:
         assert fake.slice_requests == [slice(1, 2, None)]
         assert len(list(out)) == 1
         assert next(iter(out)).attrs.tag == "second"
+
+    def test_output_only_snapshot_skips_select_and_chunk_transforms(self):
+        """Table selection should reuse the prepared display spool unchanged."""
+
+        class _PreparedSpool:
+            def select(self, **_kwargs):
+                raise AssertionError("output-only emit repeated selection")
+
+            def chunk(self, **_kwargs):
+                raise AssertionError("output-only emit repeated chunking")
+
+        prepared = _PreparedSpool()
+        snapshot = _SpoolExecutionSnapshot(
+            source_mode="display",
+            source_name=None,
+            source_spool=prepared,
+            display_spool=prepared,
+            task=SpoolTransformTask(unpack_single_patch=False),
+            selected_source_rows=frozenset(),
+            visible_row_count=2,
+        )
+
+        result = _execute_spool_snapshot(snapshot)
+
+        assert result.display_spool is prepared
+        assert result.output_spool is prepared
+
+    def test_settings_snapshot_reuses_loaded_source_without_update(self):
+        """Transform changes should not reload or update an unchanged source."""
+
+        class _LoadedSpool:
+            def update(self):
+                raise AssertionError("cached source was updated")
+
+            def get_contents(self):
+                return pd.DataFrame({"tag": ["first", "second"]})
+
+        loaded = _LoadedSpool()
+        snapshot = _SpoolExecutionSnapshot(
+            source_mode="settings",
+            source_name="cached",
+            source_spool=loaded,
+            task=SpoolTask(unpack_single_patch=False),
+            selected_source_rows=frozenset(),
+            visible_row_count=2,
+            settings_source_identity=("cached",),
+        )
+
+        result = _execute_spool_snapshot(snapshot)
+
+        assert result.source_spool is loaded
+        assert result.display_spool is loaded
 
     def test_selected_row_token_uses_contents_only(self, spool_widget):
         """Persisting selection metadata should not iterate patches on the UI thread."""

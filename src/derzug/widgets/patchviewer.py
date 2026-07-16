@@ -32,6 +32,10 @@ from derzug.utils.display import format_display
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchPassThroughTask
 
+_MAX_STATS_SAMPLES = 1_000_000
+_MAX_LINE_SAMPLES = 100_000
+_MAX_IMAGE_SAMPLES = 1_000_000
+
 
 @dataclass(frozen=True)
 class _NodeDescriptor:
@@ -47,6 +51,7 @@ class _NodeDescriptor:
     x_label: str = "Sample"
     y_label: str = "Value"
     summary: str = ""
+    stats: str = ""
 
 
 class PatchViewerParams(BaseModel):
@@ -346,6 +351,7 @@ class PatchViewer(ZugWidget):
 
     def _coord_descriptor(self, dim: str, values: np.ndarray) -> _NodeDescriptor:
         """Build a descriptor for one coordinate array."""
+        stats = self._numeric_stats_text(values)
         return _NodeDescriptor(
             path=f"coords.{dim}",
             kind="array",
@@ -355,13 +361,15 @@ class PatchViewer(ZugWidget):
             dtype=str(values.dtype),
             plot_title=f"Coord: {dim}",
             y_label=str(dim),
-            summary=self._format_array_summary(values),
+            summary=self._format_array_summary(values, stats=stats),
+            stats=stats,
         )
 
     def _add_data_node(self, root: QTreeWidgetItem) -> None:
         """Add the main patch data node and mark it as the default preview."""
         assert self._patch is not None
         data = np.asarray(self._patch.data)
+        stats = self._numeric_stats_text(data)
         self._default_item = self._add_node(
             root,
             _NodeDescriptor(
@@ -374,7 +382,8 @@ class PatchViewer(ZugWidget):
                 plot_title="Patch data",
                 x_label=self._patch.dims[-1] if self._patch.dims else "Sample",
                 y_label=self._patch.dims[0] if self._patch.dims else "Trace",
-                summary=self._format_array_summary(data),
+                summary=self._format_array_summary(data, stats=stats),
+                stats=stats,
             ),
         )
 
@@ -448,8 +457,10 @@ class PatchViewer(ZugWidget):
         descriptor: _NodeDescriptor,
     ) -> None:
         """Render a 1D array preview."""
-        y_values = self._coerce_plot_axis(values)
-        x_values = np.arange(values.size, dtype=np.float64)
+        step = max(1, int(np.ceil(values.size / _MAX_LINE_SAMPLES)))
+        preview = values[::step]
+        y_values = self._coerce_plot_axis(preview)
+        x_values = np.arange(0, values.size, step, dtype=np.float64)[: preview.size]
         self._line_curve.setData(x_values, y_values)
         self._line_plot_item.setTitle(descriptor.plot_title or descriptor.label)
         self._line_plot_item.setLabel("bottom", "Sample")
@@ -465,7 +476,13 @@ class PatchViewer(ZugWidget):
         descriptor: _NodeDescriptor,
     ) -> None:
         """Render a 2D array preview."""
-        self._image_item.setImage(values, autoLevels=True)
+        preview = self._strided_sample(values, _MAX_IMAGE_SAMPLES)
+        if (
+            np.issubdtype(preview.dtype, np.floating)
+            and preview.dtype.itemsize > np.dtype(np.float32).itemsize
+        ):
+            preview = preview.astype(np.float32)
+        self._image_item.setImage(preview, autoLevels=True)
         self._image_plot_item.setTitle(descriptor.plot_title or descriptor.label)
         self._image_plot_item.setLabel("bottom", descriptor.x_label or "Sample")
         self._image_plot_item.setLabel("left", descriptor.y_label or "Trace")
@@ -495,10 +512,16 @@ class PatchViewer(ZugWidget):
         self._preview_mode = "empty"
         self._current_descriptor = None
 
-    def _format_array_summary(self, values: np.ndarray) -> str:
+    def _format_array_summary(
+        self,
+        values: np.ndarray,
+        *,
+        stats: str | None = None,
+    ) -> str:
         """Return a compact one-line summary for an array."""
         parts = [f"shape={tuple(values.shape)}", f"dtype={values.dtype}"]
-        stats = self._numeric_stats_text(values)
+        if stats is None:
+            stats = self._numeric_stats_text(values)
         if stats:
             parts.append(stats)
         return " ".join(parts)
@@ -528,9 +551,8 @@ class PatchViewer(ZugWidget):
             lines.append(f"dtype: {descriptor.dtype}")
         if descriptor.kind == "array":
             values = np.asarray(descriptor.value)
-            stats = self._numeric_stats_text(values)
-            if stats:
-                lines.append(f"stats: {stats}")
+            if descriptor.stats:
+                lines.append(f"stats: {descriptor.stats}")
             lines.append(f"value: {np.array2string(values, threshold=20)}")
         else:
             lines.append(f"value: {descriptor.value!r}")
@@ -541,17 +563,36 @@ class PatchViewer(ZugWidget):
         """Return compact numeric stats when the array supports them."""
         if values.size == 0 or not np.issubdtype(values.dtype, np.number):
             return ""
-        min_value = float(np.nanmin(values))
-        max_value = float(np.nanmax(values))
-        return f"min={format_display(min_value)} max={format_display(max_value)}"
+        sampled = PatchViewer._strided_sample(values, _MAX_STATS_SAMPLES)
+        min_value = float(np.nanmin(sampled))
+        max_value = float(np.nanmax(sampled))
+        prefix = "sampled " if sampled.size < values.size else ""
+        return (
+            f"{prefix}min={format_display(min_value)} max={format_display(max_value)}"
+        )
+
+    @staticmethod
+    def _strided_sample(values: np.ndarray, target_size: int) -> np.ndarray:
+        """Return a view-like regular sample bounded near ``target_size``."""
+        values = np.asarray(values)
+        if values.size <= target_size or values.ndim == 0:
+            return values
+        scale = (values.size / target_size) ** (1 / values.ndim)
+        step = max(1, int(np.ceil(scale)))
+        slices = tuple(slice(None, None, step) for _ in values.shape)
+        sampled = values[slices]
+        while sampled.size > target_size:
+            largest_axis = int(np.argmax(sampled.shape))
+            axis_slices = [slice(None) for _ in sampled.shape]
+            axis_slices[largest_axis] = slice(None, None, 2)
+            sampled = sampled[tuple(axis_slices)]
+        return sampled
 
     @staticmethod
     def _format_preview_header(descriptor: _NodeDescriptor) -> str:
         """Build the title line shown above the preview panel."""
         kind = descriptor.kind.upper()
-        return (
-            f"<b>{descriptor.path}</b> " f"<span style='color: gray;'>[{kind}]</span>"
-        )
+        return f"<b>{descriptor.path}</b> <span style='color: gray;'>[{kind}]</span>"
 
     @staticmethod
     def _format_stats_label(descriptor: _NodeDescriptor) -> str:

@@ -169,6 +169,7 @@ def _default_plot_dims(dims: tuple[str, ...]) -> tuple[str, str]:
 # cost stays bounded for very large arrays. Patches at or below this size are
 # processed exactly.
 _STAT_SAMPLE_TARGET = 1_000_000
+_DISPLAY_SAMPLE_TARGET = 4_000_000
 
 
 def _strided_subsample(data: np.ndarray, target_size: int) -> np.ndarray:
@@ -839,7 +840,12 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
             data = np.asarray(patch.data)
             if data.ndim != 2:
                 raise ValueError(f"expected 2D data, got shape {data.shape}")
-            display_data = np.abs(data) if np.iscomplexobj(data) else data
+            display_source = _strided_subsample(data, _DISPLAY_SAMPLE_TARGET)
+            display_data = (
+                np.abs(display_source) if np.iscomplexobj(data) else display_source
+            )
+            if np.issubdtype(display_data.dtype, np.number):
+                display_data = np.asarray(display_data, dtype=np.float32)
             y_dim, x_dim = patch.dims
             x_coord_values = np.asarray(patch.get_array(x_dim))
             y_coord_values = np.asarray(patch.get_array(y_dim))
@@ -1175,8 +1181,8 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
             rect = QRectF(
                 x0 - (x_step / 2),
                 y0 - (y_step / 2),
-                x_step * display_data.shape[1],
-                y_step * display_data.shape[0],
+                x_step * prepared.data.shape[1],
+                y_step * prepared.data.shape[0],
             )
             self._image_item.setRect(rect)
             self._axes = axes

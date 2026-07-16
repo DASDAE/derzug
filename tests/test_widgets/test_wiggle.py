@@ -671,6 +671,23 @@ class TestWiggle:
         assert np.allclose(after[0], before[0])
         assert np.allclose(after[1], before[1])
 
+    def test_gain_change_reuses_normalized_offset_state(
+        self, wiggle_widget, small_patch_2d, monkeypatch
+    ):
+        """Gain-only changes should rescale cached traces without a full refresh."""
+        wiggle_widget.set_patch(small_patch_2d)
+        before = wiggle_widget._render_state
+
+        def fail_refresh():
+            raise AssertionError("gain change requested a full render")
+
+        monkeypatch.setattr(wiggle_widget, "_request_ui_refresh", fail_refresh)
+        wiggle_widget._gain_slider.setValue(wiggle_widget.gain + 1)
+
+        after = wiggle_widget._render_state
+        assert after is not before
+        assert after.normalized_rows is before.normalized_rows
+
     def test_gain_slider_uses_linear_percent_range(self, wiggle_widget, small_patch_2d):
         """The gain slider should span 1% to 1200% on a linear mapping."""
         wiggle_widget.set_patch(small_patch_2d)

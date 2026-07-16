@@ -615,6 +615,15 @@ class TestZugWidgetAsyncExecution:
 
             assert widget.results[-1] == "done"
 
+    def test_async_widgets_share_bounded_worker_pool(self):
+        """Widget instances should not create one executor and thread pool each."""
+        with widget_context(_AsyncWidget) as first:
+            with widget_context(_AsyncWidget) as second:
+                assert (
+                    first._execution_runtime._executor
+                    is second._execution_runtime._executor
+                )
+
     def test_async_run_sets_standard_busy_state_while_running(self, qtbot):
         """Async dispatch should drive Orange's processing-state spinner."""
         with widget_context(_AsyncWidget) as widget:

@@ -12,6 +12,7 @@ import json
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,7 @@ def _portable_task_payload(task: Task) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if getattr(task_cls, "__portable_adapter_factory__", None) == "callable_task":
         code_path = (
-            f"{CallableTaskAdapter.__module__}:" f"{CallableTaskAdapter.__qualname__}"
+            f"{CallableTaskAdapter.__module__}:{CallableTaskAdapter.__qualname__}"
         )
         parameters = {
             "function_code_path": task.code_path(),
@@ -236,7 +237,7 @@ class PipeBuilder:
             edges=tuple(self.edges),
             node_names=self.node_names,
         )
-        pipe.validate()
+        pipe.ensure_validated()
         return pipe
 
 
@@ -367,14 +368,12 @@ class PipeGraph(WorkflowFrozenModel):
             if edge.from_port in scalar_outputs:
                 if edge.to_port not in scalar_inputs:
                     raise ValueError(
-                        f"scalar port {edge.from_port!r} "
-                        "must connect to a scalar input"
+                        f"scalar port {edge.from_port!r} must connect to a scalar input"
                     )
             elif edge.from_port in stream_outputs:
                 if edge.to_port not in stream_inputs:
                     raise ValueError(
-                        f"stream port {edge.from_port!r} "
-                        "must connect to a stream input"
+                        f"stream port {edge.from_port!r} must connect to a stream input"
                     )
                 stream_input_counts[edge.to_node] += 1
                 stream_consumers[(edge.from_node, edge.from_port)] += 1
@@ -391,3 +390,13 @@ class PipeGraph(WorkflowFrozenModel):
                 raise ValueError(
                     f"stream output {handle}:{port} has multiple consumers"
                 )
+
+    @cached_property
+    def _validation_complete(self) -> bool:
+        """Validate this immutable graph once and cache successful completion."""
+        self.validate()
+        return True
+
+    def ensure_validated(self) -> None:
+        """Ensure this immutable graph has passed validation."""
+        _ = self._validation_complete

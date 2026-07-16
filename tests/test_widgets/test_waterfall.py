@@ -24,6 +24,7 @@ from derzug.utils.testing import (
 )
 from derzug.widgets.selection import PatchSelectionBasis
 from derzug.widgets.waterfall import (
+    _DISPLAY_SAMPLE_TARGET,
     _STAT_SAMPLE_TARGET,
     Waterfall,
     _strided_subsample,
@@ -1152,8 +1153,8 @@ class TestWaterfall:
         item = waterfall_widget._annotation_items[annotation_id]
         opened: list[str] = []
 
-        waterfall_widget._annotation_controller.edit_annotation = (
-            lambda current_id: opened.append(current_id) or True
+        waterfall_widget._annotation_controller.edit_annotation = lambda current_id: (
+            opened.append(current_id) or True
         )
 
         waterfall_widget._annotation_controller.on_item_double_clicked(item)
@@ -4995,6 +4996,15 @@ class TestStridedSubsample:
         # Rounding of per-axis strides keeps the result within a small
         # constant factor of the requested target.
         assert 10_000 / 4 <= sampled.size <= 10_000 * 4
+
+    def test_display_sampling_caps_large_view_without_copying(self):
+        """The image preparation target should yield a bounded strided view."""
+        data = np.broadcast_to(np.asarray(1.0), (10_000, 10_000))
+
+        sampled = _strided_subsample(data, _DISPLAY_SAMPLE_TARGET)
+
+        assert sampled.size <= _DISPLAY_SAMPLE_TARGET
+        assert np.shares_memory(sampled, data)
 
     def test_short_axis_keeps_at_least_one_row(self):
         """A very short axis still contributes at least one sample row."""

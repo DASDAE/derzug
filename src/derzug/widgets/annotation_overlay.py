@@ -872,6 +872,7 @@ class AnnotationOverlayController:
         self.layer_active = False
         self.toolbox_hidden = True
         self.annotation_set: AnnotationSet | None = None
+        self._annotations_by_id: dict[str, Annotation] = {}
         self.annotation_items: dict[str, pg.GraphicsObject] = {}
         self.active_annotation_id: str | None = None
         self.selected_annotation_ids: set[str] = set()
@@ -883,6 +884,9 @@ class AnnotationOverlayController:
         self._snap_to_annotations = False
         self._applying_live_snap = False
         self._slice_coords: dict[str, Any] = {}
+        self._snap_candidates_cache: (
+            tuple[tuple[int, int], tuple[tuple[str, float, float], ...]] | None
+        ) = None
 
         self.toolbox = AnnotationToolbox(self._host._plot_widget, tools=self._tools)
         self.toolbox.toolChanged.connect(self.set_tool)
@@ -1118,6 +1122,7 @@ class AnnotationOverlayController:
         dims = self.annotation_dims()
         if dims is None:
             self.annotation_set = None
+            self._annotations_by_id.clear()
             return
         if self.annotation_set is not None and set(self.annotation_set.dims) == set(
             dims
@@ -1129,15 +1134,20 @@ class AnnotationOverlayController:
                         "provenance": {**self.annotation_set.provenance, "dims": dims},
                     }
                 )
+                self._rebuild_annotation_index()
             return
         self.clear_annotation_items()
         self.annotation_set = self.build_empty_set()
+        self._rebuild_annotation_index()
         self.active_annotation_id = None
         self.selected_annotation_ids.clear()
 
     def clear_annotation_items(self) -> None:
         """Remove all overlay items from the host plot."""
-        for item in self.annotation_items.values():
+        # Removing a graphics item may synchronously emit a view-range signal.
+        # Iterate over a stable snapshot so those callbacks can safely observe
+        # or update the live mapping.
+        for item in tuple(self.annotation_items.values()):
             self._host._plot_item.removeItem(item)
         self.annotation_items.clear()
         self.clear_preview()
@@ -1146,12 +1156,15 @@ class AnnotationOverlayController:
         """Clear all annotations and overlay state."""
         self.clear_annotation_items()
         self.annotation_set = None
+        self._annotations_by_id.clear()
+        self._invalidate_snap_candidates()
         self.active_annotation_id = None
         self.selected_annotation_ids.clear()
 
     def rebuild_items(self) -> None:
         """Re-render overlay items from the current annotation set."""
         self.clear_annotation_items()
+        self._rebuild_annotation_index()
         if self.annotation_set is None:
             return
         dims = self.annotation_dims()
@@ -1170,6 +1183,40 @@ class AnnotationOverlayController:
         if self.active_annotation_id not in available_ids:
             self.active_annotation_id = None
         self.refresh_item_styles()
+
+    def _rebuild_annotation_index(self) -> None:
+        """Rebuild constant-time annotation lookup for the current model."""
+        annotations = (
+            () if self.annotation_set is None else self.annotation_set.annotations
+        )
+        self._annotations_by_id = {
+            annotation.id: annotation for annotation in annotations
+        }
+        self._invalidate_snap_candidates()
+
+    def _invalidate_snap_candidates(self) -> None:
+        """Discard cached plot-space annotation anchors."""
+        self._snap_candidates_cache = None
+
+    def _replace_annotation_items(self, annotation_ids: set[str]) -> None:
+        """Update only graphics items whose model or representation changed."""
+        for annotation_id in annotation_ids:
+            old_item = self.annotation_items.pop(annotation_id, None)
+            if old_item is not None:
+                self._host._plot_item.removeItem(old_item)
+            annotation = self._annotations_by_id.get(annotation_id)
+            if annotation is None or not self._annotation_matches_slice(annotation):
+                continue
+            item = self._build_item_for_annotation(annotation)
+            if item is None:
+                continue
+            self.annotation_items[annotation_id] = item
+            self._host._plot_item.addItem(item)
+        available_ids = set(self.annotation_items)
+        self.selected_annotation_ids &= available_ids
+        if self.active_annotation_id not in available_ids:
+            self.active_annotation_id = None
+        self.refresh_item_styles(annotation_ids)
 
     def activate_layer(self) -> None:
         """Activate the annotation layer and show the toolbox."""
@@ -1708,12 +1755,7 @@ class AnnotationOverlayController:
 
     def annotation_by_id(self, annotation_id: str) -> Annotation | None:
         """Return one annotation from the current set."""
-        if self.annotation_set is None:
-            return None
-        for annotation in self.annotation_set.annotations:
-            if annotation.id == annotation_id:
-                return annotation
-        return None
+        return self._annotations_by_id.get(annotation_id)
 
     def set_active_annotation(self, annotation_id: str | None) -> None:
         """Switch active annotation state and refresh item styling."""
@@ -1723,12 +1765,19 @@ class AnnotationOverlayController:
         self.selected_annotation_ids = (
             {annotation_id} if annotation_id is not None else set()
         )
-        if self._point_ids_require_rebuild(
-            old_selected | self.selected_annotation_ids | {old_active, annotation_id}
-        ):
-            self.rebuild_items()
-            return
-        self.refresh_item_styles()
+        changed_ids = (
+            old_selected
+            | self.selected_annotation_ids
+            | {
+                old_active,
+                annotation_id,
+            }
+        )
+        changed_ids.discard(None)
+        rebuild_ids = self._point_ids_requiring_rebuild(changed_ids)
+        if rebuild_ids:
+            self._replace_annotation_items(rebuild_ids)
+        self.refresh_item_styles(changed_ids - rebuild_ids)
 
     def set_selected_annotations(self, annotation_ids: set[str]) -> None:
         """Highlight a set of selected annotations."""
@@ -1741,44 +1790,70 @@ class AnnotationOverlayController:
         }
         self.selected_annotation_ids = selected
         self.active_annotation_id = next(iter(selected)) if len(selected) == 1 else None
-        if self._point_ids_require_rebuild(
-            old_selected | selected | {old_active, self.active_annotation_id}
-        ):
-            self.rebuild_items()
-            return
-        self.refresh_item_styles()
+        changed_ids = (
+            old_selected
+            | selected
+            | {
+                old_active,
+                self.active_annotation_id,
+            }
+        )
+        changed_ids.discard(None)
+        rebuild_ids = self._point_ids_requiring_rebuild(changed_ids)
+        if rebuild_ids:
+            self._replace_annotation_items(rebuild_ids)
+        self.refresh_item_styles(changed_ids - rebuild_ids)
 
     def _point_ids_require_rebuild(self, annotation_ids) -> bool:
         """Return True when selection changes swap render/edit implementations."""
+        return bool(self._point_ids_requiring_rebuild(annotation_ids))
+
+    def _point_ids_requiring_rebuild(self, annotation_ids) -> set[str]:
+        """Return IDs whose selected state changes their graphics class."""
+        out: set[str] = set()
         for annotation_id in annotation_ids:
             if annotation_id is None:
                 continue
             annotation = self.annotation_by_id(annotation_id)
             geometry = None if annotation is None else annotation.geometry
             if isinstance(geometry, PointGeometry):
-                return True
+                out.add(annotation_id)
             if isinstance(geometry, PathGeometry) and len(geometry.points) > 2:
-                return True
-        return False
+                out.add(annotation_id)
+        return out
 
     def store_annotation(self, annotation: Annotation) -> None:
         """Insert or replace one annotation in the current set."""
         self.ensure_annotation_set()
         if self.annotation_set is None:
             return
+        old_active = self.active_annotation_id
+        old_selected = set(self.selected_annotation_ids)
         self.annotation_set = upsert_annotation(self.annotation_set, annotation)
-        self.rebuild_items()
-        self.set_active_annotation(annotation.id)
+        self._rebuild_annotation_index()
+        self.active_annotation_id = annotation.id
+        self.selected_annotation_ids = {annotation.id}
+        changed_ids = old_selected | {annotation.id, old_active}
+        changed_ids.discard(None)
+        self._replace_annotation_items(changed_ids)
         self._notify_annotation_set_changed()
 
     def _store_annotation_set(self, annotations: list[Annotation]) -> None:
         """Replace the full annotation collection without changing selection state."""
         if self.annotation_set is None:
             return
+        old_annotations = self._annotations_by_id
         self.annotation_set = replace_annotation_sequence(
             self.annotation_set, annotations
         )
-        self.rebuild_items()
+        self._rebuild_annotation_index()
+        changed_ids = {
+            annotation_id
+            for annotation_id in set(old_annotations) | set(self._annotations_by_id)
+            if old_annotations.get(annotation_id)
+            != self._annotations_by_id.get(annotation_id)
+        }
+        self._replace_annotation_items(changed_ids)
         self._notify_annotation_set_changed()
 
     def delete_annotation(self, annotation_id: str) -> None:
@@ -1788,8 +1863,15 @@ class AnnotationOverlayController:
         self.annotation_set = delete_annotation_by_id(
             self.annotation_set, annotation_id
         )
-        self.rebuild_items()
-        self.set_active_annotation(None)
+        changed_ids = set(self.selected_annotation_ids) | {
+            annotation_id,
+            self.active_annotation_id,
+        }
+        changed_ids.discard(None)
+        self.active_annotation_id = None
+        self.selected_annotation_ids.clear()
+        self._rebuild_annotation_index()
+        self._replace_annotation_items(changed_ids)
         self._notify_annotation_set_changed()
 
     def edit_annotation(self, annotation_id: str) -> bool:
@@ -2343,21 +2425,42 @@ class AnnotationOverlayController:
         if self.annotation_set is None or self._host._axes is None:
             return []
         axes = self._host._axes
-        candidates: list[tuple[float, float]] = []
+        cache_key = (id(self.annotation_set), id(axes))
+        cached = self._snap_candidates_cache
+        if cached is not None and cached[0] == cache_key:
+            return [
+                (plot_x, plot_y)
+                for annotation_id, plot_x, plot_y in cached[1]
+                if annotation_id != exclude_annotation_id
+            ]
+        candidates: list[tuple[str, float, float]] = []
         for annotation in self.annotation_set.annotations:
-            if annotation.id == exclude_annotation_id:
-                continue
             geometry = annotation.geometry
             if isinstance(geometry, PointGeometry):
-                candidates.append(_point_plot_xy(geometry, axes))
+                plot_x, plot_y = _point_plot_xy(geometry, axes)
+                candidates.append((annotation.id, plot_x, plot_y))
             elif isinstance(geometry, BoxGeometry):
                 xmin, ymin, xmax, ymax = _box_plot_rect(geometry, axes)
                 candidates.extend(
-                    ((xmin, ymin), (xmin, ymax), (xmax, ymin), (xmax, ymax))
+                    (
+                        (annotation.id, xmin, ymin),
+                        (annotation.id, xmin, ymax),
+                        (annotation.id, xmax, ymin),
+                        (annotation.id, xmax, ymax),
+                    )
                 )
             elif isinstance(geometry, PathGeometry) and len(geometry.points) == 2:
-                candidates.extend(_path_plot_xy_points(geometry, axes))
-        return candidates
+                candidates.extend(
+                    (annotation.id, plot_x, plot_y)
+                    for plot_x, plot_y in _path_plot_xy_points(geometry, axes)
+                )
+        frozen = tuple(candidates)
+        self._snap_candidates_cache = (cache_key, frozen)
+        return [
+            (plot_x, plot_y)
+            for annotation_id, plot_x, plot_y in frozen
+            if annotation_id != exclude_annotation_id
+        ]
 
     def _snap_plot_pos(
         self,
@@ -2811,10 +2914,14 @@ class AnnotationOverlayController:
             self.toolbox.move(12, 12)
         self.toolbox.raise_()
 
-    def refresh_item_styles(self) -> None:
+    def refresh_item_styles(self, annotation_ids: set[str] | None = None) -> None:
         """Update pen and handle visibility based on active state."""
-        for annotation_id, item in self.annotation_items.items():
-            annotation = self.annotation_by_id(annotation_id)
+        ids = set(self.annotation_items) if annotation_ids is None else annotation_ids
+        for annotation_id in ids:
+            item = self.annotation_items.get(annotation_id)
+            if item is None:
+                continue
+            annotation = self._annotations_by_id.get(annotation_id)
             label = None if annotation is None else annotation.label
             active = self._interactive and annotation_id == self.active_annotation_id
             selected = (
@@ -2834,6 +2941,9 @@ class AnnotationOverlayController:
                     interactive=self._interactive, label=label
                 )
             item.setPen(pen)
+            # Explicit stacking makes the active item win hit testing even
+            # when an incremental rebuild changes graphics insertion order.
+            item.setZValue(2 if active else 1 if selected else 0)
             if hasattr(item, "setHoverPen"):
                 item.setHoverPen(hover_pen)
             if hasattr(item, "getHandles"):
@@ -2848,7 +2958,9 @@ class AnnotationOverlayController:
     def refresh_active_point_item_size(self) -> None:
         """Keep the active point ROI at a constant screen size across zoom changes."""
         width, height = self._point_plot_size()
-        for item in self.annotation_items.values():
+        # setPos/setSize can synchronously trigger plot range updates while an
+        # incremental annotation replacement is in progress.
+        for item in tuple(self.annotation_items.values()):
             if not isinstance(item, _AnnotationPointROI):
                 continue
             pos = item.pos()
@@ -3103,6 +3215,7 @@ class AnnotationOverlayController:
         width, height = self._point_plot_size()
         tolerance_x = width * _POINT_HIT_RADIUS_FACTOR
         tolerance_y = height * _POINT_HIT_RADIUS_FACTOR
+        closest: tuple[float, pg.GraphicsObject] | None = None
         for annotation_id, item in self.annotation_items.items():
             annotation = self.annotation_by_id(annotation_id)
             if annotation is None or not isinstance(annotation.geometry, PointGeometry):
@@ -3112,8 +3225,12 @@ class AnnotationOverlayController:
                 abs(float(plot_pos[0]) - float(point_x)) <= tolerance_x
                 and abs(float(plot_pos[1]) - float(point_y)) <= tolerance_y
             ):
-                return item
-        return None
+                scaled_x = (float(plot_pos[0]) - float(point_x)) / tolerance_x
+                scaled_y = (float(plot_pos[1]) - float(point_y)) / tolerance_y
+                distance = scaled_x * scaled_x + scaled_y * scaled_y
+                if closest is None or distance < closest[0]:
+                    closest = (distance, item)
+        return None if closest is None else closest[1]
 
     def _build_item_for_annotation(
         self, annotation: Annotation

@@ -305,3 +305,24 @@ def test_executor_retains_requested_stream_final_output_only():
     assert result["collect"] == [2, 4]
     assert "detect" not in result.node_outputs
     assert result.get("split") is None
+
+
+def test_map_resolves_task_runtime_interfaces_once(monkeypatch):
+    """Repeated map items should share immutable task interface metadata."""
+    builder = PipeBuilder()
+    builder.add(AddOne(), name="add")
+    pipe = builder.build()
+    calls = 0
+    original = AddOne.resolved_scalar_input_variables
+
+    def counted(self):
+        nonlocal calls
+        calls += 1
+        return original(self)
+
+    monkeypatch.setattr(AddOne, "resolved_scalar_input_variables", counted)
+
+    results = list(pipe.map([1, 2, 3], output_keys=["add"]))
+
+    assert [result["add"] for result in results] == [2, 3, 4]
+    assert calls == 1

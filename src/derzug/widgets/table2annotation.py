@@ -53,7 +53,8 @@ def _is_missing(value: Any) -> bool:
 
 def _make_table_geometry(
     *,
-    row: pd.Series,
+    row: tuple[Any, ...],
+    column_positions: dict[str, int],
     dims: tuple[str, ...],
     geometry_type: int,
     line_axis_dim: str,
@@ -64,7 +65,7 @@ def _make_table_geometry(
         coords = {}
         for dim in dims:
             col = col_map[dim]
-            val = row[col]
+            val = row[column_positions[col]]
             if _is_missing(val):
                 raise ValueError(f"NaN in column '{col}'")
             coords[dim] = val
@@ -72,43 +73,52 @@ def _make_table_geometry(
 
     dim = line_axis_dim
     col = col_map[dim]
-    val = row[col]
+    val = row[column_positions[col]]
     if _is_missing(val):
         raise ValueError(f"NaN in column '{col}'")
     return SpanGeometry(dim=dim, start=val, end=val)
 
 
-def _table_notes(row: pd.Series, notes_col: str) -> str | None:
+def _table_notes(
+    row: tuple[Any, ...],
+    column_positions: dict[str, int],
+    notes_col: str,
+) -> str | None:
     """Return Annotation.notes from one configured column."""
-    if not notes_col or notes_col not in row.index:
+    if not notes_col or notes_col not in column_positions:
         return None
-    val = row[notes_col]
+    val = row[column_positions[notes_col]]
     if _is_missing(val):
         return None
     return optional_text(val)
 
 
 def _table_label(
-    row: pd.Series,
+    row: tuple[Any, ...],
+    column_positions: dict[str, int],
     label_mode: int,
     label_col: str,
     fixed_label: str,
 ) -> str | None:
     """Return Annotation.label from fixed setting or per-row column."""
     if label_mode == _LABEL_MODE_COLUMN:
-        if label_col and label_col in row.index:
-            val = row[label_col]
+        if label_col and label_col in column_positions:
+            val = row[column_positions[label_col]]
             if not _is_missing(val):
                 return optional_text(val)
         return None
     return optional_text(fixed_label)
 
 
-def _table_tags(row: pd.Series, tags_col: str) -> tuple[str, ...]:
+def _table_tags(
+    row: tuple[Any, ...],
+    column_positions: dict[str, int],
+    tags_col: str,
+) -> tuple[str, ...]:
     """Return comma-separated tags from one row."""
-    if not tags_col or tags_col not in row.index:
+    if not tags_col or tags_col not in column_positions:
         return ()
-    val = row[tags_col]
+    val = row[column_positions[tags_col]]
     if _is_missing(val):
         return ()
     return tuple(t.strip() for t in str(val).split(",") if t.strip())
@@ -134,10 +144,15 @@ class TableToAnnotationTask(Task):
         """Convert each DataFrame row into one annotation when valid."""
         dims = _parse_dims(self.dims_text)
         annotations = []
-        for i, row in data.iterrows():
+        column_positions = {
+            str(column): position for position, column in enumerate(data.columns)
+        }
+        rows = data.itertuples(index=False, name=None)
+        for i, row in zip(data.index, rows, strict=True):
             try:
                 geometry = _make_table_geometry(
                     row=row,
+                    column_positions=column_positions,
                     dims=dims,
                     geometry_type=self.geometry_type,
                     line_axis_dim=self.line_axis_dim,
@@ -150,14 +165,15 @@ class TableToAnnotationTask(Task):
                     id=f"t2a-{i}",
                     geometry=geometry,
                     semantic_type=self.semantic_type_text.strip() or "generic",
-                    notes=_table_notes(row, self.notes_col),
+                    notes=_table_notes(row, column_positions, self.notes_col),
                     label=_table_label(
                         row,
+                        column_positions,
                         self.label_mode,
                         self.label_col,
                         self.fixed_label,
                     ),
-                    tags=_table_tags(row, self.tags_col),
+                    tags=_table_tags(row, column_positions, self.tags_col),
                 )
             )
         return AnnotationSet(dims=dims, annotations=tuple(annotations))

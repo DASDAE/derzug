@@ -14,7 +14,7 @@ from derzug.utils.testing import (
     wait_for_output,
     widget_context,
 )
-from derzug.widgets.code import Code
+from derzug.widgets.code import Code, _compile_script
 from orangewidget.utils.signals import PartialSummary
 
 
@@ -56,6 +56,17 @@ class TestCode:
         assert isinstance(code_widget, Code)
         assert "def transform" in code_widget._editor.toPlainText()
         assert code_widget._autorun_enabled is False
+
+    def test_identical_scripts_reuse_compiled_bytecode(self):
+        """Repeated runs of unchanged source should avoid recompilation."""
+        script = "def transform(patch):\n    return patch"
+        _compile_script.cache_clear()
+
+        first = _compile_script(script)
+        second = _compile_script(script)
+
+        assert second is first
+        assert _compile_script.cache_info().hits == 1
 
     def test_none_patch_clears_output_without_running(
         self, code_widget, monkeypatch, qtbot
@@ -101,7 +112,7 @@ class TestCode:
         code_widget, patch, received = primed
 
         code_widget._editor.setPlainText(
-            "def transform(patch, scale=2):\n" "    return int(scale * len(patch.dims))"
+            "def transform(patch, scale=2):\n    return int(scale * len(patch.dims))"
         )
         code_widget._run_button.click()
         wait_for_output(qtbot, received)
@@ -311,7 +322,7 @@ class TestCode:
         code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText(
-            "def transform(patch, scale):\n" "    return scale"
+            "def transform(patch, scale):\n    return scale"
         )
         code_widget._run_button.click()
         wait_for_output(qtbot, received)
@@ -339,7 +350,7 @@ class TestCode:
         code_widget, patch, received = primed
 
         code_widget._editor.setPlainText(
-            "def transform(patch):\n" "    return len(patch.dims)"
+            "def transform(patch):\n    return len(patch.dims)"
         )
         code_widget._run_button.click()
         wait_for_output(qtbot, received)
@@ -359,7 +370,7 @@ class TestCode:
         received.clear()
 
         code_widget._editor.setPlainText(
-            "def transform(patch):\n" "    print('ok')\n" "    return patch"
+            "def transform(patch):\n    print('ok')\n    return patch"
         )
         code_widget._run_button.click()
         wait_for_output(qtbot, received)

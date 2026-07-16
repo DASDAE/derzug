@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import dascore as dc
@@ -44,7 +44,13 @@ class _OffsetRenderState:
     title: str
     trace_offsets: np.ndarray
     trace_indices: np.ndarray
-    trace_rows: np.ndarray
+    normalized_rows: np.ndarray
+    gain_scale: float
+
+    @property
+    def trace_rows(self) -> np.ndarray:
+        """Return gain-scaled rows translated onto their trace offsets."""
+        return self.normalized_rows * self.gain_scale + self.trace_offsets[:, None]
 
 
 @dataclass(frozen=True)
@@ -206,6 +212,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         self._display_patch: dc.Patch | None = None
         self._init_nd_plot_controls_state()
         self._render_state: _WiggleRenderState | None = None
+        self._offset_state_key: tuple[int, str, int] | None = None
         self._auto_stride_initialized = False
         self._preserve_view_on_refresh = False
         self._stride_ui_dirty = False
@@ -505,6 +512,21 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     def _on_gain_slider_value_changed(self, value: int) -> None:
         """Persist slider-driven gain updates before re-rendering."""
         self.gain = int(value)
+        state = self._render_state
+        cache_key = (
+            id(self._display_patch),
+            self.selected_trace_dim,
+            max(int(self.stride), 1),
+        )
+        if (
+            isinstance(state, _OffsetRenderState)
+            and self._offset_state_key == cache_key
+        ):
+            updated = replace(state, gain_scale=float(self.gain) / 100.0)
+            self._apply_offset_state(updated, clip_lines=True)
+            self._update_gain_label()
+            self._emit_current_patch()
+            return
         self._on_gain_changed()
 
     def _on_colormap_changed(self, name: str) -> None:
@@ -635,6 +657,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         if display_patch is None:
             self._clear_curves()
             self._render_state = None
+            self._offset_state_key = None
             self._axis_kinds = {"bottom": "numeric", "left": "numeric"}
             self._axis_dims = {"bottom": "Sample", "left": "Trace"}
             self._plot_item.setTitle("No patch")
@@ -652,6 +675,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
                 self._refresh_controls()
                 state = self._build_time_series_state_1d(display_patch)
                 self._apply_time_series_state(state, clip_lines=clip_lines)
+                self._offset_state_key = None
             elif data.ndim == 2 and self.mode == "time series":
                 state = self._build_time_series_state_2d(
                     display_patch,
@@ -660,6 +684,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
                     color_limits=self.series_color_limits,
                 )
                 self._apply_time_series_state(state, clip_lines=clip_lines)
+                self._offset_state_key = None
             elif data.ndim == 2:
                 state = self._build_offset_state_2d(
                     display_patch,
@@ -668,6 +693,11 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
                     gain=self.gain,
                 )
                 self._apply_offset_state(state, clip_lines=clip_lines)
+                self._offset_state_key = (
+                    id(display_patch),
+                    self.selected_trace_dim,
+                    max(int(self.stride), 1),
+                )
             else:
                 raise ValueError(f"expected 1D or 2D data, got shape {data.shape}")
 
@@ -688,6 +718,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         except Exception as exc:
             self._display_patch = None
             self._render_state = None
+            self._offset_state_key = None
             self._clear_curves()
             self._hide_color_bar()
             self._plot_item.setTitle("Render failed")
@@ -896,7 +927,6 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         max_abs = np.nanmax(np.abs(traces), axis=1, keepdims=True)
         max_abs[~np.isfinite(max_abs) | (max_abs == 0)] = 1.0
         normalized = traces / max_abs
-        y_values = normalized * trace_scale + offsets[:, np.newaxis]
         return _OffsetRenderState(
             mode="offset",
             x_dim=x_label,
@@ -908,7 +938,8 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
             title=f"Wiggle ({selected_trace_dim})",
             trace_offsets=offsets,
             trace_indices=trace_indices,
-            trace_rows=y_values,
+            normalized_rows=np.asarray(normalized, dtype=np.float64),
+            gain_scale=trace_scale,
         )
 
     def _apply_time_series_state(

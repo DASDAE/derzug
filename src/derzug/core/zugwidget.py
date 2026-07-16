@@ -983,7 +983,7 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         return "wrapped C/C++ object of type" in text and "has been deleted" in text
 
     def _shutdown_async_executor(self) -> None:
-        """Stop the per-widget worker pool."""
+        """Detach this widget from shared worker execution."""
         self._set_async_busy_state(False)
         self._execution_runtime.shutdown()
 

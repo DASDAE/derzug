@@ -5,7 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import numpy as np
-from derzug.utils.plot_axes import ContextDateAxisItem, format_cursor_value
+from derzug.utils.plot_axes import (
+    ContextDateAxisItem,
+    format_cursor_value,
+    map_coord_to_plot_value,
+    map_plot_value_to_coord,
+    nearest_axis_index,
+)
 
 
 def _timestamp(year: int, month: int, day: int) -> float:
@@ -82,3 +88,59 @@ class TestFormatCursorValue:
 
         assert format_cursor_value(value, visible_span=60.0) == "5.01 s"
         assert format_cursor_value(value, visible_span=0.001) == "5.006789 s"
+
+
+class TestNearestAxisIndex:
+    """Tests for allocation-free monotonic coordinate lookup."""
+
+    def test_ascending_axis_uses_nearest_neighbor(self):
+        """Ascending lookup should clamp and resolve values between samples."""
+        axis = np.asarray([0.0, 10.0, 20.0, 30.0])
+
+        assert nearest_axis_index(-1.0, axis) == 0
+        assert nearest_axis_index(14.0, axis) == 1
+        assert nearest_axis_index(16.0, axis) == 2
+        assert nearest_axis_index(99.0, axis) == 3
+
+    def test_descending_axis_preserves_original_indices(self):
+        """Descending lookup should search a view and map back to source indices."""
+        axis = np.asarray([30.0, 20.0, 10.0, 0.0])
+
+        assert nearest_axis_index(29.0, axis) == 0
+        assert nearest_axis_index(14.0, axis) == 2
+        assert nearest_axis_index(-1.0, axis) == 3
+
+    def test_empty_and_nonfinite_values_return_safe_index(self):
+        """Degenerate cursor inputs should resolve without allocating or raising."""
+        assert nearest_axis_index(1.0, np.asarray([])) == 0
+        assert nearest_axis_index(np.nan, np.asarray([1.0, 2.0])) == 0
+
+
+class TestAxisValueMapping:
+    """Tests for neighbor-only interpolation in cursor mapping paths."""
+
+    def test_numeric_mapping_interpolates_and_extrapolates(self):
+        """Numeric axes should retain linear mapping outside and between samples."""
+        plot = np.asarray([0.0, 1.0, 2.0])
+        coord = np.asarray([10.0, 20.0, 30.0])
+
+        assert map_plot_value_to_coord(0.5, plot, coord) == 15.0
+        assert map_plot_value_to_coord(3.0, plot, coord) == 40.0
+        assert map_coord_to_plot_value(25.0, coord, plot) == 1.5
+
+    def test_descending_datetime_mapping_preserves_nanosecond_values(self):
+        """Descending datetime axes should map without converting whole arrays."""
+        coord = np.asarray(
+            [
+                "2024-01-01T00:00:02.000000000",
+                "2024-01-01T00:00:01.000000000",
+                "2024-01-01T00:00:00.000000000",
+            ],
+            dtype="datetime64[ns]",
+        )
+        plot = np.asarray([2.0, 1.0, 0.0])
+
+        mapped = map_plot_value_to_coord(0.5, plot, coord)
+
+        assert mapped == np.datetime64("2024-01-01T00:00:00.500000000")
+        assert map_coord_to_plot_value(mapped, coord, plot) == 0.5
