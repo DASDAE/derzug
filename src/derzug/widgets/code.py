@@ -262,6 +262,10 @@ class Code(ZugWidget):
         """Persist editor text and disable sticky auto-run after user edits."""
         self.script_text = self._editor.toPlainText()
         self._autorun_enabled = False
+        # Any in-flight run executes the pre-edit script; its late result must
+        # not overwrite the log or enable auto-run for the edited script.
+        self._manual_run_pending = False
+        self._invalidate_async_execution()
         self._status_label.setText("Edited; press Run")
         self._editor_clear_timer.start(0)
 
@@ -272,6 +276,10 @@ class Code(ZugWidget):
 
     def _supports_async_execution(self) -> bool:
         """Execute arbitrary transforms outside the GUI thread."""
+        return True
+
+    def _uses_dedicated_worker(self) -> bool:
+        """Isolate arbitrary user scripts from the shared worker pool."""
         return True
 
     def _build_execution_request(self) -> WidgetExecutionRequest:

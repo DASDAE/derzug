@@ -83,6 +83,7 @@ class WidgetExecutionRuntime:
         apply_empty_result: Callable[[], None],
         handle_preflight_error: Callable[[Exception], None],
         handle_worker_unavailable: Callable[[], None],
+        dedicated_worker: bool = False,
     ) -> None:
         self._execute_request = execute_request
         self._apply_result = apply_result
@@ -94,8 +95,17 @@ class WidgetExecutionRuntime:
         self._bridge.result_ready.connect(self._on_result_ready)
         self._bridge.error_ready.connect(self._on_error_ready)
         self._completion_target = _CompletionTarget(self._bridge)
-        self._executor: ThreadPoolExecutor | None = _SHARED_EXECUTOR
+        # Dedicated-worker runtimes isolate unbounded work (arbitrary user
+        # scripts) on a lazily created single-thread executor so a hung task
+        # can never occupy a shared worker needed by other widgets.
+        self._dedicated_worker = dedicated_worker
+        self._executor: ThreadPoolExecutor | None = (
+            None if dedicated_worker else _SHARED_EXECUTOR
+        )
         self._future: Future | None = None
+        self._pending_build_request: (
+            Callable[[], WidgetExecutionRequest | None] | None
+        ) = None
         self._execution_generation = 0
         self._latest_execution_token = 0
         self._active_execution_token: int | None = None
@@ -118,6 +128,17 @@ class WidgetExecutionRuntime:
         """Build and dispatch one execution request to the worker."""
         if self._teardown_started:
             return
+        future = self._future
+        if future is not None and not future.done() and not future.cancel():
+            # The current future is already running and cannot be cancelled.
+            # Queue this request (latest wins) so at most one execution per
+            # widget is ever in flight, and mark the running execution stale
+            # so its late result is discarded on arrival.
+            self._latest_execution_token += 1
+            self._active_execution_token = self._latest_execution_token
+            self._pending_build_request = build_request
+            return
+        self._pending_build_request = None
         try:
             request = build_request()
         except Exception as exc:
@@ -132,7 +153,7 @@ class WidgetExecutionRuntime:
             self._invalidate_current_execution()
             self._apply_empty_result()
             return
-        executor = self._executor
+        executor = self._acquire_executor()
         if executor is None or self._teardown_started:
             self._handle_worker_unavailable()
             return
@@ -141,9 +162,6 @@ class WidgetExecutionRuntime:
         self._latest_execution_token += 1
         token = self._latest_execution_token
         self._active_execution_token = token
-        future = self._future
-        if future is not None and not future.done():
-            future.cancel()
         completion_target = self._completion_target
 
         def _done_callback(
@@ -172,32 +190,68 @@ class WidgetExecutionRuntime:
             )
         )
 
+    def _acquire_executor(self) -> ThreadPoolExecutor | None:
+        """Return the executor for this runtime, creating a dedicated one lazily."""
+        if self._executor is None and self._dedicated_worker:
+            self._executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="DerZugDedicatedWorker",
+            )
+        return self._executor
+
+    def invalidate(self) -> None:
+        """Discard any queued or in-flight execution without applying results.
+
+        Late worker completions for previously dispatched requests are
+        suppressed; a request queued behind a running execution is dropped.
+        """
+        self._invalidate_current_execution()
+
     def _invalidate_current_execution(self) -> None:
         """Cancel and release the current future, making late delivery stale."""
+        self._pending_build_request = None
         self._latest_execution_token += 1
-        future = self._future
-        if future is not None and not future.done():
-            future.cancel()
-        self._future = None
         self._active_execution_token = None
+        future = self._future
+        if future is not None and not future.done() and not future.cancel():
+            # Still running and uncancellable: keep tracking the future so
+            # dispatch keeps queueing behind it; its result is now stale.
+            return
+        self._future = None
 
     def shutdown(self) -> None:
         """Invalidate queued completions without blocking the GUI thread."""
         self._teardown_started = True
         self._execution_generation += 1
         self._completion_target.detach()
+        self._pending_build_request = None
         future = self._future
         if future is not None and not future.done():
             future.cancel()
         self._future = None
+        if self._dedicated_worker and self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
         self._executor = None
         self._active_execution_token = None
+
+    def _run_pending_dispatch(self) -> bool:
+        """Dispatch the queued request now that the worker slot is free."""
+        pending = self._pending_build_request
+        if pending is None:
+            return False
+        self._pending_build_request = None
+        self.dispatch(pending)
+        return True
 
     def _on_result_ready(self, generation: int, token: int, result: object) -> None:
         """Apply the newest worker result on the widget thread."""
         if self._teardown_started:
             return
         if generation != self._execution_generation:
+            return
+        # A queued request supersedes this completion: the finished future is
+        # done, so dispatching now submits immediately with fresh state.
+        if self._run_pending_dispatch():
             return
         if token != self._latest_execution_token:
             return
@@ -215,6 +269,8 @@ class WidgetExecutionRuntime:
         if self._teardown_started:
             return
         if generation != self._execution_generation:
+            return
+        if self._run_pending_dispatch():
             return
         if token != self._latest_execution_token:
             return

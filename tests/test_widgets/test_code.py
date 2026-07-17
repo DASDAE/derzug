@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import dascore as dc
 import numpy as np
 import pytest
@@ -318,6 +320,38 @@ class TestCode:
 
         assert received[-1] is None
         assert code_widget._autorun_enabled is False
+
+    def test_edit_during_run_discards_stale_result(
+        self, primed, qtbot, monkeypatch
+    ):
+        """Editing while a run is in flight discards the old script's result."""
+        import derzug.widgets.code as code_module
+
+        code_widget, patch, received = primed
+        started = threading.Event()
+        release = threading.Event()
+        original = code_module._execute_logged_code_task
+
+        def blocking_execute(task, patch_arg):
+            started.set()
+            release.wait(timeout=5)
+            return original(task, patch_arg)
+
+        monkeypatch.setattr(
+            code_module, "_execute_logged_code_task", blocking_execute
+        )
+        code_widget._editor.setPlainText("def transform(patch):\n    return 'old'")
+        code_widget._run_button.click()
+        assert started.wait(timeout=5)
+
+        # Edit while the pre-edit script is still executing in the worker.
+        code_widget._editor.setPlainText("def transform(patch):\n    return 'new'")
+        release.set()
+        qtbot.wait(200)
+
+        assert "old" not in received
+        assert code_widget._autorun_enabled is False
+        assert "Edited" in code_widget._status_label.text()
 
     def test_missing_transform_function_shows_error(self, primed, qtbot):
         """Scripts must define a callable transform function."""

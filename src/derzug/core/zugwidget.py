@@ -174,6 +174,7 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
             apply_empty_result=self._apply_async_empty_result,
             handle_preflight_error=self._handle_async_preflight_error,
             handle_worker_unavailable=self._handle_async_worker_unavailable,
+            dedicated_worker=self._uses_dedicated_worker(),
         )
         self._compact_control_area_layout()
         self.statusBar()
@@ -589,6 +590,14 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         """Return True when this widget should dispatch execution off-thread."""
         return False
 
+    def _uses_dedicated_worker(self) -> bool:
+        """Return True to run this widget's work on its own single worker.
+
+        Widgets executing unbounded work (arbitrary user code) should opt in
+        so a hung task cannot occupy a shared worker needed by other widgets.
+        """
+        return False
+
     def _apply_settings_to_controls(self) -> None:
         """Hydrate visible controls from persisted settings.
 
@@ -981,6 +990,11 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         """Return True for Qt wrapper teardown races during async result delivery."""
         text = str(exc)
         return "wrapped C/C++ object of type" in text and "has been deleted" in text
+
+    def _invalidate_async_execution(self) -> None:
+        """Discard queued or in-flight async work and clear busy indicators."""
+        self._execution_runtime.invalidate()
+        self._set_async_busy_state(False)
 
     def _shutdown_async_executor(self) -> None:
         """Detach this widget from shared worker execution."""
