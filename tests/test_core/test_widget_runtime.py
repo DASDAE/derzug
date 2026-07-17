@@ -6,7 +6,9 @@ import threading
 
 import pytest
 from AnyQt.QtCore import QObject
+
 from derzug.core.widget_runtime import (
+    _ISOLATED_EXECUTOR,
     _SHARED_EXECUTOR,
     WidgetExecutionRequest,
     WidgetExecutionRuntime,
@@ -171,14 +173,18 @@ class TestShutdown:
         assert harness.results == []
         assert harness.runtime.teardown_started
 
-    def test_dedicated_worker_uses_private_executor(self, qtbot, owner):
-        """Dedicated-worker runtimes never touch the shared executor."""
+    def test_dedicated_worker_uses_isolated_pool(self, qtbot, owner):
+        """Dedicated-worker runtimes run on the isolated pool, not the shared one."""
         harness = _Harness(owner, dedicated_worker=True)
+        assert harness.runtime._executor is _ISOLATED_EXECUTOR
+        assert harness.runtime._executor is not _SHARED_EXECUTOR
         harness.runtime.dispatch(_request("done"))
         qtbot.waitUntil(lambda: bool(harness.results), timeout=5000)
-        executor = harness.runtime._executor
-        assert executor is not None
-        assert executor is not _SHARED_EXECUTOR
+        assert harness.results == ["done"]
+
+    def test_shutdown_detaches_without_stopping_shared_pool(self, qtbot, owner):
+        """Teardown detaches the runtime but leaves the process-global pool live."""
+        harness = _Harness(owner, dedicated_worker=True)
         harness.runtime.shutdown()
-        assert executor._shutdown
         assert harness.runtime._executor is None
+        assert not _ISOLATED_EXECUTOR._shutdown

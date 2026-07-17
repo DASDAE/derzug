@@ -17,6 +17,15 @@ _SHARED_EXECUTOR = ThreadPoolExecutor(
     thread_name_prefix="DerZugWorker",
 )
 
+# Widgets running unbounded or untrusted work (arbitrary user scripts) execute
+# on this separate process-global pool so a hung task cannot starve the general
+# widget work on the shared pool. Both pools are long-lived singletons cleaned
+# up once at interpreter exit; worker threads spawn lazily on first submit.
+_ISOLATED_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(2, min(4, os.cpu_count() or 2)),
+    thread_name_prefix="DerZugIsolatedWorker",
+)
+
 
 @dataclass(frozen=True)
 class WidgetExecutionRequest:
@@ -96,11 +105,10 @@ class WidgetExecutionRuntime:
         self._bridge.error_ready.connect(self._on_error_ready)
         self._completion_target = _CompletionTarget(self._bridge)
         # Dedicated-worker runtimes isolate unbounded work (arbitrary user
-        # scripts) on a lazily created single-thread executor so a hung task
-        # can never occupy a shared worker needed by other widgets.
-        self._dedicated_worker = dedicated_worker
+        # scripts) on a separate process-global pool so a hung task can never
+        # occupy a shared worker needed by other widgets.
         self._executor: ThreadPoolExecutor | None = (
-            None if dedicated_worker else _SHARED_EXECUTOR
+            _ISOLATED_EXECUTOR if dedicated_worker else _SHARED_EXECUTOR
         )
         self._future: Future | None = None
         self._pending_build_request: (
@@ -153,7 +161,7 @@ class WidgetExecutionRuntime:
             self._invalidate_current_execution()
             self._apply_empty_result()
             return
-        executor = self._acquire_executor()
+        executor = self._executor
         if executor is None or self._teardown_started:
             self._handle_worker_unavailable()
             return
@@ -190,15 +198,6 @@ class WidgetExecutionRuntime:
             )
         )
 
-    def _acquire_executor(self) -> ThreadPoolExecutor | None:
-        """Return the executor for this runtime, creating a dedicated one lazily."""
-        if self._executor is None and self._dedicated_worker:
-            self._executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="DerZugDedicatedWorker",
-            )
-        return self._executor
-
     def invalidate(self) -> None:
         """Discard any queued or in-flight execution without applying results.
 
@@ -229,8 +228,8 @@ class WidgetExecutionRuntime:
         if future is not None and not future.done():
             future.cancel()
         self._future = None
-        if self._dedicated_worker and self._executor is not None:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+        # The executors are process-global singletons shared across widgets, so
+        # only detach this runtime from its pool; never shut the pool down.
         self._executor = None
         self._active_execution_token = None
 
