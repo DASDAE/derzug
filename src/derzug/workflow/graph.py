@@ -12,12 +12,11 @@ import json
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from functools import cached_property
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from .model import WorkflowFrozenModel
 from .task import Task
@@ -247,6 +246,7 @@ class PipeGraph(WorkflowFrozenModel):
     tasks: dict[str, Task] = Field(default_factory=dict)
     edges: tuple[Edge, ...] = Field(default_factory=tuple)
     node_names: dict[str, str] = Field(default_factory=dict)
+    _validated_object_id: int | None = PrivateAttr(default=None)
 
     @property
     def fingerprint(self) -> str:
@@ -391,12 +391,16 @@ class PipeGraph(WorkflowFrozenModel):
                     f"stream output {handle}:{port} has multiple consumers"
                 )
 
-    @cached_property
-    def _validation_complete(self) -> bool:
-        """Validate this immutable graph once and cache successful completion."""
-        self.validate()
-        return True
-
     def ensure_validated(self) -> None:
-        """Ensure this immutable graph has passed validation."""
-        _ = self._validation_complete
+        """Ensure this immutable graph has passed validation.
+
+        Successful validation is cached per object identity: pydantic's
+        ``model_copy`` duplicates private attributes into derived instances,
+        so a plain boolean flag would let a modified copy skip validation.
+        The stored ``id`` can never match a copy (both objects coexist when
+        the copy is made), forcing every copy to revalidate.
+        """
+        if self._validated_object_id == id(self):
+            return
+        self.validate()
+        self._validated_object_id = id(self)

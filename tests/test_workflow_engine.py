@@ -10,6 +10,7 @@ from typing import ClassVar
 
 import pytest
 from derzug.workflow import STREAM_END, Pipe, PipeBuilder, Provenance, Task
+from derzug.workflow.graph import Edge
 from derzug.workflow.task import task
 
 
@@ -133,6 +134,50 @@ def test_stream_outputs_reject_multiple_consumers():
 
     with pytest.raises(ValueError, match="multiple consumers"):
         builder.build()
+
+
+def test_copied_pipe_with_invalid_edges_revalidates():
+    """A copy derived from a validated pipe must not inherit its validation."""
+    builder = PipeBuilder()
+    add = builder.add(AddOne(), name="add")
+    two = builder.add(add_two(), name="two")
+    builder.connect(add, two, from_output="y", to_input="x")
+    pipe = builder.build()
+    pipe.ensure_validated()
+
+    good_edge = pipe.edges[0]
+    bad_edge = Edge(
+        from_node=good_edge.from_node,
+        from_port="nope",
+        to_node=good_edge.to_node,
+        to_port=good_edge.to_port,
+    )
+    derived = pipe.new(edges=(bad_edge,))
+
+    with pytest.raises(ValueError, match="unknown upstream output port"):
+        derived.ensure_validated()
+
+
+def test_ensure_validated_caches_successful_validation(monkeypatch):
+    """Repeated ensure_validated calls validate the same object only once."""
+    builder = PipeBuilder()
+    builder.add(AddOne(), name="add")
+    # Copies never inherit the validation cache, so the derived pipe starts
+    # unvalidated even though build() already validated the original.
+    pipe = builder.build().new()
+
+    calls = []
+    original = type(pipe).validate
+
+    def counting_validate(self):
+        calls.append(self)
+        return original(self)
+
+    monkeypatch.setattr(type(pipe), "validate", counting_validate)
+    pipe.ensure_validated()
+    pipe.ensure_validated()
+
+    assert len(calls) == 1
 
 
 def test_pipe_json_round_trip(tmp_path):
