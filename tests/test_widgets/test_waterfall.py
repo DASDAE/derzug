@@ -24,10 +24,8 @@ from derzug.utils.testing import (
 )
 from derzug.widgets.selection import PatchSelectionBasis
 from derzug.widgets.waterfall import (
-    _DISPLAY_SAMPLE_TARGET,
     _STAT_SAMPLE_TARGET,
     Waterfall,
-    _strided_subsample,
 )
 
 
@@ -4977,41 +4975,6 @@ class TestWaterfallSliceDims:
         QTest.mousePress(btn_next, Qt.MouseButton.LeftButton)
         QTest.mouseRelease(btn_next, Qt.MouseButton.LeftButton)
         assert len(render_calls) == 1
-
-
-class TestStridedSubsample:
-    """Unit tests for the _strided_subsample helper."""
-
-    def test_small_arrays_returned_unchanged(self):
-        """Arrays at or below the target size pass through untouched."""
-        data = np.arange(12.0).reshape(3, 4)
-        assert _strided_subsample(data, 100) is data
-
-    def test_large_arrays_reduced_toward_target(self):
-        """Oversized arrays shrink to roughly the requested sample count."""
-        data = np.zeros((400, 500))
-        sampled = _strided_subsample(data, 10_000)
-        assert sampled.ndim == 2
-        assert sampled.size < data.size
-        # Rounding of per-axis strides keeps the result within a small
-        # constant factor of the requested target.
-        assert 10_000 / 4 <= sampled.size <= 10_000 * 4
-
-    def test_display_sampling_caps_large_view_without_copying(self):
-        """The image preparation target should yield a bounded strided view."""
-        data = np.broadcast_to(np.asarray(1.0), (10_000, 10_000))
-
-        sampled = _strided_subsample(data, _DISPLAY_SAMPLE_TARGET)
-
-        assert sampled.size <= _DISPLAY_SAMPLE_TARGET
-        assert np.shares_memory(sampled, data)
-
-    def test_short_axis_keeps_at_least_one_row(self):
-        """A very short axis still contributes at least one sample row."""
-        data = np.zeros((3, 200_000))
-        sampled = _strided_subsample(data, 10_000)
-        assert sampled.shape[0] >= 1
-        assert sampled.size < data.size
 
 
 class TestComputeDefaultLevels:

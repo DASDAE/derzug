@@ -118,15 +118,6 @@ class TestPatchViewer:
         )
         assert patchviewer_widget._numeric_stats_text(data) == expected
 
-    def test_large_array_sampling_is_bounded_and_view_backed(self):
-        """Stats and previews should sample huge arrays without copying them."""
-        data = np.broadcast_to(np.asarray(1.0), (10_000, 10_000))
-
-        sampled = PatchViewer._strided_sample(data, 100_000)
-
-        assert sampled.size <= 100_000
-        assert np.shares_memory(sampled, data)
-
     def test_selecting_coord_shows_line_preview(self, patchviewer_widget):
         """Selecting a coordinate array uses the 1D line preview."""
         patch = dc.get_example_patch("example_event_2")

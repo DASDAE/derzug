@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.utils.display import format_display
+from derzug.utils.sampling import strided_sample, strided_step
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchPassThroughTask
 
@@ -457,7 +458,7 @@ class PatchViewer(ZugWidget):
         descriptor: _NodeDescriptor,
     ) -> None:
         """Render a 1D array preview."""
-        step = max(1, int(np.ceil(values.size / _MAX_LINE_SAMPLES)))
+        step = strided_step(values.size, _MAX_LINE_SAMPLES)
         preview = values[::step]
         y_values = self._coerce_plot_axis(preview)
         x_values = np.arange(0, values.size, step, dtype=np.float64)[: preview.size]
@@ -476,7 +477,7 @@ class PatchViewer(ZugWidget):
         descriptor: _NodeDescriptor,
     ) -> None:
         """Render a 2D array preview."""
-        preview = self._strided_sample(values, _MAX_IMAGE_SAMPLES)
+        preview = strided_sample(values, _MAX_IMAGE_SAMPLES)
         if (
             np.issubdtype(preview.dtype, np.floating)
             and preview.dtype.itemsize > np.dtype(np.float32).itemsize
@@ -563,30 +564,13 @@ class PatchViewer(ZugWidget):
         """Return compact numeric stats when the array supports them."""
         if values.size == 0 or not np.issubdtype(values.dtype, np.number):
             return ""
-        sampled = PatchViewer._strided_sample(values, _MAX_STATS_SAMPLES)
+        sampled = strided_sample(values, _MAX_STATS_SAMPLES)
         min_value = float(np.nanmin(sampled))
         max_value = float(np.nanmax(sampled))
         prefix = "sampled " if sampled.size < values.size else ""
         return (
             f"{prefix}min={format_display(min_value)} max={format_display(max_value)}"
         )
-
-    @staticmethod
-    def _strided_sample(values: np.ndarray, target_size: int) -> np.ndarray:
-        """Return a view-like regular sample bounded near ``target_size``."""
-        values = np.asarray(values)
-        if values.size <= target_size or values.ndim == 0:
-            return values
-        scale = (values.size / target_size) ** (1 / values.ndim)
-        step = max(1, int(np.ceil(scale)))
-        slices = tuple(slice(None, None, step) for _ in values.shape)
-        sampled = values[slices]
-        while sampled.size > target_size:
-            largest_axis = int(np.argmax(sampled.shape))
-            axis_slices = [slice(None) for _ in sampled.shape]
-            axis_slices[largest_axis] = slice(None, None, 2)
-            sampled = sampled[tuple(axis_slices)]
-        return sampled
 
     @staticmethod
     def _format_preview_header(descriptor: _NodeDescriptor) -> str:

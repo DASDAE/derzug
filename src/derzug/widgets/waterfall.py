@@ -4,7 +4,6 @@ Interactive pyqtgraph waterfall widget for DASCore patches.
 
 from __future__ import annotations
 
-import math
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +49,7 @@ from derzug.utils.plot_axes import (
     nearest_axis_index,
     set_cursor_label_text,
 )
+from derzug.utils.sampling import strided_sample
 from derzug.widgets.annotation_editor import (
     AnnotationEditorDialog as _AnnotationEditorDialog,
 )
@@ -170,16 +170,6 @@ def _default_plot_dims(dims: tuple[str, ...]) -> tuple[str, str]:
 # processed exactly.
 _STAT_SAMPLE_TARGET = 1_000_000
 _DISPLAY_SAMPLE_TARGET = 4_000_000
-
-
-def _strided_subsample(data: np.ndarray, target_size: int) -> np.ndarray:
-    """Return an evenly strided 2D subsample of roughly target_size elements."""
-    if data.ndim != 2 or data.size <= target_size:
-        return data
-    factor = math.sqrt(data.size / target_size)
-    step_y = max(1, min(data.shape[0], round(factor)))
-    step_x = max(1, min(data.shape[1], round(factor)))
-    return data[::step_y, ::step_x]
 
 
 class _SelectionROI(pg.ROI):
@@ -840,7 +830,7 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
             data = np.asarray(patch.data)
             if data.ndim != 2:
                 raise ValueError(f"expected 2D data, got shape {data.shape}")
-            display_source = _strided_subsample(data, _DISPLAY_SAMPLE_TARGET)
+            display_source = strided_sample(data, _DISPLAY_SAMPLE_TARGET)
             display_data = (
                 np.abs(display_source) if np.iscomplexobj(data) else display_source
             )
@@ -1083,7 +1073,7 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         # The percentile-based default scale is statistically stable on a
         # subsample; running it on every sample costs ~1s per render for
         # 60M-sample patches.
-        sampled = _strided_subsample(display_data, _STAT_SAMPLE_TARGET)
+        sampled = strided_sample(display_data, _STAT_SAMPLE_TARGET)
         scale = get_dascore_waterfall_scale(None, "relative", sampled)
         if scale is None or len(scale) != 2:
             return None
@@ -2237,8 +2227,8 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         # the sample keep the previous view, which is the benign outcome.
         if previous_data.shape != new_data.shape:
             return True
-        previous_sample = _strided_subsample(previous_data, _STAT_SAMPLE_TARGET)
-        new_sample = _strided_subsample(new_data, _STAT_SAMPLE_TARGET)
+        previous_sample = strided_sample(previous_data, _STAT_SAMPLE_TARGET)
+        new_sample = strided_sample(new_data, _STAT_SAMPLE_TARGET)
         return not np.array_equal(previous_sample, new_sample)
 
     @staticmethod

@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.utils.display import format_display
+from derzug.utils.sampling import strided_step
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchPassThroughTask
 
@@ -531,10 +532,7 @@ class PlayAudio(ZugWidget):
     def _set_waveform_data(self, patch: dc.Patch) -> None:
         """Cache waveform data for the plot using seconds relative to the start."""
         source_samples = np.asarray(patch.data).reshape(-1)
-        step = max(
-            1,
-            int(np.ceil(source_samples.size / _MAX_WAVEFORM_PLOT_SAMPLES)),
-        )
+        step = strided_step(source_samples.size, _MAX_WAVEFORM_PLOT_SAMPLES)
         samples = source_samples[::step]
         time_coord = np.asarray(patch.get_array("time"))
         time_seconds = self._coord_to_seconds(time_coord[::step])
@@ -783,7 +781,7 @@ class PlayAudio(ZugWidget):
         finite_mask = np.isfinite(samples)
         if not np.any(finite_mask):
             raise ValueError("patch data must contain at least one finite sample")
-        step = max(1, int(np.ceil(samples.size / _PCM_CALIBRATION_SAMPLES)))
+        step = strided_step(samples.size, _PCM_CALIBRATION_SAMPLES)
         calibration = samples[::step]
         finite_calibration = calibration[np.isfinite(calibration)]
         if finite_calibration.size == 0:
