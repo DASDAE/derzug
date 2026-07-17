@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dascore as dc
-import numpy as np
 import pytest
 from derzug.utils.display import format_display
 from derzug.utils.testing import TestWidgetDefaults, widget_context

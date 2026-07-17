@@ -321,9 +321,7 @@ class TestCode:
         assert received[-1] is None
         assert code_widget._autorun_enabled is False
 
-    def test_edit_during_run_discards_stale_result(
-        self, primed, qtbot, monkeypatch
-    ):
+    def test_edit_during_run_discards_stale_result(self, primed, qtbot, monkeypatch):
         """Editing while a run is in flight discards the old script's result."""
         import derzug.widgets.code as code_module
 
@@ -337,9 +335,7 @@ class TestCode:
             release.wait(timeout=5)
             return original(task, patch_arg)
 
-        monkeypatch.setattr(
-            code_module, "_execute_logged_code_task", blocking_execute
-        )
+        monkeypatch.setattr(code_module, "_execute_logged_code_task", blocking_execute)
         code_widget._editor.setPlainText("def transform(patch):\n    return 'old'")
         code_widget._run_button.click()
         assert started.wait(timeout=5)
