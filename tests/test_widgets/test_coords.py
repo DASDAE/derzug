@@ -100,6 +100,7 @@ class TestCoords:
         monkeypatch.setattr(coords_widget, "_refresh_ui", _wrapped)
 
         coords_widget.set_patch(patch)
+        wait_for_widget_idle(coords_widget, timeout=5.0)
 
         assert len(refresh_results) == 1
         assert refresh_results[0] is not None

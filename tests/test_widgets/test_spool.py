@@ -28,9 +28,12 @@ from derzug.utils.testing import (
 )
 from derzug.widgets.spool import (
     Spool,
+    SpoolTask,
     SpoolTransformTask,
     _apply_select_rows,
+    _execute_spool_snapshot,
     _spool_rows_to_patches,
+    _SpoolExecutionSnapshot,
 )
 
 
@@ -1581,6 +1584,100 @@ class TestSpool:
         assert fake.slice_requests == [slice(1, 2, None)]
         assert len(list(out)) == 1
         assert next(iter(out)).attrs.tag == "second"
+
+    def test_output_only_snapshot_skips_select_and_chunk_transforms(self):
+        """Table selection should reuse the prepared display spool unchanged."""
+
+        class _PreparedSpool:
+            def select(self, **_kwargs):
+                raise AssertionError("output-only emit repeated selection")
+
+            def chunk(self, **_kwargs):
+                raise AssertionError("output-only emit repeated chunking")
+
+        prepared = _PreparedSpool()
+        snapshot = _SpoolExecutionSnapshot(
+            source_mode="display",
+            source_name=None,
+            source_spool=prepared,
+            display_spool=prepared,
+            task=SpoolTransformTask(unpack_single_patch=False),
+            selected_source_rows=frozenset(),
+            visible_row_count=2,
+        )
+
+        result = _execute_spool_snapshot(snapshot)
+
+        assert result.display_spool is prepared
+        assert result.output_spool is prepared
+
+    def test_output_only_fast_path_survives_inflight_emission(
+        self, spool_widget, qtbot
+    ):
+        """Selection emissions reuse the display spool despite in-flight work."""
+        spool_widget._set_source_spool(dc.spool([_patch_with_tag("a")]))
+        wait_for_widget_idle(spool_widget, timeout=5.0)
+
+        # Simulate a running output-only emission; before the generation gate
+        # this forced a full select/chunk recompute for every rapid click.
+        spool_widget._execution_runtime._active_execution_token = 7
+        spool_widget._next_execution_output_only = True
+
+        snapshot = spool_widget._snapshot_execution()
+
+        assert snapshot is not None
+        assert snapshot.source_mode == "display"
+        spool_widget._execution_runtime._active_execution_token = None
+
+    def test_pending_recompute_disables_fast_path_until_applied(
+        self, spool_widget, qtbot
+    ):
+        """A requested full recompute blocks display reuse until its result lands."""
+        spool_widget._set_source_spool(dc.spool([_patch_with_tag("a")]))
+        wait_for_widget_idle(spool_widget, timeout=5.0)
+
+        # A full snapshot (settings/input change) bumps the inputs generation.
+        full_snapshot = spool_widget._snapshot_execution()
+        assert full_snapshot.source_mode == "snapshot"
+
+        # While that recompute is outstanding, selection clicks must rebuild
+        # instead of emitting from the now-outdated display spool.
+        spool_widget._next_execution_output_only = True
+        stale_snapshot = spool_widget._snapshot_execution()
+        assert stale_snapshot.source_mode == "snapshot"
+
+        # Applying the newest recompute's result restores the fast path (older
+        # results are token-stale and never applied by the runtime).
+        spool_widget._apply_execution_result(_execute_spool_snapshot(stale_snapshot))
+        spool_widget._next_execution_output_only = True
+        fresh_snapshot = spool_widget._snapshot_execution()
+        assert fresh_snapshot.source_mode == "display"
+
+    def test_settings_snapshot_reuses_loaded_source_without_update(self):
+        """Transform changes should not reload or update an unchanged source."""
+
+        class _LoadedSpool:
+            def update(self):
+                raise AssertionError("cached source was updated")
+
+            def get_contents(self):
+                return pd.DataFrame({"tag": ["first", "second"]})
+
+        loaded = _LoadedSpool()
+        snapshot = _SpoolExecutionSnapshot(
+            source_mode="settings",
+            source_name="cached",
+            source_spool=loaded,
+            task=SpoolTask(unpack_single_patch=False),
+            selected_source_rows=frozenset(),
+            visible_row_count=2,
+            settings_source_identity=("cached",),
+        )
+
+        result = _execute_spool_snapshot(snapshot)
+
+        assert result.source_spool is loaded
+        assert result.display_spool is loaded
 
     def test_selected_row_token_uses_contents_only(self, spool_widget):
         """Persisting selection metadata should not iterate patches on the UI thread."""

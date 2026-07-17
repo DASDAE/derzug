@@ -1467,6 +1467,21 @@ def test_only_active_point_uses_roi_item(overlay_host):
     )
 
 
+def test_selection_change_preserves_unaffected_graphics_items(overlay_host):
+    """Incremental selection updates should not rebuild unrelated annotations."""
+    _host, controller = overlay_host
+    controller.create_box_annotation((0.0, 10.0), (0.5, 10.5))
+    box_id = controller.active_annotation_id
+    controller.create_point_annotation(2.0, 12.0)
+    point_id = controller.active_annotation_id
+    box_item = controller.annotation_items[box_id]
+
+    controller.set_active_annotation(None)
+    controller.set_active_annotation(point_id)
+
+    assert controller.annotation_items[box_id] is box_item
+
+
 def test_creating_new_point_does_not_resize_existing_passive_point(overlay_host):
     """Creating another point should not make the first passive point jump in size."""
     _host, controller = overlay_host

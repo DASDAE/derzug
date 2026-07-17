@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import dascore as dc
 import numpy as np
 import pytest
@@ -14,7 +16,7 @@ from derzug.utils.testing import (
     wait_for_output,
     widget_context,
 )
-from derzug.widgets.code import Code
+from derzug.widgets.code import Code, _compile_script
 from orangewidget.utils.signals import PartialSummary
 
 
@@ -56,6 +58,29 @@ class TestCode:
         assert isinstance(code_widget, Code)
         assert "def transform" in code_widget._editor.toPlainText()
         assert code_widget._autorun_enabled is False
+
+    def test_identical_scripts_reuse_compiled_bytecode(self):
+        """Repeated runs of unchanged source should avoid recompilation."""
+        script = "def transform(patch):\n    return patch"
+        _compile_script.cache_clear()
+
+        first = _compile_script(script)
+        second = _compile_script(script)
+
+        assert second is first
+        assert _compile_script.cache_info().hits == 1
+
+    def test_compiled_bytecode_cache_is_bounded(self):
+        """Editing many unique scripts should not grow the process cache forever."""
+        _compile_script.cache_clear()
+        maxsize = _compile_script.cache_info().maxsize
+        assert maxsize is not None
+
+        for index in range(maxsize + 5):
+            _compile_script(f"value = {index}")
+
+        assert _compile_script.cache_info().currsize == maxsize
+        _compile_script.cache_clear()
 
     def test_none_patch_clears_output_without_running(
         self, code_widget, monkeypatch, qtbot
@@ -101,7 +126,7 @@ class TestCode:
         code_widget, patch, received = primed
 
         code_widget._editor.setPlainText(
-            "def transform(patch, scale=2):\n" "    return int(scale * len(patch.dims))"
+            "def transform(patch, scale=2):\n    return int(scale * len(patch.dims))"
         )
         code_widget._run_button.click()
         wait_for_output(qtbot, received)
@@ -148,6 +173,7 @@ class TestCode:
         assert code_widget.Error.execution_failed.is_shown()
         assert "ValueError" in code_widget._log.toPlainText()
         assert "raise ValueError('boom')" in code_widget._editor.toPlainText()
+        assert code_widget._execution_runtime._future is None
 
     def test_syntax_error_shows_error_and_emits_none(self, primed, qtbot):
         """Syntax errors are shown in the log and emit None."""
@@ -295,6 +321,34 @@ class TestCode:
         assert received[-1] is None
         assert code_widget._autorun_enabled is False
 
+    def test_edit_during_run_discards_stale_result(self, primed, qtbot, monkeypatch):
+        """Editing while a run is in flight discards the old script's result."""
+        import derzug.widgets.code as code_module
+
+        code_widget, patch, received = primed
+        started = threading.Event()
+        release = threading.Event()
+        original = code_module._execute_logged_code_task
+
+        def blocking_execute(task, patch_arg):
+            started.set()
+            release.wait(timeout=5)
+            return original(task, patch_arg)
+
+        monkeypatch.setattr(code_module, "_execute_logged_code_task", blocking_execute)
+        code_widget._editor.setPlainText("def transform(patch):\n    return 'old'")
+        code_widget._run_button.click()
+        assert started.wait(timeout=5)
+
+        # Edit while the pre-edit script is still executing in the worker.
+        code_widget._editor.setPlainText("def transform(patch):\n    return 'new'")
+        release.set()
+        qtbot.wait(200)
+
+        assert "old" not in received
+        assert code_widget._autorun_enabled is False
+        assert "Edited" in code_widget._status_label.text()
+
     def test_missing_transform_function_shows_error(self, primed, qtbot):
         """Scripts must define a callable transform function."""
         code_widget, _patch, received = primed
@@ -311,7 +365,7 @@ class TestCode:
         code_widget, _patch, received = primed
 
         code_widget._editor.setPlainText(
-            "def transform(patch, scale):\n" "    return scale"
+            "def transform(patch, scale):\n    return scale"
         )
         code_widget._run_button.click()
         wait_for_output(qtbot, received)
@@ -339,7 +393,7 @@ class TestCode:
         code_widget, patch, received = primed
 
         code_widget._editor.setPlainText(
-            "def transform(patch):\n" "    return len(patch.dims)"
+            "def transform(patch):\n    return len(patch.dims)"
         )
         code_widget._run_button.click()
         wait_for_output(qtbot, received)
@@ -359,7 +413,7 @@ class TestCode:
         received.clear()
 
         code_widget._editor.setPlainText(
-            "def transform(patch):\n" "    print('ok')\n" "    return patch"
+            "def transform(patch):\n    print('ok')\n    return patch"
         )
         code_widget._run_button.click()
         wait_for_output(qtbot, received)

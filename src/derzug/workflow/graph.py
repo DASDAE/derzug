@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from .model import WorkflowFrozenModel
 from .task import Task
@@ -80,7 +80,7 @@ def _portable_task_payload(task: Task) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if getattr(task_cls, "__portable_adapter_factory__", None) == "callable_task":
         code_path = (
-            f"{CallableTaskAdapter.__module__}:" f"{CallableTaskAdapter.__qualname__}"
+            f"{CallableTaskAdapter.__module__}:{CallableTaskAdapter.__qualname__}"
         )
         parameters = {
             "function_code_path": task.code_path(),
@@ -236,7 +236,7 @@ class PipeBuilder:
             edges=tuple(self.edges),
             node_names=self.node_names,
         )
-        pipe.validate()
+        pipe.ensure_validated()
         return pipe
 
 
@@ -246,6 +246,7 @@ class PipeGraph(WorkflowFrozenModel):
     tasks: dict[str, Task] = Field(default_factory=dict)
     edges: tuple[Edge, ...] = Field(default_factory=tuple)
     node_names: dict[str, str] = Field(default_factory=dict)
+    _validated_object_id: int | None = PrivateAttr(default=None)
 
     @property
     def fingerprint(self) -> str:
@@ -367,14 +368,12 @@ class PipeGraph(WorkflowFrozenModel):
             if edge.from_port in scalar_outputs:
                 if edge.to_port not in scalar_inputs:
                     raise ValueError(
-                        f"scalar port {edge.from_port!r} "
-                        "must connect to a scalar input"
+                        f"scalar port {edge.from_port!r} must connect to a scalar input"
                     )
             elif edge.from_port in stream_outputs:
                 if edge.to_port not in stream_inputs:
                     raise ValueError(
-                        f"stream port {edge.from_port!r} "
-                        "must connect to a stream input"
+                        f"stream port {edge.from_port!r} must connect to a stream input"
                     )
                 stream_input_counts[edge.to_node] += 1
                 stream_consumers[(edge.from_node, edge.from_port)] += 1
@@ -391,3 +390,17 @@ class PipeGraph(WorkflowFrozenModel):
                 raise ValueError(
                     f"stream output {handle}:{port} has multiple consumers"
                 )
+
+    def ensure_validated(self) -> None:
+        """Ensure this immutable graph has passed validation.
+
+        Successful validation is cached per object identity: pydantic's
+        ``model_copy`` duplicates private attributes into derived instances,
+        so a plain boolean flag would let a modified copy skip validation.
+        The stored ``id`` can never match a copy (both objects coexist when
+        the copy is made), forcing every copy to revalidate.
+        """
+        if self._validated_object_id == id(self):
+            return
+        self.validate()
+        self._validated_object_id = id(self)

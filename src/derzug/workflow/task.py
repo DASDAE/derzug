@@ -11,6 +11,7 @@ import inspect
 import json
 import textwrap
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, ClassVar, Self, get_args, get_origin, get_type_hints
 
@@ -23,8 +24,7 @@ def _get_callable_source_hash(target: Any) -> str:
         source = inspect.getsource(target)
     except (OSError, TypeError):
         source = (
-            f"{getattr(target, '__module__', '')}:"
-            f"{getattr(target, '__qualname__', '')}"
+            f"{getattr(target, '__module__', '')}:{getattr(target, '__qualname__', '')}"
         )
     source = textwrap.dedent(source)
     return hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
@@ -106,6 +106,76 @@ def _unwrap_generator_types(annotation: Any) -> tuple[Any | None, Any | None]:
     return (args[0], args[2])
 
 
+@dataclass(frozen=True)
+class TaskPortSpec:
+    """Immutable, class-level task interface metadata."""
+
+    scalar_inputs: tuple[tuple[str, Any], ...]
+    required_scalar_inputs: tuple[str, ...]
+    stream_inputs: tuple[tuple[str, Any], ...]
+    scalar_outputs: tuple[tuple[str, Any], ...]
+    stream_outputs: tuple[tuple[str, Any], ...]
+    uses_generator_runtime: bool
+
+
+def _build_task_port_spec(task_cls: type[Task]) -> TaskPortSpec:
+    """Inspect one task class and freeze its effective port metadata."""
+    target = task_cls._run_target()
+    signature = inspect.signature(target)
+    hints = {}
+    if task_cls.input_variables is None or task_cls.output_variables is None:
+        hints = get_type_hints(target)
+    stream_inputs = dict(task_cls.stream_inputs or {})
+    if task_cls.input_variables is not None:
+        scalar_inputs = dict(task_cls.input_variables)
+    else:
+        scalar_inputs = {}
+        for name, param in signature.parameters.items():
+            if name == "self" or name in stream_inputs:
+                continue
+            annotation = hints.get(name, param.annotation)
+            scalar_inputs[name] = (
+                Any if annotation is inspect.Signature.empty else annotation
+            )
+    required_inputs = tuple(
+        name
+        for name, param in signature.parameters.items()
+        if name != "self"
+        and name in scalar_inputs
+        and param.default is inspect.Parameter.empty
+    )
+
+    stream_outputs = dict(task_cls.stream_outputs or {})
+    if task_cls.output_variables is not None:
+        scalar_outputs = dict(task_cls.output_variables)
+    else:
+        annotation = hints.get("return", signature.return_annotation)
+        _, return_type = _unwrap_generator_types(annotation)
+        names = _extract_return_names(target)
+        if stream_outputs:
+            stream_names = tuple(stream_outputs)
+            scalar_names = tuple(
+                name for name in (names or ()) if name not in stream_names
+            )
+            if task_cls.final_output is not None:
+                final_type = Any if return_type is None else return_type
+                scalar_outputs = {task_cls.final_output: final_type}
+            elif scalar_names and return_type is not None:
+                scalar_outputs = _annotation_to_mapping(return_type, scalar_names)
+            else:
+                scalar_outputs = {}
+        else:
+            scalar_outputs = _annotation_to_mapping(annotation, names)
+    return TaskPortSpec(
+        scalar_inputs=tuple(scalar_inputs.items()),
+        required_scalar_inputs=required_inputs,
+        stream_inputs=tuple(stream_inputs.items()),
+        scalar_outputs=tuple(scalar_outputs.items()),
+        stream_outputs=tuple(stream_outputs.items()),
+        uses_generator_runtime=inspect.isgeneratorfunction(target),
+    )
+
+
 class Task(WorkflowFrozenModel):
     """
     Base class for workflow tasks.
@@ -121,14 +191,7 @@ class Task(WorkflowFrozenModel):
     stream_outputs: ClassVar[dict[str, Any] | None] = None
     final_output: ClassVar[str | None] = None
     _original_function: ClassVar[Callable | None] = None
-    _registered_tasks: ClassVar[list[type[Task]]] = []
     __task_code_path__: ClassVar[str | None] = None
-
-    def __init_subclass__(cls, **kwargs):
-        """Register concrete subclasses."""
-        super().__init_subclass__(**kwargs)
-        if not inspect.isabstract(cls):
-            Task._registered_tasks.append(cls)
 
     @classmethod
     def code_path(cls) -> str:
@@ -144,68 +207,43 @@ class Task(WorkflowFrozenModel):
         return cls._original_function or cls.run
 
     @classmethod
+    def port_spec(cls) -> TaskPortSpec:
+        """Return cached immutable interface metadata for this task class.
+
+        The spec is stored on the class itself (not a module-level cache) so
+        dynamically created task classes stay garbage-collectable. Read via
+        ``cls.__dict__`` so subclasses never inherit a parent's cached spec.
+        """
+        spec = cls.__dict__.get("_port_spec_cache")
+        if spec is None:
+            spec = _build_task_port_spec(cls)
+            cls._port_spec_cache = spec
+        return spec
+
+    @classmethod
     def scalar_input_variables(cls) -> dict[str, Any]:
         """Return scalar input ports for this task."""
-        if cls.input_variables is not None:
-            return dict(cls.input_variables)
-        target = cls._run_target()
-        sig = inspect.signature(target)
-        stream_names = set((cls.stream_inputs or {}).keys())
-        hints = get_type_hints(target)
-        out = {}
-        for name, param in sig.parameters.items():
-            if name == "self" or name in stream_names:
-                continue
-            annotation = hints.get(name, param.annotation)
-            out[name] = Any if annotation is inspect.Signature.empty else annotation
-        return out
+        return dict(cls.port_spec().scalar_inputs)
 
     @classmethod
     def stream_input_variables(cls) -> dict[str, Any]:
         """Return stream input ports for this task."""
-        return dict(cls.stream_inputs or {})
+        return dict(cls.port_spec().stream_inputs)
 
     @classmethod
     def required_scalar_inputs(cls) -> tuple[str, ...]:
         """Return scalar inputs that must be bound before activation."""
-        sig = inspect.signature(cls._run_target())
-        scalar_names = set(cls.scalar_input_variables())
-        required = []
-        for name, param in sig.parameters.items():
-            if name == "self" or name not in scalar_names:
-                continue
-            if param.default is inspect.Parameter.empty:
-                required.append(name)
-        return tuple(required)
+        return cls.port_spec().required_scalar_inputs
 
     @classmethod
     def stream_output_variables(cls) -> dict[str, Any]:
         """Return stream output ports for this task."""
-        return dict(cls.stream_outputs or {})
+        return dict(cls.port_spec().stream_outputs)
 
     @classmethod
     def scalar_output_variables(cls) -> dict[str, Any]:
         """Return scalar output ports for this task."""
-        if cls.output_variables is not None:
-            return dict(cls.output_variables)
-
-        target = cls._original_function or cls.run
-        hints = get_type_hints(target)
-        annotation = hints.get("return", inspect.signature(target).return_annotation)
-        _, return_type = _unwrap_generator_types(annotation)
-        names = _extract_return_names(target)
-        if cls.stream_outputs:
-            stream_names = tuple(cls.stream_outputs.keys())
-            scalar_names = tuple(
-                name for name in (names or ()) if name not in stream_names
-            )
-            if cls.final_output is not None:
-                final_type = Any if return_type is None else return_type
-                return {cls.final_output: final_type}
-            if scalar_names and return_type is not None:
-                return _annotation_to_mapping(return_type, scalar_names)
-            return {}
-        return _annotation_to_mapping(annotation, names)
+        return dict(cls.port_spec().scalar_outputs)
 
     @classmethod
     def validate_ports(cls) -> None:
@@ -230,8 +268,7 @@ class Task(WorkflowFrozenModel):
             cls._run_target()
         ):
             raise ValueError(
-                f"{cls.__name__} declares stream_outputs but run() "
-                "is not a generator"
+                f"{cls.__name__} declares stream_outputs but run() is not a generator"
             )
 
     def resolved_scalar_input_variables(self) -> dict[str, Any]:
@@ -293,7 +330,7 @@ class Task(WorkflowFrozenModel):
     @classmethod
     def uses_generator_runtime(cls) -> bool:
         """Return True when the task runtime is generator-backed."""
-        return inspect.isgeneratorfunction(cls._run_target())
+        return cls.port_spec().uses_generator_runtime
 
     @cached_property
     def fingerprint(self) -> str:

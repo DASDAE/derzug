@@ -168,3 +168,18 @@ class TestRunOutput:
         task_result = widget.get_task().run(df)
 
         assert widget_result == task_result
+
+    def test_conversion_does_not_iterate_dataframe_series_rows(
+        self, widget, monkeypatch
+    ):
+        """Large table conversion should use tuple iteration instead of iterrows."""
+        _configure_point_widget(widget)
+
+        def fail_iterrows(self):
+            raise AssertionError("table conversion called DataFrame.iterrows")
+
+        monkeypatch.setattr(pd.DataFrame, "iterrows", fail_iterrows)
+
+        result = widget.get_task().run(_point_df())
+
+        assert len(result.annotations) == 2

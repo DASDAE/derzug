@@ -614,6 +614,16 @@ class TestZugWidgetAsyncExecution:
             qtbot.waitUntil(lambda: bool(widget.results), timeout=1000)
 
             assert widget.results[-1] == "done"
+            assert widget._execution_runtime._future is None
+
+    def test_async_widgets_share_bounded_worker_pool(self):
+        """Widget instances should not create one executor and thread pool each."""
+        with widget_context(_AsyncWidget) as first:
+            with widget_context(_AsyncWidget) as second:
+                assert (
+                    first._execution_runtime._executor
+                    is second._execution_runtime._executor
+                )
 
     def test_async_run_sets_standard_busy_state_while_running(self, qtbot):
         """Async dispatch should drive Orange's processing-state spinner."""
@@ -659,6 +669,23 @@ class TestZugWidgetAsyncExecution:
 
             assert widget.results[-1] is None
             assert "async boom" in str(widget.message_bar.message.asHtml())
+            assert widget._execution_runtime._future is None
+
+    def test_empty_request_releases_and_invalidates_running_future(self, qtbot):
+        """Clearing input should release the future and suppress its stale result."""
+        with widget_context(_AsyncWidget) as widget:
+            widget.value = "stale"
+            widget.delay = 0.05
+            widget.run()
+
+            widget.value = None
+            widget.run()
+
+            assert widget._execution_runtime._future is None
+            assert widget._active_execution_token is None
+            qtbot.wait(100)
+            QApplication.processEvents()
+            assert widget.results == [None]
 
     def test_async_completion_ignored_after_delete(self, qtbot):
         """Late worker completions should be ignored once teardown starts."""

@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import ClassVar
 
 import dascore as dc
+import numpy as np
 from AnyQt.QtCore import QTimer
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
@@ -16,8 +17,8 @@ from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
 from derzug.models.selection import SelectParams
 from derzug.utils.spool import (
+    annotation_overlap_mask,
     extract_single_patch,
-    filter_contents_by_annotations,
 )
 from derzug.widgets.selection import (
     PatchSelectionBasis,
@@ -63,19 +64,13 @@ class SelectTask(Task):
                 selected = select_params.apply_to_spool(selected)
             if annotation_set is not None:
                 contents = selected.get_contents()
-                filtered = filter_contents_by_annotations(contents, annotation_set)
-                if len(filtered) != len(contents):
-                    if filtered.empty:
+                mask = annotation_overlap_mask(contents, annotation_set)
+                if not bool(mask.all()):
+                    positions = np.flatnonzero(mask.to_numpy(dtype=bool, copy=False))
+                    if not positions.size:
                         selected = dc.spool([])
                     else:
-                        wanted_rows = set(map(int, filtered.index))
-                        selected = dc.spool(
-                            [
-                                patch_value
-                                for row, patch_value in enumerate(selected)
-                                if row in wanted_rows
-                            ]
-                        )
+                        selected = selected[positions.astype(np.int64, copy=False)]
             state = SelectionState()
             state.set_spool_source(selected)
             state.set_spool_filters(list(self.spool_filters))
@@ -379,15 +374,13 @@ class Select(SelectionControlsMixin, ZugWidget):
         if annotation_set is None:
             return spool
         contents = spool.get_contents()
-        filtered = filter_contents_by_annotations(contents, annotation_set)
-        if len(filtered) == len(contents):
+        mask = annotation_overlap_mask(contents, annotation_set)
+        if bool(mask.all()):
             return spool
-        if filtered.empty:
+        positions = np.flatnonzero(mask.to_numpy(dtype=bool, copy=False))
+        if not positions.size:
             return dc.spool([])
-        wanted_rows = set(map(int, filtered.index))
-        return dc.spool(
-            [patch for row, patch in enumerate(spool) if row in wanted_rows]
-        )
+        return spool[positions.astype(np.int64, copy=False)]
 
     def _refresh_ui(self) -> None:
         """Refresh the left-side selection controls and status text."""

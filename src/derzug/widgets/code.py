@@ -7,7 +7,10 @@ import logging
 import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass
+from functools import lru_cache
 from html import escape
+from threading import Lock
 from typing import ClassVar
 
 import dascore as dc
@@ -29,6 +32,7 @@ from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
 from pydantic import BaseModel
 
+from derzug.core.widget_runtime import WidgetExecutionRequest
 from derzug.core.zugwidget import ZugWidget
 from derzug.utils.code2widget import INPUTS_NOT_READY, task_from_callable
 from derzug.workflow import Task
@@ -39,6 +43,14 @@ DEFAULT_SCRIPT = """def transform(patch):
 """
 
 logger = logging.getLogger(__name__)
+_CODE_STREAM_LOCK = Lock()
+_COMPILE_CACHE_SIZE = 64
+
+
+@lru_cache(maxsize=_COMPILE_CACHE_SIZE)
+def _compile_script(script_text: str):
+    """Compile and cache immutable user script bytecode by source text."""
+    return compile(script_text, "<derzug-code>", "exec")
 
 
 class _LoggedTaskExecutionError(Exception):
@@ -48,6 +60,14 @@ class _LoggedTaskExecutionError(Exception):
         super().__init__(str(exc))
         self.original = exc
         self.stream_text = stream_text
+
+
+@dataclass(frozen=True)
+class _CodeExecutionResult:
+    """Worker result carrying captured streams and the user value."""
+
+    stream_text: str
+    value: object
 
 
 class CodeTransformTask(Task):
@@ -65,7 +85,7 @@ class CodeTransformTask(Task):
             "dc": dc,
             "np": np,
         }
-        code = compile(self.script_text, "<derzug-code>", "exec")
+        code = _compile_script(self.script_text)
         exec(code, namespace, namespace)
         transform = namespace.get("transform")
         if not callable(transform):
@@ -145,6 +165,10 @@ class Code(ZugWidget):
         self._patch: dc.Patch | None = None
         self._autorun_enabled = False
         self._last_run_succeeded = False
+        self._manual_run_pending = False
+        self._editor_clear_timer = QTimer(self)
+        self._editor_clear_timer.setSingleShot(True)
+        self._editor_clear_timer.timeout.connect(self._clear_result)
 
         controls = QWidget(self.controlArea)
         controls_layout = QVBoxLayout(controls)
@@ -217,23 +241,18 @@ class Code(ZugWidget):
         if self._autorun_enabled:
             self._status_label.setText("Auto-running")
             self.run()
-            label = (
-                "Auto-run complete" if self._last_run_succeeded else "Auto-run failed"
-            )
-            self._status_label.setText(label)
             return
         self._status_label.setText("Ready; press Run")
         self._clear_result()
 
     def _on_run_clicked(self) -> None:
         """Execute the current script and enable sticky auto-run on success."""
+        # Editing schedules an output clear for the next event-loop turn.  A
+        # run clicked in the same turn supersedes that pending clear.
+        self._editor_clear_timer.stop()
+        self._manual_run_pending = True
         self._status_label.setText("Running")
         self.run()
-        if self._last_run_succeeded:
-            self._autorun_enabled = True
-            self._status_label.setText("Auto-run enabled")
-        else:
-            self._status_label.setText("Run failed")
 
     def _settings_control_map(self) -> dict[str, object]:
         """Map settings to their controls for unified apply_settings sync."""
@@ -243,15 +262,40 @@ class Code(ZugWidget):
         """Persist editor text and disable sticky auto-run after user edits."""
         self.script_text = self._editor.toPlainText()
         self._autorun_enabled = False
+        # Any in-flight run executes the pre-edit script; its late result must
+        # not overwrite the log or enable auto-run for the edited script.
+        self._manual_run_pending = False
+        self._invalidate_async_execution()
         self._status_label.setText("Edited; press Run")
-        self._clear_result()
+        self._editor_clear_timer.start(0)
 
     def _run(self):
         """Execute user code and return the `transform` result."""
+        stream_text, result = self._execute_logged_task()
+        return _CodeExecutionResult(stream_text=stream_text, value=result)
+
+    def _supports_async_execution(self) -> bool:
+        """Execute arbitrary transforms outside the GUI thread."""
+        return True
+
+    def _uses_dedicated_worker(self) -> bool:
+        """Isolate arbitrary user scripts from the shared worker pool."""
+        return True
+
+    def _build_execution_request(self) -> WidgetExecutionRequest:
+        """Capture immutable code and patch inputs for worker execution."""
+        task = self.get_task()
+        patch = self._patch
+        return WidgetExecutionRequest(
+            execute=lambda task=task, patch=patch: _execute_logged_code_task(
+                task, patch
+            )
+        )
+
+    def _handle_execution_exception(self, exc: Exception) -> None:
+        """Render captured user-code errors on the main thread."""
         self._last_run_succeeded = False
-        try:
-            stream_text, result = self._execute_logged_task()
-        except _LoggedTaskExecutionError as exc:
+        if isinstance(exc, _LoggedTaskExecutionError):
             self._set_log_text(
                 exc.stream_text,
                 "".join(
@@ -263,15 +307,8 @@ class Code(ZugWidget):
                 ),
             )
             self._show_exception("execution_failed", exc.original)
-            return None
-
-        if result is INPUTS_NOT_READY:
-            self._set_log_text(stream_text)
-            return None
-
-        self._set_log_text(stream_text)
-        self._last_run_succeeded = True
-        return result
+            return
+        self._show_exception("execution_failed", exc)
 
     def get_task(self) -> Task:
         """Return the current editor script as a task."""
@@ -288,19 +325,8 @@ class Code(ZugWidget):
 
     def _execute_logged_task(self) -> tuple[str, object]:
         """Execute the canonical task and return captured streams plus result."""
-        output_buffer = io.StringIO()
-        try:
-            with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
-                result = self._execute_task_or_pipe(
-                    self.get_task(),
-                    input_values={"patch": self._patch},
-                    output_names=("result",),
-                )
-        except Exception as exc:
-            raise _LoggedTaskExecutionError(exc, output_buffer.getvalue()) from exc
-        if isinstance(result, dict):
-            result = result.get("result")
-        return output_buffer.getvalue(), result
+        completed = _execute_logged_code_task(self.get_task(), self._patch)
+        return completed.stream_text, completed.value
 
     def _set_log_text(self, stream_text: str, traceback_text: str = "") -> None:
         """Render stdout/stderr and optional traceback in the log pane."""
@@ -316,8 +342,30 @@ class Code(ZugWidget):
 
     def _on_result(self, result) -> None:
         """Send result on output and update output summary."""
-        self._set_output_object_summary("Result", result)
-        self.Outputs.result.send(result)
+        manual_run = self._manual_run_pending
+        self._manual_run_pending = False
+        if isinstance(result, _CodeExecutionResult):
+            self._set_log_text(result.stream_text)
+            value = None if result.value is INPUTS_NOT_READY else result.value
+            self._last_run_succeeded = result.value is not INPUTS_NOT_READY
+        elif result is not None:
+            value = result
+            self._last_run_succeeded = True
+        else:
+            value = None
+            self._last_run_succeeded = False
+        if manual_run:
+            if self._last_run_succeeded:
+                self._autorun_enabled = True
+                self._status_label.setText("Auto-run enabled")
+            else:
+                self._status_label.setText("Run failed")
+        elif self._autorun_enabled:
+            self._status_label.setText(
+                "Auto-run complete" if self._last_run_succeeded else "Auto-run failed"
+            )
+        self._set_output_object_summary("Result", value)
+        self.Outputs.result.send(value)
 
     def _set_output_object_summary(self, name: str, value: object) -> None:
         """Update one output summary using the object's string form."""
@@ -344,6 +392,21 @@ class Code(ZugWidget):
             return str(value)
         except Exception:
             return f"<{type(value).__name__}>"
+
+
+def _execute_logged_code_task(
+    task: CodeTransformTask,
+    patch: dc.Patch | None,
+) -> _CodeExecutionResult:
+    """Execute code with serialized process-global stream redirection."""
+    output_buffer = io.StringIO()
+    try:
+        with _CODE_STREAM_LOCK:
+            with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
+                result = task.run(patch=patch)
+    except Exception as exc:
+        raise _LoggedTaskExecutionError(exc, output_buffer.getvalue()) from exc
+    return _CodeExecutionResult(output_buffer.getvalue(), result)
 
 
 if __name__ == "__main__":  # pragma: no cover

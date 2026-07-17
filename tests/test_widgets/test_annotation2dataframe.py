@@ -12,7 +12,7 @@ from derzug.models.annotations import (
     PointGeometry,
     SpanGeometry,
 )
-from derzug.utils.testing import capture_output, widget_context
+from derzug.utils.testing import capture_output, wait_for_widget_idle, widget_context
 from derzug.widgets.annotation2dataframe import Annotation2DataFrame
 
 # ---------------------------------------------------------------------------
@@ -24,6 +24,13 @@ from derzug.widgets.annotation2dataframe import Annotation2DataFrame
 def widget(qtbot):
     """Yield a live Annotation2DataFrame widget."""
     with widget_context(Annotation2DataFrame) as w:
+        original = w.set_annotation_set
+
+        def set_and_wait(value):
+            original(value)
+            wait_for_widget_idle(w, timeout=5.0)
+
+        w.set_annotation_set = set_and_wait
         yield w
 
 

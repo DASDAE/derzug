@@ -50,6 +50,7 @@ from derzug.utils.qt import FileOrDirDialog
 from derzug.utils.spool import (
     extract_single_patch,
     normalize_dims_value,
+    series_has_visible_values,
 )
 from derzug.workflow import Task
 
@@ -160,6 +161,7 @@ class _SpoolContentsTableModel(QAbstractTableModel):
         self._headers = [_format_table_header(col) for col in self._columns]
         self._display_df = df[self._columns].reset_index(drop=True)
         self._row_order = list(range(len(self._display_df)))
+        self._view_rows = {row: row for row in self._row_order}
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         """Return the current row count."""
@@ -220,11 +222,18 @@ class _SpoolContentsTableModel(QAbstractTableModel):
         if column < 0 or column >= len(self._columns):
             return
         self.layoutAboutToBeChanged.emit()
-        reverse = order == Qt.SortOrder.DescendingOrder
-        self._row_order.sort(
-            key=lambda row: _table_sort_value(self._display_df.iat[row, column]),
-            reverse=reverse,
+        ascending = order != Qt.SortOrder.DescendingOrder
+        normalized = self._display_df.iloc[:, column].map(_table_sort_value)
+        self._row_order = list(
+            normalized.sort_values(
+                ascending=ascending,
+                kind="mergesort",
+                na_position="last",
+            ).index
         )
+        self._view_rows = {
+            source_row: view_row for view_row, source_row in enumerate(self._row_order)
+        }
         self.layoutChanged.emit()
 
     def source_row_for_view_row(self, row: int) -> int:
@@ -237,7 +246,10 @@ class _SpoolContentsTableModel(QAbstractTableModel):
         """Return the visible row index for one original spool row."""
         if row < 0:
             raise IndexError(row)
-        return self._row_order.index(row)
+        try:
+            return self._view_rows[row]
+        except KeyError as exc:
+            raise ValueError(f"{row} is not in the visible row order") from exc
 
 
 def _emit_task(
@@ -254,8 +266,7 @@ def _emit_task(
         else:
             output_patch = None
     else:
-        patches = _spool_rows_to_patches(display_spool, selected_source_rows)
-        output_spool = dc.spool(patches)
+        output_spool = _spool_rows_to_output(display_spool, selected_source_rows)
         if unpack_single and len(selected_source_rows) == 1:
             output_patch = extract_single_patch(output_spool)
         else:
@@ -285,6 +296,9 @@ class _SpoolExecutionSnapshot:
     task: Task
     selected_source_rows: frozenset[int]
     visible_row_count: int | None
+    display_spool: dc.BaseSpool | None = None
+    settings_source_identity: tuple[object, ...] | None = None
+    display_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -295,6 +309,8 @@ class _SpoolExecutionResult:
     display_spool: dc.BaseSpool | None
     output_spool: dc.BaseSpool | None
     output_patch: dc.Patch | None
+    settings_source_identity: tuple[object, ...] | None = None
+    display_generation: int = 0
 
 
 class _SettingsSourceLoadError(Exception):
@@ -430,18 +446,48 @@ def _apply_chunk_settings(
 def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutionResult:
     """Execute one spool snapshot off-thread and return preview plus outputs."""
     task = snapshot.task
+    if snapshot.source_mode == "display":
+        display_spool = snapshot.display_spool
+        if display_spool is None:
+            return _SpoolExecutionResult(
+                snapshot.source_spool,
+                None,
+                None,
+                None,
+                snapshot.settings_source_identity,
+                snapshot.display_generation,
+            )
+        visible_row_count = snapshot.visible_row_count
+        if visible_row_count is None:
+            visible_row_count = _spool_row_count(display_spool)
+        output_spool, output_patch = _emit_task(
+            display_spool,
+            snapshot.selected_source_rows,
+            task.unpack_single_patch,
+            visible_row_count,
+        )
+        return _SpoolExecutionResult(
+            source_spool=snapshot.source_spool,
+            display_spool=display_spool,
+            output_spool=output_spool,
+            output_patch=output_patch,
+            settings_source_identity=snapshot.settings_source_identity,
+            display_generation=snapshot.display_generation,
+        )
     if snapshot.source_mode == "settings":
         assert isinstance(task, SpoolTask)
-        try:
-            source_spool = _load_spool_from_settings(
-                spool_input=task.spool_input,
-                example_parameters=task.example_parameters,
-                file_input=task.file_input,
-                raw_input=task.raw_input,
-            )
-            source_spool = source_spool.update()
-        except Exception as exc:
-            raise _SettingsSourceLoadError(str(exc)) from exc
+        source_spool = snapshot.source_spool
+        if source_spool is None:
+            try:
+                source_spool = _load_spool_from_settings(
+                    spool_input=task.spool_input,
+                    example_parameters=task.example_parameters,
+                    file_input=task.file_input,
+                    raw_input=task.raw_input,
+                )
+                source_spool = source_spool.update()
+            except Exception as exc:
+                raise _SettingsSourceLoadError(str(exc)) from exc
         try:
             display_spool = _apply_select_rows(source_spool, task.select_filters)
             display_spool = _apply_chunk_settings(
@@ -455,9 +501,7 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
                 chunk_tolerance=task.chunk_tolerance,
                 chunk_conflict=task.chunk_conflict,
             )
-            visible_row_count = snapshot.visible_row_count
-            if visible_row_count is None:
-                visible_row_count = _spool_row_count(display_spool)
+            visible_row_count = _spool_row_count(display_spool)
             output_spool, output_patch = _emit_task(
                 display_spool,
                 snapshot.selected_source_rows,
@@ -474,10 +518,14 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
             display_spool=display_spool,
             output_spool=output_spool,
             output_patch=output_patch,
+            settings_source_identity=snapshot.settings_source_identity,
+            display_generation=snapshot.display_generation,
         )
     source_spool = snapshot.source_spool
     if source_spool is None:
-        return _SpoolExecutionResult(None, None, None, None)
+        return _SpoolExecutionResult(
+            None, None, None, None, display_generation=snapshot.display_generation
+        )
     assert isinstance(task, SpoolTransformTask)
     display_spool = _apply_select_rows(source_spool, task.select_filters)
     display_spool = _apply_chunk_settings(
@@ -491,9 +539,7 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
         chunk_tolerance=task.chunk_tolerance,
         chunk_conflict=task.chunk_conflict,
     )
-    visible_row_count = snapshot.visible_row_count
-    if visible_row_count is None:
-        visible_row_count = _spool_row_count(display_spool)
+    visible_row_count = _spool_row_count(display_spool)
     output_spool, output_patch = _emit_task(
         display_spool,
         snapshot.selected_source_rows,
@@ -505,6 +551,8 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
         display_spool=display_spool,
         output_spool=output_spool,
         output_patch=output_patch,
+        settings_source_identity=snapshot.settings_source_identity,
+        display_generation=snapshot.display_generation,
     )
 
 
@@ -641,11 +689,27 @@ def _spool_indices_for_rows(
     return indices
 
 
+def _spool_rows_to_output(
+    spool: dc.BaseSpool,
+    selected_rows: set[int] | frozenset[int],
+) -> dc.BaseSpool:
+    """Return a lazily indexed spool for the selected display rows."""
+    indices = _spool_indices_for_rows(spool, selected_rows)
+    if not indices:
+        return spool
+    if hasattr(spool, "get_contents"):
+        return spool[np.asarray(indices, dtype=np.int64)]
+    if len(indices) == 1:
+        index = int(indices[0])
+        return dc.spool(spool[index : index + 1])
+    return dc.spool([spool[int(index)] for index in indices])
+
+
 def _spool_rows_to_patches(
     spool: dc.BaseSpool,
     selected_rows: set[int] | frozenset[int],
 ) -> list[dc.Patch]:
-    """Return selected patches without materializing the entire spool."""
+    """Return selected patch payloads without iterating unrelated rows."""
     return [spool[index] for index in _spool_indices_for_rows(spool, selected_rows)]
 
 
@@ -775,6 +839,13 @@ class Spool(ZugWidget):
         )
         self._loaded_settings_source_identity: tuple[object, ...] | None = None
         self._pending_error_source_identity: tuple[object, ...] | None = None
+        self._force_source_reload = False
+        self._next_execution_output_only = False
+        # Generation counters gating the output-only fast path: the display
+        # spool may be reused only while no full recompute has been requested
+        # since it was produced.
+        self._display_inputs_generation = 0
+        self._display_spool_generation = 0
         self._pending_restore_emit: bool = False
         self._preserve_state_on_next_empty_result: bool = False
         self._table_selection_model = None
@@ -1042,7 +1113,9 @@ class Spool(ZugWidget):
             self._on_chunk_param_changed
         )
         self.select_add_button.clicked.connect(self._on_add_select_row_clicked)
-        self.unpack_checkbox.toggled.connect(lambda *_args: self._schedule_emit())
+        self.unpack_checkbox.toggled.connect(
+            lambda *_args: self._schedule_emit(output_only=True)
+        )
         self.update_button.clicked.connect(self._on_update_clicked)
 
     def eventFilter(self, watched: QWidget, event: QEvent) -> bool:
@@ -1093,6 +1166,7 @@ class Spool(ZugWidget):
         self._source_mode = "snapshot"
         self._source_spool = value
         self._display_spool = value
+        self._display_spool_generation = self._display_inputs_generation
 
     def run(self) -> None:
         """Load or transform the current spool source via the shared runtime."""
@@ -1101,6 +1175,7 @@ class Spool(ZugWidget):
     def _on_update_clicked(self) -> None:
         """Refresh the currently configured spool source."""
         if self.example_combo.isEnabled() and self._source_mode == "settings":
+            self._force_source_reload = True
             self.run()
             return
         if self._source_spool is None:
@@ -1110,6 +1185,7 @@ class Spool(ZugWidget):
                     display_spool=None,
                     output_spool=None,
                     output_patch=None,
+                    display_generation=self._display_inputs_generation,
                 )
             )
             return
@@ -1168,12 +1244,7 @@ class Spool(ZugWidget):
         self._pending_error_source_name = (
             snapshot.source_name if snapshot.source_mode == "settings" else None
         )
-        self._pending_error_source_identity = (
-            _settings_source_identity_from_task(snapshot.task)
-            if snapshot.source_mode == "settings"
-            and isinstance(snapshot.task, SpoolTask)
-            else None
-        )
+        self._pending_error_source_identity = snapshot.settings_source_identity
         return WidgetExecutionRequest(
             execute=lambda snapshot=snapshot: _execute_spool_snapshot(snapshot)
         )
@@ -1184,7 +1255,30 @@ class Spool(ZugWidget):
         visible_row_count = None
         if self._display_spool is not None:
             visible_row_count = self._visible_spool_row_count(self._display_spool)
+        if (
+            self._next_execution_output_only
+            and self._display_spool is not None
+            and self._display_spool_generation == self._display_inputs_generation
+        ):
+            # The display spool still reflects every requested recompute, so
+            # selection-only emissions may reuse it even while another
+            # output-only emission is in flight. A pending full recompute
+            # (generation mismatch) must rebuild the latest state instead.
+            self._next_execution_output_only = False
+            return _SpoolExecutionSnapshot(
+                source_mode="display",
+                source_name=None,
+                source_spool=self._source_spool,
+                display_spool=self._display_spool,
+                task=self._current_transform_task(),
+                selected_source_rows=selected_source_rows,
+                visible_row_count=visible_row_count,
+                settings_source_identity=self._loaded_settings_source_identity,
+                display_generation=self._display_inputs_generation,
+            )
+        self._next_execution_output_only = False
         if self._source_mode == "snapshot":
+            self._display_inputs_generation += 1
             return _SpoolExecutionSnapshot(
                 source_mode="snapshot",
                 source_name=None,
@@ -1192,17 +1286,30 @@ class Spool(ZugWidget):
                 task=self._current_transform_task(),
                 selected_source_rows=selected_source_rows,
                 visible_row_count=visible_row_count,
+                display_generation=self._display_inputs_generation,
             )
         source_name = self._snapshot_source_name()
         if not source_name:
             return None
+        task = self._current_source_task()
+        source_identity = _settings_source_identity_from_task(task)
+        source_spool = None
+        if (
+            not self._force_source_reload
+            and source_identity == self._loaded_settings_source_identity
+        ):
+            source_spool = self._source_spool
+        self._force_source_reload = False
+        self._display_inputs_generation += 1
         return _SpoolExecutionSnapshot(
             source_mode="settings",
             source_name=source_name,
-            source_spool=None,
-            task=self._current_source_task(),
+            source_spool=source_spool,
+            task=task,
             selected_source_rows=selected_source_rows,
             visible_row_count=visible_row_count,
+            settings_source_identity=source_identity,
+            display_generation=self._display_inputs_generation,
         )
 
     def _snapshot_source_name(self) -> str | None:
@@ -1261,6 +1368,7 @@ class Spool(ZugWidget):
                     display_spool=None,
                     output_spool=None,
                     output_patch=None,
+                    display_generation=self._display_inputs_generation,
                 )
             )
             return
@@ -1273,8 +1381,13 @@ class Spool(ZugWidget):
         """Apply preview and final output state from one worker result."""
         self._source_spool = result.source_spool
         self._display_spool = result.display_spool
-        if self._source_mode == "settings" and result.source_spool is not None:
-            self._loaded_settings_source_identity = self._pending_error_source_identity
+        self._display_spool_generation = result.display_generation
+        if (
+            self._source_mode == "settings"
+            and result.source_spool is not None
+            and result.settings_source_identity is not None
+        ):
+            self._loaded_settings_source_identity = result.settings_source_identity
         elif result.source_spool is None:
             self._loaded_settings_source_identity = None
         self._pending_restore_emit = (
@@ -1337,18 +1450,26 @@ class Spool(ZugWidget):
             bool(self.unpack_single_patch),
             visible_row_count,
         )
+        # The fallback source is now the intended display state, so stamp it
+        # current: selection emissions may reuse it until settings change.
         self._apply_execution_result(
             _SpoolExecutionResult(
                 source_spool=spool,
                 display_spool=spool,
                 output_spool=output_spool,
                 output_patch=output_patch,
+                display_generation=self._display_inputs_generation,
             )
         )
 
-    def _schedule_emit(self) -> None:
+    def _schedule_emit(self, *, output_only: bool = False) -> None:
         """Re-run execution after a UI selection or option change."""
+        self._next_execution_output_only = bool(output_only)
         self.run()
+
+    def _schedule_output_emit(self) -> None:
+        """Re-emit selection state without recomputing spool transforms."""
+        self._schedule_emit(output_only=True)
 
     def _snapshot_selected_source_rows(self) -> frozenset[int]:
         """Capture the currently selected source-row indices (main thread only)."""
@@ -1834,7 +1955,6 @@ class Spool(ZugWidget):
         self._sync_select_filters_from_ui()
         if self._source_spool is None:
             return
-        self._recompute_display_spool()
         self._schedule_emit()
 
     def _on_chunk_dim_changed(self, index: int) -> None:
@@ -1864,7 +1984,6 @@ class Spool(ZugWidget):
             return
         self.chunk_value = self.chunk_value_edit.text().strip()
         self.chunk_overlap = self.chunk_overlap_edit.text().strip()
-        self._recompute_display_spool()
         self._schedule_emit()
 
     def _on_chunk_group_toggled(self, checked: bool) -> None:
@@ -1872,7 +1991,6 @@ class Spool(ZugWidget):
         self.chunk_enabled = bool(checked)
         if self._source_spool is None:
             return
-        self._recompute_display_spool()
         self._schedule_emit()
 
     def _on_chunk_value_text_changed(self, text: str) -> None:
@@ -1881,12 +1999,12 @@ class Spool(ZugWidget):
         if self.chunk_value or self._source_spool is None:
             return
         self.chunk_overlap = self.chunk_overlap_edit.text().strip()
-        self._recompute_display_spool()
         self._schedule_emit()
 
     def _set_source_spool(self, spool: dc.BaseSpool | None) -> None:
         """Store the source spool and refresh derived display state."""
         self._source_mode = "snapshot"
+        self._loaded_settings_source_identity = None
         self._source_spool = spool
         self._pending_restore_emit = (
             spool is not None
@@ -1901,6 +2019,7 @@ class Spool(ZugWidget):
         source = self._source_spool
         if source is None:
             self._display_spool = None
+            self._display_spool_generation = self._display_inputs_generation
             self._request_ui_refresh()
             return
         try:
@@ -1912,6 +2031,7 @@ class Spool(ZugWidget):
             self._show_exception("general", exc)
             return
         self._display_spool = display
+        self._display_spool_generation = self._display_inputs_generation
         self._request_ui_refresh()
 
     def _refresh_ui(self) -> None:
@@ -2112,7 +2232,7 @@ class Spool(ZugWidget):
         return [
             c
             for c in _DISPLAY_COLUMNS
-            if c in df.columns and df[c].astype(str).str.strip().ne("").any()
+            if c in df.columns and series_has_visible_values(df[c])
         ]
 
     def _get_selected_output_spool(self) -> dc.BaseSpool | None:
@@ -2149,15 +2269,7 @@ class Spool(ZugWidget):
         selected_rows: set[int],
     ) -> dc.BaseSpool:
         """Return a spool containing only the requested source rows."""
-        indices = _spool_indices_for_rows(spool, selected_rows)
-        if not indices:
-            return spool
-        if not hasattr(spool, "get_contents"):
-            if len(indices) == 1:
-                index = int(indices[0])
-                return spool[index : index + 1]
-            return dc.spool([spool[int(index)] for index in indices])
-        return spool[np.asarray(indices, dtype=np.int64)]
+        return _spool_rows_to_output(spool, selected_rows)
 
     def _emit_current_output(self) -> None:
         """Emit the current output spool and optional unpacked patch."""
@@ -2315,7 +2427,7 @@ class Spool(ZugWidget):
     def _on_table_selection_changed(self, *_args) -> None:
         """Re-emit spool filtered to selected rows, or full spool if none."""
         self._persist_selected_row()
-        self._schedule_emit()
+        self._schedule_emit(output_only=True)
 
     def _persist_selected_row(self) -> None:
         """Persist the currently selected source row for workflow round-tripping."""
@@ -2353,7 +2465,7 @@ class Spool(ZugWidget):
         selection_model.blockSignals(False)
         if self._pending_restore_emit:
             self._pending_restore_emit = False
-            QTimer.singleShot(0, self._schedule_emit)
+            QTimer.singleShot(0, self._schedule_output_emit)
 
     def _resolved_selected_source_row(self) -> int | None:
         """Return the persisted source row, remapped by patch name when possible."""

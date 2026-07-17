@@ -10,6 +10,7 @@ from typing import ClassVar
 
 import pytest
 from derzug.workflow import STREAM_END, Pipe, PipeBuilder, Provenance, Task
+from derzug.workflow.graph import Edge
 from derzug.workflow.task import task
 
 
@@ -133,6 +134,70 @@ def test_stream_outputs_reject_multiple_consumers():
 
     with pytest.raises(ValueError, match="multiple consumers"):
         builder.build()
+
+
+def test_copied_pipe_with_invalid_edges_revalidates():
+    """A copy derived from a validated pipe must not inherit its validation."""
+    builder = PipeBuilder()
+    add = builder.add(AddOne(), name="add")
+    two = builder.add(add_two(), name="two")
+    builder.connect(add, two, from_output="y", to_input="x")
+    pipe = builder.build()
+    pipe.ensure_validated()
+
+    good_edge = pipe.edges[0]
+    bad_edge = Edge(
+        from_node=good_edge.from_node,
+        from_port="nope",
+        to_node=good_edge.to_node,
+        to_port=good_edge.to_port,
+    )
+    derived = pipe.new(edges=(bad_edge,))
+
+    with pytest.raises(ValueError, match="unknown upstream output port"):
+        derived.ensure_validated()
+
+
+def test_ensure_validated_caches_successful_validation(monkeypatch):
+    """Repeated ensure_validated calls validate the same object only once."""
+    builder = PipeBuilder()
+    builder.add(AddOne(), name="add")
+    # Copies never inherit the validation cache, so the derived pipe starts
+    # unvalidated even though build() already validated the original.
+    pipe = builder.build().new()
+
+    calls = []
+    original = type(pipe).validate
+
+    def counting_validate(self):
+        calls.append(self)
+        return original(self)
+
+    monkeypatch.setattr(type(pipe), "validate", counting_validate)
+    pipe.ensure_validated()
+    pipe.ensure_validated()
+
+    assert len(calls) == 1
+
+
+def test_dynamic_task_classes_are_collectable():
+    """port_spec caching must not pin dynamically created task classes."""
+    import gc
+    import weakref
+
+    from derzug.utils.code2widget import task_from_callable
+
+    def transform(patch):
+        return patch
+
+    task_type = task_from_callable(transform)
+    task_type.port_spec()
+    task_type.required_scalar_inputs()
+    ref = weakref.ref(task_type)
+    del task_type
+    gc.collect()
+
+    assert ref() is None
 
 
 def test_pipe_json_round_trip(tmp_path):
@@ -305,3 +370,24 @@ def test_executor_retains_requested_stream_final_output_only():
     assert result["collect"] == [2, 4]
     assert "detect" not in result.node_outputs
     assert result.get("split") is None
+
+
+def test_map_resolves_task_runtime_interfaces_once(monkeypatch):
+    """Repeated map items should share immutable task interface metadata."""
+    builder = PipeBuilder()
+    builder.add(AddOne(), name="add")
+    pipe = builder.build()
+    calls = 0
+    original = AddOne.resolved_scalar_input_variables
+
+    def counted(self):
+        nonlocal calls
+        calls += 1
+        return original(self)
+
+    monkeypatch.setattr(AddOne, "resolved_scalar_input_variables", counted)
+
+    results = list(pipe.map([1, 2, 3], output_keys=["add"]))
+
+    assert [result["add"] for result in results] == [2, 3, 4]
+    assert calls == 1

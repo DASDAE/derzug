@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.utils.display import format_display
+from derzug.utils.sampling import strided_step
 from derzug.workflow import Task
 from derzug.workflow.widget_tasks import PatchPassThroughTask
 
@@ -120,6 +121,9 @@ _DEFAULT_OUTPUT_GAIN_DB = 0.0
 _DEFAULT_VOLUME_PERCENT = 100
 _MIN_VOLUME_PERCENT = 0
 _MAX_VOLUME_PERCENT = 200
+_MAX_WAVEFORM_PLOT_SAMPLES = 200_000
+_PCM_CALIBRATION_SAMPLES = 1_000_000
+_RESAMPLE_BLOCK_SIZE = 500_000
 
 
 @dataclass(frozen=True)
@@ -183,6 +187,7 @@ class PlayAudio(ZugWidget):
         self._syncing_time_scale = False
         self._waveform_time_seconds: np.ndarray | None = None
         self._waveform_samples: np.ndarray | None = None
+        self._source_waveform_samples: np.ndarray | None = None
         self._playback_sample_index: int | None = None
         self._playback_timer = QTimer(self)
         self._playback_timer.setInterval(30)
@@ -275,6 +280,7 @@ class PlayAudio(ZugWidget):
             self._status_text = "No patch loaded"
             self._waveform_time_seconds = None
             self._waveform_samples = None
+            self._source_waveform_samples = None
             self._playback_sample_index = None
         else:
             try:
@@ -288,6 +294,7 @@ class PlayAudio(ZugWidget):
                 self._status_text = "Patch is not playable"
                 self._waveform_time_seconds = None
                 self._waveform_samples = None
+                self._source_waveform_samples = None
                 self._playback_sample_index = None
             else:
                 self._native_rate_hz = self._prepared_audio.native_rate_hz
@@ -524,14 +531,18 @@ class PlayAudio(ZugWidget):
 
     def _set_waveform_data(self, patch: dc.Patch) -> None:
         """Cache waveform data for the plot using seconds relative to the start."""
-        samples = np.asarray(patch.data, dtype=np.float64).reshape(-1)
-        time_seconds = self._coord_to_seconds(np.asarray(patch.get_array("time")))
+        source_samples = np.asarray(patch.data).reshape(-1)
+        step = strided_step(source_samples.size, _MAX_WAVEFORM_PLOT_SAMPLES)
+        samples = source_samples[::step]
+        time_coord = np.asarray(patch.get_array("time"))
+        time_seconds = self._coord_to_seconds(time_coord[::step])
         time_seconds = np.asarray(time_seconds, dtype=np.float64)
         if time_seconds.size:
             time_seconds = time_seconds - float(time_seconds[0])
         self._waveform_time_seconds = time_seconds
         self._waveform_samples = samples
-        self._playback_sample_index = 0 if samples.size else None
+        self._source_waveform_samples = source_samples
+        self._playback_sample_index = 0 if source_samples.size else None
 
     def _refresh_waveform_plot(self) -> None:
         """Refresh the waveform curve and marker from the cached patch data."""
@@ -558,18 +569,21 @@ class PlayAudio(ZugWidget):
         self._playback_sample_index = sample_index
         if (
             sample_index is None
-            or self._waveform_time_seconds is None
-            or self._waveform_samples is None
-            or self._waveform_time_seconds.size == 0
-            or self._waveform_samples.size == 0
+            or self._source_waveform_samples is None
+            or self._source_waveform_samples.size == 0
         ):
             self._waveform_marker.setData([], [])
             return
-        index = int(np.clip(sample_index, 0, self._waveform_samples.size - 1))
+        index = int(np.clip(sample_index, 0, self._source_waveform_samples.size - 1))
         self._playback_sample_index = index
+        time_seconds = (
+            float(index) / self._native_rate_hz
+            if self._native_rate_hz is not None and self._native_rate_hz > 0
+            else 0.0
+        )
         self._waveform_marker.setData(
-            [float(self._waveform_time_seconds[index])],
-            [float(self._waveform_samples[index])],
+            [time_seconds],
+            [float(self._source_waveform_samples[index])],
         )
 
     def _update_playback_marker(self) -> None:
@@ -641,10 +655,7 @@ class PlayAudio(ZugWidget):
         if round(effective_rate_hz) == output_rate_hz:
             return prepared.pcm_bytes
 
-        source = (
-            np.frombuffer(prepared.pcm_bytes, dtype="<i2").astype(np.float64)
-            / np.iinfo(np.int16).max
-        )
+        source = np.frombuffer(prepared.pcm_bytes, dtype="<i2")
         target_count = max(
             1,
             round(prepared.sample_count * float(output_rate_hz) / effective_rate_hz),
@@ -652,14 +663,20 @@ class PlayAudio(ZugWidget):
         if target_count == prepared.sample_count:
             return prepared.pcm_bytes
         if prepared.sample_count == 1:
-            resampled = np.full(target_count, source[0], dtype=np.float64)
-        else:
-            source_x = np.linspace(0.0, 1.0, prepared.sample_count, endpoint=True)
-            target_x = np.linspace(0.0, 1.0, target_count, endpoint=True)
-            resampled = np.interp(target_x, source_x, source)
-        pcm = np.rint(np.clip(resampled, -1.0, 1.0) * np.iinfo(np.int16).max).astype(
-            "<i2"
-        )
+            pcm = np.full(target_count, source[0], dtype="<i2")
+            return pcm.tobytes()
+        pcm = np.empty(target_count, dtype="<i2")
+        position_scale = (prepared.sample_count - 1) / max(target_count - 1, 1)
+        for start in range(0, target_count, _RESAMPLE_BLOCK_SIZE):
+            stop = min(start + _RESAMPLE_BLOCK_SIZE, target_count)
+            positions = np.arange(start, stop, dtype=np.float64) * position_scale
+            left = np.floor(positions).astype(np.int64)
+            right = np.minimum(left + 1, prepared.sample_count - 1)
+            fraction = positions - left
+            left_values = source[left].astype(np.float32)
+            right_values = source[right].astype(np.float32)
+            values = left_values + ((right_values - left_values) * fraction)
+            pcm[start:stop] = np.rint(values).astype("<i2")
         return pcm.tobytes()
 
     @staticmethod
@@ -715,15 +732,23 @@ class PlayAudio(ZugWidget):
         seconds = PlayAudio._coord_to_seconds(coord)
         if seconds.size < 2:
             raise ValueError("time coordinate must contain at least two samples")
-        diffs = np.diff(seconds)
-        if not np.all(np.isfinite(diffs)):
+        first = float(seconds[1] - seconds[0])
+        if not isfinite(first):
             raise ValueError("time coordinate must contain finite sample spacing")
-        if np.any(diffs <= 0):
+        if first <= 0:
             raise ValueError("time coordinate must be strictly increasing")
-        first = float(diffs[0])
         tolerance = max(abs(first) * 1e-6, 1e-12)
-        if not np.allclose(diffs, first, rtol=1e-6, atol=tolerance):
-            raise ValueError("time coordinate must have uniform sample spacing")
+        # Check bounded slices so validating a long recording does not allocate
+        # a second full-length float64 difference array.
+        for start in range(1, seconds.size, _RESAMPLE_BLOCK_SIZE):
+            stop = min(start + _RESAMPLE_BLOCK_SIZE, seconds.size)
+            diffs = seconds[start:stop] - seconds[start - 1 : stop - 1]
+            if not np.all(np.isfinite(diffs)):
+                raise ValueError("time coordinate must contain finite sample spacing")
+            if np.any(diffs <= 0):
+                raise ValueError("time coordinate must be strictly increasing")
+            if not np.allclose(diffs, first, rtol=1e-6, atol=tolerance):
+                raise ValueError("time coordinate must have uniform sample spacing")
         rate_hz = 1.0 / first
         if not isfinite(rate_hz) or rate_hz <= 0:
             raise ValueError("time coordinate must define a positive sample rate")
@@ -740,7 +765,7 @@ class PlayAudio(ZugWidget):
             ns = arr.astype("timedelta64[ns]").astype(np.int64)
             return ns.astype(np.float64) / 1e9
         if np.issubdtype(arr.dtype, np.number):
-            return arr.astype(np.float64)
+            return arr.astype(np.float64, copy=False)
         raise ValueError("time coordinate must be numeric or datetime-like")
 
     @staticmethod
@@ -750,21 +775,31 @@ class PlayAudio(ZugWidget):
         output_gain_db: float = _DEFAULT_OUTPUT_GAIN_DB,
     ) -> tuple[bytes, int]:
         """Normalize mono samples with robust auto-gain and convert to PCM."""
-        samples = np.asarray(data, dtype=np.float64).reshape(-1)
+        samples = np.array(data, dtype=np.float32, copy=True).reshape(-1)
         if samples.size == 0:
             raise ValueError("patch data is empty")
         finite_mask = np.isfinite(samples)
         if not np.any(finite_mask):
             raise ValueError("patch data must contain at least one finite sample")
-        safe_samples = np.where(finite_mask, samples, 0.0)
-        nonzero = np.abs(safe_samples[finite_mask])
+        step = strided_step(samples.size, _PCM_CALIBRATION_SAMPLES)
+        calibration = samples[::step]
+        finite_calibration = calibration[np.isfinite(calibration)]
+        if finite_calibration.size == 0:
+            finite_calibration = samples[np.argmax(finite_mask) :][:1]
+        nonzero = np.abs(finite_calibration)
         ref = float(np.percentile(nonzero, _PCM_NORMALIZE_PERCENTILE))
         if ref <= 0:
-            ref = float(np.max(nonzero))
+            # The strided calibration subset can miss all signal energy
+            # (e.g. sparse spikes between stride points); fall back to the
+            # full-array peak so only truly silent data skips normalization.
+            ref = float(np.max(np.abs(samples[finite_mask])))
         if ref > 0:
-            safe_samples = safe_samples * (_PCM_HEADROOM / ref)
+            samples *= _PCM_HEADROOM / ref
         linear_gain = float(10 ** (float(output_gain_db) / 20.0))
-        safe_samples = safe_samples * linear_gain
-        safe_samples = np.clip(safe_samples, -_PCM_HEADROOM, _PCM_HEADROOM)
-        pcm = np.rint(safe_samples * np.iinfo(np.int16).max).astype("<i2")
+        samples[~finite_mask] = 0.0
+        samples *= linear_gain
+        np.clip(samples, -_PCM_HEADROOM, _PCM_HEADROOM, out=samples)
+        samples *= np.iinfo(np.int16).max
+        np.rint(samples, out=samples)
+        pcm = samples.astype("<i2")
         return pcm.tobytes(), int(samples.size)

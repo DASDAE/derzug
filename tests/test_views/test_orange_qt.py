@@ -2660,6 +2660,7 @@ class TestDerZugCanvasWorkflow:
         code_widget.set_patch(dc.get_example_patch("example_event_1"))
         code_widget._editor.setPlainText("raise ValueError('canvas boom')")
         code_widget._run_button.click()
+        wait_for_widget_idle(code_widget, timeout=5.0)
         qapp.processEvents()
 
         node_item = window.current_document().scene().item_for_node(code_node)

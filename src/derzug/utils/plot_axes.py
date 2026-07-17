@@ -32,17 +32,6 @@ class CursorField:
     visible_span: float | None = None
 
 
-def _datetime_value_to_ns(value: Any) -> np.int64:
-    """Normalize one datetime-like value into integer nanoseconds since epoch."""
-    if isinstance(value, np.datetime64):
-        return value.astype("datetime64[ns]").astype(np.int64)
-    if isinstance(value, datetime):
-        if value.tzinfo is not None:
-            value = value.astimezone(UTC).replace(tzinfo=None)
-        return np.datetime64(value, "ns").astype(np.int64)
-    return np.datetime64(value, "ns").astype(np.int64)
-
-
 class ContextDateAxisItem(pg.DateAxisItem):
     """Date axis item that can derive compact higher-level datetime context."""
 
@@ -293,35 +282,47 @@ def _time_unit_for_quantum(quantum_seconds: float) -> str:
 
 
 def nearest_axis_index(value: float, axis_values: np.ndarray) -> int:
-    """Return the nearest valid axis index for a plotted numeric value."""
+    """Return the nearest index in a monotonic plotted numeric axis."""
     axis = np.asarray(axis_values, dtype=np.float64)
-    return int(np.clip(np.argmin(np.abs(axis - value)), 0, axis.size - 1))
+    if axis.size <= 1:
+        return 0
+    if not math.isfinite(float(value)):
+        return 0
+
+    descending = bool(axis[0] > axis[-1])
+    ordered = axis[::-1] if descending else axis
+    insertion = int(np.searchsorted(ordered, value, side="left"))
+    if insertion <= 0:
+        ordered_index = 0
+    elif insertion >= ordered.size:
+        ordered_index = ordered.size - 1
+    else:
+        left = insertion - 1
+        right = insertion
+        ordered_index = (
+            left if value - ordered[left] <= ordered[right] - value else right
+        )
+    if descending:
+        return int(axis.size - ordered_index - 1)
+    return int(ordered_index)
 
 
-def interp_with_extrapolation(
-    value: float,
-    x: np.ndarray,
-    y: np.ndarray,
-) -> float:
-    """Interpolate y(x) and extrapolate linearly outside x bounds."""
-    if x.size == 0 or y.size == 0:
-        return float(value)
-    if x.size == 1 or y.size == 1:
-        return float(y[0])
+def nearest_value_index(value: float, values: np.ndarray) -> int:
+    """Return the index of the value nearest ``value`` in an unsorted array.
 
-    if value < x[0]:
-        dx = float(x[1] - x[0])
-        if dx == 0:
-            return float(y[0])
-        slope = float(y[1] - y[0]) / dx
-        return float(y[0]) + (value - float(x[0])) * slope
-    if value > x[-1]:
-        dx = float(x[-1] - x[-2])
-        if dx == 0:
-            return float(y[-1])
-        slope = float(y[-1] - y[-2]) / dx
-        return float(y[-1]) + (value - float(x[-1])) * slope
-    return float(np.interp(value, x, y))
+    Unlike :func:`nearest_axis_index`, this makes no monotonicity assumption
+    and scans every element, so use it for arbitrary data (e.g. amplitudes)
+    rather than plotted axes.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    if array.size <= 1:
+        return 0
+    if not math.isfinite(float(value)):
+        return 0
+    deltas = np.abs(array - value)
+    if not np.any(np.isfinite(deltas)):
+        return 0
+    return int(np.nanargmin(deltas))
 
 
 def map_plot_value_to_coord(
@@ -340,22 +341,21 @@ def map_plot_value_to_coord(
 
     plot = np.asarray(plot_axis, dtype=np.float64)
     coord = np.asarray(coord_axis)
-
-    if plot[0] > plot[-1]:
-        plot = plot[::-1]
-        coord = coord[::-1]
-
+    left, right, fraction = _interpolation_position(value, plot)
     if np.issubdtype(coord.dtype, np.datetime64):
-        ns = coord.astype("datetime64[ns]").astype(np.int64)
-        mapped = int(interp_with_extrapolation(value, plot, ns))
+        left_ns = coord[left].astype("datetime64[ns]").astype(np.int64)
+        right_ns = coord[right].astype("datetime64[ns]").astype(np.int64)
+        mapped = int(left_ns + ((right_ns - left_ns) * fraction))
         return np.datetime64(mapped, "ns")
     if np.issubdtype(coord.dtype, np.timedelta64):
-        ns = coord.astype("timedelta64[ns]").astype(np.int64)
-        mapped = int(interp_with_extrapolation(value, plot, ns))
+        left_ns = coord[left].astype("timedelta64[ns]").astype(np.int64)
+        right_ns = coord[right].astype("timedelta64[ns]").astype(np.int64)
+        mapped = int(left_ns + ((right_ns - left_ns) * fraction))
         return np.timedelta64(mapped, "ns")
     if np.issubdtype(coord.dtype, np.number):
-        coord_float = coord.astype(np.float64)
-        return float(interp_with_extrapolation(value, plot, coord_float))
+        left_value = float(coord[left])
+        right_value = float(coord[right])
+        return left_value + ((right_value - left_value) * fraction)
 
     idx = nearest_axis_index(value, plot)
     return coord[idx]
@@ -373,25 +373,45 @@ def map_coord_to_plot_value(
         return 0.0
 
     if np.issubdtype(coord.dtype, np.datetime64):
-        mapped_value = _datetime_value_to_ns(value)
-        mapped_axis = coord.astype("datetime64[ns]").astype(np.int64)
-        return float(interp_with_extrapolation(mapped_value, mapped_axis, plot))
-    if np.issubdtype(coord.dtype, np.timedelta64):
-        mapped_value = np.timedelta64(value).astype("timedelta64[ns]").astype(np.int64)
-        mapped_axis = coord.astype("timedelta64[ns]").astype(np.int64)
-        return float(interp_with_extrapolation(mapped_value, mapped_axis, plot))
-    if np.issubdtype(coord.dtype, np.number):
-        return float(
-            interp_with_extrapolation(
-                float(value),
-                coord.astype(np.float64),
-                plot,
-            )
-        )
+        mapped_value = np.datetime64(value, "ns")
+    elif np.issubdtype(coord.dtype, np.timedelta64):
+        mapped_value = np.timedelta64(value).astype("timedelta64[ns]")
+    elif np.issubdtype(coord.dtype, np.number):
+        mapped_value = float(value)
+    else:
+        matches = np.flatnonzero(coord == value)
+        idx = int(matches[0]) if matches.size else 0
+        return float(plot[idx])
+    left, right, fraction = _interpolation_position(mapped_value, coord)
+    left_value = float(plot[left])
+    right_value = float(plot[right])
+    return left_value + ((right_value - left_value) * fraction)
 
-    matches = np.flatnonzero(coord == value)
-    idx = int(matches[0]) if matches.size else 0
-    return float(plot[idx])
+
+def _interpolation_position(value: Any, axis: np.ndarray) -> tuple[int, int, float]:
+    """Return source neighbor indices and interpolation fraction on a monotonic axis."""
+    axis = np.asarray(axis)
+    if axis.size <= 1:
+        return 0, 0, 0.0
+    descending = bool(axis[0] > axis[-1])
+    ordered = axis[::-1] if descending else axis
+    insertion = int(np.searchsorted(ordered, value, side="left"))
+    if insertion <= 0:
+        ordered_left, ordered_right = 0, 1
+    elif insertion >= ordered.size:
+        ordered_left, ordered_right = ordered.size - 2, ordered.size - 1
+    else:
+        ordered_left, ordered_right = insertion - 1, insertion
+    if descending:
+        left = axis.size - ordered_left - 1
+        right = axis.size - ordered_right - 1
+    else:
+        left, right = ordered_left, ordered_right
+    delta = axis[right] - axis[left]
+    if delta == 0:
+        return int(left), int(right), 0.0
+    fraction = float((value - axis[left]) / delta)
+    return int(left), int(right), fraction
 
 
 def _context_for_tick_format(dt: datetime, tick_format: str) -> str:

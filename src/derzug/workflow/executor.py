@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from collections.abc import Generator
+from dataclasses import dataclass
 from typing import Any
 
 import derzug
@@ -13,6 +14,37 @@ import derzug
 from .results import Results
 
 STREAM_END = object()
+
+
+@dataclass(frozen=True)
+class _TaskRuntimeSpec:
+    """Execution-facing task metadata resolved once per invocation."""
+
+    scalar_inputs: tuple[str, ...]
+    required_scalar_inputs: frozenset[str]
+    scalar_outputs: tuple[str, ...]
+    stream_inputs: tuple[str, ...]
+    stream_outputs: tuple[str, ...]
+    uses_generator_runtime: bool
+
+    @classmethod
+    def from_task(cls, task) -> _TaskRuntimeSpec:
+        """Resolve one possibly instance-specific task interface."""
+        return cls(
+            scalar_inputs=tuple(task.resolved_scalar_input_variables()),
+            required_scalar_inputs=frozenset(task.resolved_required_scalar_inputs()),
+            scalar_outputs=tuple(task.resolved_scalar_output_variables()),
+            stream_inputs=tuple(task.resolved_stream_input_variables()),
+            stream_outputs=tuple(task.resolved_stream_output_variables()),
+            uses_generator_runtime=task.__class__.uses_generator_runtime(),
+        )
+
+
+def build_task_runtime_specs(pipe) -> dict[str, _TaskRuntimeSpec]:
+    """Freeze execution-facing task interfaces for repeated invocations."""
+    return {
+        handle: _TaskRuntimeSpec.from_task(task) for handle, task in pipe.tasks.items()
+    }
 
 
 class StreamingExecutor:
@@ -25,12 +57,16 @@ class StreamingExecutor:
         *,
         strict: bool = True,
         source_provenance=(),
+        task_specs: dict[str, _TaskRuntimeSpec] | None = None,
     ):
         self.pipe = pipe
         self.requested_outputs = list(requested_outputs or [])
         self.strict = strict
         self.source_provenance = tuple(source_provenance)
         self.scalar_inputs = defaultdict(dict)
+        self.task_specs = (
+            build_task_runtime_specs(self.pipe) if task_specs is None else task_specs
+        )
         self.adjacency = self._adjacency()
         self.started_scalars: set[str] = set()
         self.active_coroutines: dict[str, Generator[Any, Any, Any]] = {}
@@ -83,7 +119,7 @@ class StreamingExecutor:
 
     def _retained_port_for_key(self, key: str, handle: str, task) -> str | None:
         """Return one specifically requested output port, or None for all ports."""
-        outputs = task.resolved_scalar_output_variables()
+        outputs = self.task_specs[handle].scalar_outputs
         if key == handle:
             return None
         prefix, _, suffix = key.rpartition(".")
@@ -101,9 +137,7 @@ class StreamingExecutor:
         if not roots:
             return
         bindable_roots = [
-            handle
-            for handle in roots
-            if self.pipe.tasks[handle].resolved_scalar_input_variables()
+            handle for handle in roots if self.task_specs[handle].scalar_inputs
         ]
         if not bindable_roots:
             return
@@ -114,8 +148,7 @@ class StreamingExecutor:
             )
         if len(args):
             handle = bindable_roots[0]
-            task = self.pipe.tasks[handle]
-            scalar_ports = list(task.resolved_scalar_input_variables())
+            scalar_ports = self.task_specs[handle].scalar_inputs
         else:
             handle = None
             scalar_ports = []
@@ -129,9 +162,7 @@ class StreamingExecutor:
             return
         port_to_handle: dict[str, str] = {}
         for root_handle in bindable_roots:
-            for port_name in self.pipe.tasks[
-                root_handle
-            ].resolved_scalar_input_variables():
+            for port_name in self.task_specs[root_handle].scalar_inputs:
                 existing = port_to_handle.get(port_name)
                 if existing is not None and existing != root_handle:
                     raise ValueError(
@@ -148,7 +179,7 @@ class StreamingExecutor:
 
     def execute(self, *args, **kwargs) -> Results:
         """Run the pipe once."""
-        self.pipe.validate()
+        self.pipe.ensure_validated()
         self.bind_initial_inputs(*args, **kwargs)
 
         for handle in self.pipe._root_nodes():
@@ -161,11 +192,13 @@ class StreamingExecutor:
             self.started_scalars.add(handle)
             task = self.pipe.tasks[handle]
             try:
-                if task.__class__.is_stream_producer():
+                if self.task_specs[handle].stream_outputs:
                     self._execute_stream_producer(handle, task)
                 else:
                     raw = task.run(**self.scalar_inputs[handle])
-                    for port, value in self.normalize_scalar_outputs(task, raw).items():
+                    for port, value in self.normalize_scalar_outputs(
+                        handle, task, raw
+                    ).items():
                         self.emit_scalar(handle, port, value)
             except Exception as exc:  # pragma: no cover
                 self.record_error(handle, exc)
@@ -201,8 +234,7 @@ class StreamingExecutor:
 
     def required_ready(self, handle: str) -> bool:
         """Return True when all required scalar inputs have been supplied."""
-        task = self.pipe.tasks[handle]
-        return set(task.resolved_required_scalar_inputs()).issubset(
+        return self.task_specs[handle].required_scalar_inputs.issubset(
             self.scalar_inputs[handle]
         )
 
@@ -215,8 +247,7 @@ class StreamingExecutor:
 
     def schedule_if_ready(self, handle: str) -> None:
         """Queue a scalar task once its dependencies and inputs are satisfied."""
-        task = self.pipe.tasks[handle]
-        if task.__class__.is_stream_consumer():
+        if self.task_specs[handle].stream_inputs:
             return
         if handle in self.started_scalars:
             return
@@ -226,9 +257,14 @@ class StreamingExecutor:
         if self.required_ready(handle):
             self.queued.append(handle)
 
-    def normalize_scalar_outputs(self, task, raw: Any) -> dict[str, Any]:
+    def normalize_scalar_outputs(
+        self,
+        handle: str,
+        task,
+        raw: Any,
+    ) -> dict[str, Any]:
         """Convert one task return value into its named scalar outputs."""
-        mapping = task.resolved_scalar_output_variables()
+        mapping = self.task_specs[handle].scalar_outputs
         if not mapping:
             return {}
         if len(mapping) == 1:
@@ -236,7 +272,7 @@ class StreamingExecutor:
         if isinstance(raw, dict):
             return raw
         if isinstance(raw, tuple) and len(raw) == len(mapping):
-            return dict(zip(mapping.keys(), raw, strict=True))
+            return dict(zip(mapping, raw, strict=True))
         raise ValueError(
             f"task {task.__class__.__name__} returned {raw!r} "
             f"but outputs are {tuple(mapping)}"
@@ -305,12 +341,12 @@ class StreamingExecutor:
             final = stop.value
             if self.pipe.tasks[handle].final_output is not None and final is not None:
                 self.emit_scalar(handle, self.pipe.tasks[handle].final_output, final)
-            for port in self.pipe.tasks[handle].resolved_stream_output_variables():
+            for port in self.task_specs[handle].stream_outputs:
                 self.finalize_stream(handle, port)
             return
         emitted, final = self.drain_generator_yields(gen, yielded)
         stream_port = next(
-            iter(self.pipe.tasks[handle].resolved_stream_output_variables()),
+            iter(self.task_specs[handle].stream_outputs),
             None,
         )
         if stream_port is not None:
@@ -331,7 +367,7 @@ class StreamingExecutor:
                     f"scalar inputs for node {edge.to_node} "
                     "must be ready before stream delivery"
                 )
-            if downstream.__class__.uses_generator_runtime():
+            if self.task_specs[edge.to_node].uses_generator_runtime:
                 gen = self.active_coroutines.get(edge.to_node)
                 if gen is None:
                     try:
@@ -356,7 +392,7 @@ class StreamingExecutor:
                     continue
                 emitted, final = self.drain_generator_yields(gen, yielded)
                 stream_port = next(
-                    iter(downstream.resolved_stream_output_variables()),
+                    iter(self.task_specs[edge.to_node].stream_outputs),
                     None,
                 )
                 if stream_port is not None:
@@ -375,6 +411,7 @@ class StreamingExecutor:
                     self.record_error(edge.to_node, exc)
                     continue
                 for out_port, out_value in self.normalize_scalar_outputs(
+                    edge.to_node,
                     downstream,
                     raw,
                 ).items():
@@ -383,16 +420,15 @@ class StreamingExecutor:
     def finalize_stream(self, handle: str, port: str) -> None:
         """Finalize delivery for one exhausted stream output port."""
         for edge in self.adjacency.get((handle, port), []):
-            downstream = self.pipe.tasks[edge.to_node]
             if edge.to_node in self.failed_nodes:
                 continue
-            if downstream.__class__.uses_generator_runtime():
+            if self.task_specs[edge.to_node].uses_generator_runtime:
                 self.close_coroutine(edge.to_node)
 
     def _execute_stream_producer(self, handle: str, task) -> None:
         """Run one generator-backed producer and emit all yielded values."""
         gen = task.run(**self.scalar_inputs[handle])
-        stream_port = next(iter(task.resolved_stream_output_variables()))
+        stream_port = next(iter(self.task_specs[handle].stream_outputs))
         while True:
             try:
                 item = next(gen)
@@ -411,7 +447,7 @@ class StreamingExecutor:
         for handle, task in self.pipe.tasks.items():
             if (
                 handle not in downstream_nodes
-                and task.resolved_scalar_output_variables()
+                and self.task_specs[handle].scalar_outputs
             ):
                 requested.append(reverse_names.get(handle, handle))
         return requested
