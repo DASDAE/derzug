@@ -180,6 +180,26 @@ def test_ensure_validated_caches_successful_validation(monkeypatch):
     assert len(calls) == 1
 
 
+def test_dynamic_task_classes_are_collectable():
+    """port_spec caching must not pin dynamically created task classes."""
+    import gc
+    import weakref
+
+    from derzug.utils.code2widget import task_from_callable
+
+    def transform(patch):
+        return patch
+
+    task_type = task_from_callable(transform)
+    task_type.port_spec()
+    task_type.required_scalar_inputs()
+    ref = weakref.ref(task_type)
+    del task_type
+    gc.collect()
+
+    assert ref() is None
+
+
 def test_pipe_json_round_trip(tmp_path):
     builder = PipeBuilder()
     builder.add(AddOne(), name="add")

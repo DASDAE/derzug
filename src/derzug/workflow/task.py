@@ -12,7 +12,7 @@ import json
 import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import cache, cached_property
+from functools import cached_property
 from typing import Any, ClassVar, Self, get_args, get_origin, get_type_hints
 
 from .model import WorkflowFrozenModel
@@ -191,14 +191,7 @@ class Task(WorkflowFrozenModel):
     stream_outputs: ClassVar[dict[str, Any] | None] = None
     final_output: ClassVar[str | None] = None
     _original_function: ClassVar[Callable | None] = None
-    _registered_tasks: ClassVar[list[type[Task]]] = []
     __task_code_path__: ClassVar[str | None] = None
-
-    def __init_subclass__(cls, **kwargs):
-        """Register concrete subclasses."""
-        super().__init_subclass__(**kwargs)
-        if not inspect.isabstract(cls):
-            Task._registered_tasks.append(cls)
 
     @classmethod
     def code_path(cls) -> str:
@@ -214,10 +207,18 @@ class Task(WorkflowFrozenModel):
         return cls._original_function or cls.run
 
     @classmethod
-    @cache
     def port_spec(cls) -> TaskPortSpec:
-        """Return cached immutable interface metadata for this task class."""
-        return _build_task_port_spec(cls)
+        """Return cached immutable interface metadata for this task class.
+
+        The spec is stored on the class itself (not a module-level cache) so
+        dynamically created task classes stay garbage-collectable. Read via
+        ``cls.__dict__`` so subclasses never inherit a parent's cached spec.
+        """
+        spec = cls.__dict__.get("_port_spec_cache")
+        if spec is None:
+            spec = _build_task_port_spec(cls)
+            cls._port_spec_cache = spec
+        return spec
 
     @classmethod
     def scalar_input_variables(cls) -> dict[str, Any]:
