@@ -298,6 +298,7 @@ class _SpoolExecutionSnapshot:
     visible_row_count: int | None
     display_spool: dc.BaseSpool | None = None
     settings_source_identity: tuple[object, ...] | None = None
+    display_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -309,6 +310,7 @@ class _SpoolExecutionResult:
     output_spool: dc.BaseSpool | None
     output_patch: dc.Patch | None
     settings_source_identity: tuple[object, ...] | None = None
+    display_generation: int = 0
 
 
 class _SettingsSourceLoadError(Exception):
@@ -453,6 +455,7 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
                 None,
                 None,
                 snapshot.settings_source_identity,
+                snapshot.display_generation,
             )
         visible_row_count = snapshot.visible_row_count
         if visible_row_count is None:
@@ -469,6 +472,7 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
             output_spool=output_spool,
             output_patch=output_patch,
             settings_source_identity=snapshot.settings_source_identity,
+            display_generation=snapshot.display_generation,
         )
     if snapshot.source_mode == "settings":
         assert isinstance(task, SpoolTask)
@@ -515,10 +519,13 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
             output_spool=output_spool,
             output_patch=output_patch,
             settings_source_identity=snapshot.settings_source_identity,
+            display_generation=snapshot.display_generation,
         )
     source_spool = snapshot.source_spool
     if source_spool is None:
-        return _SpoolExecutionResult(None, None, None, None)
+        return _SpoolExecutionResult(
+            None, None, None, None, display_generation=snapshot.display_generation
+        )
     assert isinstance(task, SpoolTransformTask)
     display_spool = _apply_select_rows(source_spool, task.select_filters)
     display_spool = _apply_chunk_settings(
@@ -545,6 +552,7 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
         output_spool=output_spool,
         output_patch=output_patch,
         settings_source_identity=snapshot.settings_source_identity,
+        display_generation=snapshot.display_generation,
     )
 
 
@@ -833,6 +841,11 @@ class Spool(ZugWidget):
         self._pending_error_source_identity: tuple[object, ...] | None = None
         self._force_source_reload = False
         self._next_execution_output_only = False
+        # Generation counters gating the output-only fast path: the display
+        # spool may be reused only while no full recompute has been requested
+        # since it was produced.
+        self._display_inputs_generation = 0
+        self._display_spool_generation = 0
         self._pending_restore_emit: bool = False
         self._preserve_state_on_next_empty_result: bool = False
         self._table_selection_model = None
@@ -1153,6 +1166,7 @@ class Spool(ZugWidget):
         self._source_mode = "snapshot"
         self._source_spool = value
         self._display_spool = value
+        self._display_spool_generation = self._display_inputs_generation
 
     def run(self) -> None:
         """Load or transform the current spool source via the shared runtime."""
@@ -1171,6 +1185,7 @@ class Spool(ZugWidget):
                     display_spool=None,
                     output_spool=None,
                     output_patch=None,
+                    display_generation=self._display_inputs_generation,
                 )
             )
             return
@@ -1243,10 +1258,12 @@ class Spool(ZugWidget):
         if (
             self._next_execution_output_only
             and self._display_spool is not None
-            and self._active_execution_token is None
+            and self._display_spool_generation == self._display_inputs_generation
         ):
-            # A selection change during an in-flight transform must recompute
-            # the latest state instead of reusing the previous display spool.
+            # The display spool still reflects every requested recompute, so
+            # selection-only emissions may reuse it even while another
+            # output-only emission is in flight. A pending full recompute
+            # (generation mismatch) must rebuild the latest state instead.
             self._next_execution_output_only = False
             return _SpoolExecutionSnapshot(
                 source_mode="display",
@@ -1257,9 +1274,11 @@ class Spool(ZugWidget):
                 selected_source_rows=selected_source_rows,
                 visible_row_count=visible_row_count,
                 settings_source_identity=self._loaded_settings_source_identity,
+                display_generation=self._display_inputs_generation,
             )
         self._next_execution_output_only = False
         if self._source_mode == "snapshot":
+            self._display_inputs_generation += 1
             return _SpoolExecutionSnapshot(
                 source_mode="snapshot",
                 source_name=None,
@@ -1267,6 +1286,7 @@ class Spool(ZugWidget):
                 task=self._current_transform_task(),
                 selected_source_rows=selected_source_rows,
                 visible_row_count=visible_row_count,
+                display_generation=self._display_inputs_generation,
             )
         source_name = self._snapshot_source_name()
         if not source_name:
@@ -1280,6 +1300,7 @@ class Spool(ZugWidget):
         ):
             source_spool = self._source_spool
         self._force_source_reload = False
+        self._display_inputs_generation += 1
         return _SpoolExecutionSnapshot(
             source_mode="settings",
             source_name=source_name,
@@ -1288,6 +1309,7 @@ class Spool(ZugWidget):
             selected_source_rows=selected_source_rows,
             visible_row_count=visible_row_count,
             settings_source_identity=source_identity,
+            display_generation=self._display_inputs_generation,
         )
 
     def _snapshot_source_name(self) -> str | None:
@@ -1346,6 +1368,7 @@ class Spool(ZugWidget):
                     display_spool=None,
                     output_spool=None,
                     output_patch=None,
+                    display_generation=self._display_inputs_generation,
                 )
             )
             return
@@ -1358,6 +1381,7 @@ class Spool(ZugWidget):
         """Apply preview and final output state from one worker result."""
         self._source_spool = result.source_spool
         self._display_spool = result.display_spool
+        self._display_spool_generation = result.display_generation
         if (
             self._source_mode == "settings"
             and result.source_spool is not None
@@ -1426,12 +1450,15 @@ class Spool(ZugWidget):
             bool(self.unpack_single_patch),
             visible_row_count,
         )
+        # The fallback source is now the intended display state, so stamp it
+        # current: selection emissions may reuse it until settings change.
         self._apply_execution_result(
             _SpoolExecutionResult(
                 source_spool=spool,
                 display_spool=spool,
                 output_spool=output_spool,
                 output_patch=output_patch,
+                display_generation=self._display_inputs_generation,
             )
         )
 
@@ -1992,6 +2019,7 @@ class Spool(ZugWidget):
         source = self._source_spool
         if source is None:
             self._display_spool = None
+            self._display_spool_generation = self._display_inputs_generation
             self._request_ui_refresh()
             return
         try:
@@ -2003,6 +2031,7 @@ class Spool(ZugWidget):
             self._show_exception("general", exc)
             return
         self._display_spool = display
+        self._display_spool_generation = self._display_inputs_generation
         self._request_ui_refresh()
 
     def _refresh_ui(self) -> None:

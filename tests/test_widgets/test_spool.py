@@ -1611,6 +1611,48 @@ class TestSpool:
         assert result.display_spool is prepared
         assert result.output_spool is prepared
 
+    def test_output_only_fast_path_survives_inflight_emission(
+        self, spool_widget, qtbot
+    ):
+        """Selection emissions reuse the display spool despite in-flight work."""
+        spool_widget._set_source_spool(dc.spool([_patch_with_tag("a")]))
+        wait_for_widget_idle(spool_widget, timeout=5.0)
+
+        # Simulate a running output-only emission; before the generation gate
+        # this forced a full select/chunk recompute for every rapid click.
+        spool_widget._execution_runtime._active_execution_token = 7
+        spool_widget._next_execution_output_only = True
+
+        snapshot = spool_widget._snapshot_execution()
+
+        assert snapshot is not None
+        assert snapshot.source_mode == "display"
+        spool_widget._execution_runtime._active_execution_token = None
+
+    def test_pending_recompute_disables_fast_path_until_applied(
+        self, spool_widget, qtbot
+    ):
+        """A requested full recompute blocks display reuse until its result lands."""
+        spool_widget._set_source_spool(dc.spool([_patch_with_tag("a")]))
+        wait_for_widget_idle(spool_widget, timeout=5.0)
+
+        # A full snapshot (settings/input change) bumps the inputs generation.
+        full_snapshot = spool_widget._snapshot_execution()
+        assert full_snapshot.source_mode == "snapshot"
+
+        # While that recompute is outstanding, selection clicks must rebuild
+        # instead of emitting from the now-outdated display spool.
+        spool_widget._next_execution_output_only = True
+        stale_snapshot = spool_widget._snapshot_execution()
+        assert stale_snapshot.source_mode == "snapshot"
+
+        # Applying the newest recompute's result restores the fast path (older
+        # results are token-stale and never applied by the runtime).
+        spool_widget._apply_execution_result(_execute_spool_snapshot(stale_snapshot))
+        spool_widget._next_execution_output_only = True
+        fresh_snapshot = spool_widget._snapshot_execution()
+        assert fresh_snapshot.source_mode == "display"
+
     def test_settings_snapshot_reuses_loaded_source_without_update(self):
         """Transform changes should not reload or update an unchanged source."""
 
