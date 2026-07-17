@@ -791,7 +791,10 @@ class PlayAudio(ZugWidget):
         nonzero = np.abs(finite_calibration)
         ref = float(np.percentile(nonzero, _PCM_NORMALIZE_PERCENTILE))
         if ref <= 0:
-            ref = float(np.max(nonzero))
+            # The strided calibration subset can miss all signal energy
+            # (e.g. sparse spikes between stride points); fall back to the
+            # full-array peak so only truly silent data skips normalization.
+            ref = float(np.max(np.abs(samples[finite_mask])))
         if ref > 0:
             samples *= _PCM_HEADROOM / ref
         linear_gain = float(10 ** (float(output_gain_db) / 20.0))

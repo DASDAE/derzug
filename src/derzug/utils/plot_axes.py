@@ -318,6 +318,24 @@ def nearest_axis_index(value: float, axis_values: np.ndarray) -> int:
     return int(ordered_index)
 
 
+def nearest_value_index(value: float, values: np.ndarray) -> int:
+    """Return the index of the value nearest ``value`` in an unsorted array.
+
+    Unlike :func:`nearest_axis_index`, this makes no monotonicity assumption
+    and scans every element, so use it for arbitrary data (e.g. amplitudes)
+    rather than plotted axes.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    if array.size <= 1:
+        return 0
+    if not math.isfinite(float(value)):
+        return 0
+    deltas = np.abs(array - value)
+    if not np.any(np.isfinite(deltas)):
+        return 0
+    return int(np.nanargmin(deltas))
+
+
 def interp_with_extrapolation(
     value: float,
     x: np.ndarray,

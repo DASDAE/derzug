@@ -322,6 +322,23 @@ class TestPlayAudio:
 
         assert np.median(np.abs(normalized[:90])) > 0.17
 
+    def test_prepare_pcm_audio_normalizes_spikes_missed_by_calibration(self):
+        """Signal energy between calibration stride points must still normalize."""
+        from derzug.widgets.playaudio import _PCM_CALIBRATION_SAMPLES
+
+        # Large enough that calibration strides, with the only energy placed
+        # off-stride so the calibration subset is all zeros.
+        data = np.zeros(2 * _PCM_CALIBRATION_SAMPLES + 2, dtype=np.float64)
+        data[1] = 1.0
+
+        pcm_bytes, sample_count = PlayAudio._prepare_pcm_audio(data)
+        pcm = np.frombuffer(pcm_bytes, dtype="<i2")
+
+        assert sample_count == data.size
+        assert np.max(np.abs(pcm)) == pytest.approx(
+            int(0.95 * np.iinfo(np.int16).max), abs=1
+        )
+
     def test_prepare_pcm_audio_rejects_all_non_finite(self):
         """Patches without any finite samples should be rejected."""
         with pytest.raises(ValueError, match="finite sample"):

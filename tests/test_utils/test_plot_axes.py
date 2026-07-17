@@ -11,6 +11,7 @@ from derzug.utils.plot_axes import (
     map_coord_to_plot_value,
     map_plot_value_to_coord,
     nearest_axis_index,
+    nearest_value_index,
 )
 
 
@@ -114,6 +115,30 @@ class TestNearestAxisIndex:
         """Degenerate cursor inputs should resolve without allocating or raising."""
         assert nearest_axis_index(1.0, np.asarray([])) == 0
         assert nearest_axis_index(np.nan, np.asarray([1.0, 2.0])) == 0
+
+
+class TestNearestValueIndex:
+    """Tests for nearest lookup on unsorted arrays."""
+
+    def test_unsorted_values_use_true_nearest(self):
+        """Unsorted data must resolve by distance, not sorted insertion."""
+        values = np.asarray([0.0, 10.0, 2.0, 8.0, 4.0])
+
+        assert nearest_value_index(9.9, values) == 1
+        assert nearest_value_index(3.1, values) == 4
+        assert nearest_value_index(-5.0, values) == 0
+
+    def test_degenerate_inputs_return_safe_index(self):
+        """Empty, non-finite, and all-nan inputs should resolve to zero."""
+        assert nearest_value_index(1.0, np.asarray([])) == 0
+        assert nearest_value_index(np.nan, np.asarray([1.0, 2.0])) == 0
+        assert nearest_value_index(1.0, np.asarray([np.nan, np.nan])) == 0
+
+    def test_nan_entries_are_skipped(self):
+        """NaN entries must never win the nearest-distance comparison."""
+        values = np.asarray([np.nan, 5.0, 1.0])
+
+        assert nearest_value_index(4.0, values) == 1
 
 
 class TestAxisValueMapping:

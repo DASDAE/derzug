@@ -23,6 +23,7 @@ from derzug.utils.plot_axes import (
     format_axis_label,
     map_plot_value_to_coord,
     nearest_axis_index,
+    nearest_value_index,
     set_cursor_label_text,
 )
 from derzug.widgets.ndim_controls import MultiDimPlotControlsMixin
@@ -1263,8 +1264,10 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
             return
         sample_index = nearest_axis_index(plot_x, state.x_plot)
         x_value = map_plot_value_to_coord(plot_x, state.x_plot, state.x_coord)
+        # Per-series amplitudes are unsorted, so a monotonic axis search
+        # would pick the wrong series here.
         line_values = state.line_values[:, sample_index]
-        series_offset_index = nearest_axis_index(plot_y, line_values)
+        series_offset_index = nearest_value_index(plot_y, line_values)
         series_coord = state.series_coord[series_offset_index]
         view_range = self._get_view_range()
         x_span = (
