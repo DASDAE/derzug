@@ -8,7 +8,7 @@ import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
-from functools import cache
+from functools import lru_cache
 from html import escape
 from threading import Lock
 from typing import ClassVar
@@ -44,9 +44,10 @@ DEFAULT_SCRIPT = """def transform(patch):
 
 logger = logging.getLogger(__name__)
 _CODE_STREAM_LOCK = Lock()
+_COMPILE_CACHE_SIZE = 64
 
 
-@cache
+@lru_cache(maxsize=_COMPILE_CACHE_SIZE)
 def _compile_script(script_text: str):
     """Compile and cache immutable user script bytecode by source text."""
     return compile(script_text, "<derzug-code>", "exec")

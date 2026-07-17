@@ -123,11 +123,13 @@ class WidgetExecutionRuntime:
         except Exception as exc:
             if self._teardown_started:
                 return
+            self._invalidate_current_execution()
             self._handle_preflight_error(exc)
             return
         if request is None:
             if self._teardown_started:
                 return
+            self._invalidate_current_execution()
             self._apply_empty_result()
             return
         executor = self._executor
@@ -170,6 +172,15 @@ class WidgetExecutionRuntime:
             )
         )
 
+    def _invalidate_current_execution(self) -> None:
+        """Cancel and release the current future, making late delivery stale."""
+        self._latest_execution_token += 1
+        future = self._future
+        if future is not None and not future.done():
+            future.cancel()
+        self._future = None
+        self._active_execution_token = None
+
     def shutdown(self) -> None:
         """Invalidate queued completions without blocking the GUI thread."""
         self._teardown_started = True
@@ -190,6 +201,7 @@ class WidgetExecutionRuntime:
             return
         if token != self._latest_execution_token:
             return
+        self._future = None
         self._active_execution_token = None
         self._apply_result(result)
 
@@ -206,5 +218,6 @@ class WidgetExecutionRuntime:
             return
         if token != self._latest_execution_token:
             return
+        self._future = None
         self._active_execution_token = None
         self._apply_error(exc)

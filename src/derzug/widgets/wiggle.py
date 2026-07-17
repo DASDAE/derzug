@@ -45,6 +45,7 @@ class _OffsetRenderState:
     trace_offsets: np.ndarray
     trace_indices: np.ndarray
     normalized_rows: np.ndarray
+    sample_step: int
     gain_scale: float
 
     @property
@@ -65,7 +66,7 @@ class _TimeSeriesRenderState:
     bottom_axis_kind: str
     title: str
     line_values: np.ndarray
-    full_line_values: np.ndarray
+    sample_step: int
     series_dim: str | None = None
     series_plot: np.ndarray | None = None
     series_coord: np.ndarray | None = None
@@ -145,6 +146,7 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     """Display DASCore patches as wiggle or time-series plots."""
 
     _AUTO_STRIDE_TRACE_CAP = 300
+    _MAX_RENDER_POINTS = 1_000_000
     _GAIN_MIN = 1
     _GAIN_MAX = 1200
     # Qt's raster engine draws pens wider than 1 device pixel roughly 16x
@@ -380,6 +382,26 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         if trace_count <= Wiggle._AUTO_STRIDE_TRACE_CAP:
             return 1
         return int(np.ceil(trace_count / Wiggle._AUTO_STRIDE_TRACE_CAP))
+
+    @classmethod
+    def _bounded_trace_stride(cls, trace_count: int, requested_stride: int) -> int:
+        """Return a trace stride that enforces the hard render-line cap."""
+        return max(
+            max(int(requested_stride), 1),
+            cls._auto_stride_for_trace_count(trace_count),
+        )
+
+    @classmethod
+    def _sample_step_for_point_budget(
+        cls,
+        trace_count: int,
+        sample_count: int,
+    ) -> int:
+        """Return a sample step that bounds retained plotting values."""
+        trace_count = max(int(trace_count), 1)
+        sample_count = max(int(sample_count), 0)
+        max_samples_per_trace = max(cls._MAX_RENDER_POINTS // trace_count, 1)
+        return max(1, int(np.ceil(sample_count / max_samples_per_trace)))
 
     @staticmethod
     def _trace_count_for_dim(patch: dc.Patch, trace_dim: str) -> int:
@@ -732,17 +754,27 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         x_dim = patch.dims[0]
         x_coord = np.asarray(patch.get_array(x_dim))
         x_axis = build_plot_axis_spec(x_coord)
+        sample_step = Wiggle._sample_step_for_point_budget(1, data.size)
+        line_values = np.array(
+            data[::sample_step],
+            dtype=np.float32,
+            copy=True,
+        )[np.newaxis, :]
         y_dim = Wiggle._data_label_for_patch(patch)
         return _TimeSeriesRenderState(
             mode="time series",
             x_dim=x_dim,
-            x_plot=x_axis.plot_values,
-            x_coord=x_coord,
+            x_plot=np.array(
+                x_axis.plot_values[::sample_step],
+                dtype=np.float64,
+                copy=True,
+            ),
+            x_coord=x_coord[::sample_step],
             y_dim=y_dim,
             bottom_axis_kind=x_axis.kind,
             title=f"Time Series ({x_dim})",
-            line_values=np.asarray(data, dtype=np.float64)[np.newaxis, :],
-            full_line_values=np.asarray(data, dtype=np.float64)[np.newaxis, :],
+            line_values=line_values,
+            sample_step=sample_step,
         )
 
     @classmethod
@@ -786,14 +818,24 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         if series_values.size == 0:
             raise ValueError("no time-series traces available to plot")
 
-        full_line_values = np.asarray(series_values, dtype=np.float64)
         series_plot = np.asarray(series_plot, dtype=np.float64)
         series_coord = np.asarray(series_coord)
         series_indices = np.asarray(series_indices, dtype=int)
         if percentiles_enabled:
             percentile_values = np.asarray([0.0, 5.0, 25.0, 50.0, 75.0, 95.0, 100.0])
+            trace_step = max(
+                1,
+                int(np.ceil(series_values.shape[0] / cls._MAX_RENDER_POINTS)),
+            )
+            percentile_source = series_values[::trace_step]
+            sample_step = cls._sample_step_for_point_budget(
+                percentile_source.shape[0],
+                percentile_source.shape[1],
+            )
             rendered_values = np.nanpercentile(
-                full_line_values, percentile_values, axis=0
+                percentile_source[:, ::sample_step],
+                percentile_values,
+                axis=0,
             )
             rendered_series_plot = percentile_values
             rendered_series_coord = percentile_values
@@ -802,8 +844,13 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         else:
             # Cap rendered lines like offset mode's auto stride; hundreds of
             # overlapping series are unreadable and slow to paint.
-            stride = cls._auto_stride_for_trace_count(full_line_values.shape[0])
-            rendered_values = full_line_values[::stride]
+            stride = cls._bounded_trace_stride(series_values.shape[0], 1)
+            rendered_source = series_values[::stride]
+            sample_step = cls._sample_step_for_point_budget(
+                rendered_source.shape[0],
+                rendered_source.shape[1],
+            )
+            rendered_values = rendered_source[:, ::sample_step]
             rendered_series_plot = series_plot[::stride]
             rendered_series_coord = series_coord[::stride]
             rendered_series_indices = series_indices[::stride]
@@ -818,13 +865,17 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         return _TimeSeriesRenderState(
             mode="time series",
             x_dim=x_dim,
-            x_plot=x_plot,
-            x_coord=x_coord,
+            x_plot=np.array(
+                x_plot[::sample_step],
+                dtype=np.float64,
+                copy=True,
+            ),
+            x_coord=x_coord[::sample_step],
             y_dim=y_dim,
             bottom_axis_kind=x_kind,
             title=f"Time Series ({x_dim})",
-            line_values=np.asarray(rendered_values, dtype=np.float64),
-            full_line_values=full_line_values,
+            line_values=np.array(rendered_values, dtype=np.float32, copy=True),
+            sample_step=sample_step,
             series_dim=rendered_series_dim,
             series_plot=np.asarray(rendered_series_plot, dtype=np.float64),
             series_coord=np.asarray(rendered_series_coord),
@@ -900,11 +951,16 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         coords1 = np.asarray(patch.get_array(dim1))
         axis0 = build_plot_axis_spec(coords0)
         axis1 = build_plot_axis_spec(coords1)
-        stride = max(int(stride), 1)
+        trace_count = data.shape[1] if selected_trace_dim == dim1 else data.shape[0]
+        stride = Wiggle._bounded_trace_stride(trace_count, stride)
         if selected_trace_dim == dim1:
             traces = data[:, ::stride].T
-            offsets = axis1.plot_values[::stride]
-            x_axis = axis0.plot_values
+            offsets = np.array(
+                axis1.plot_values[::stride],
+                dtype=np.float64,
+                copy=True,
+            )
+            x_axis_values = axis0.plot_values
             x_coord = coords0
             trace_indices = np.arange(data.shape[1], dtype=int)[::stride]
             left_axis_kind = axis1.kind
@@ -912,8 +968,12 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
             x_label = dim0
         else:
             traces = data[::stride, :]
-            offsets = axis0.plot_values[::stride]
-            x_axis = axis1.plot_values
+            offsets = np.array(
+                axis0.plot_values[::stride],
+                dtype=np.float64,
+                copy=True,
+            )
+            x_axis_values = axis1.plot_values
             x_coord = coords1
             trace_indices = np.arange(data.shape[0], dtype=int)[::stride]
             left_axis_kind = axis0.kind
@@ -923,22 +983,32 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         if traces.size == 0:
             raise ValueError("no traces available to plot")
 
+        sample_step = Wiggle._sample_step_for_point_budget(
+            traces.shape[0],
+            traces.shape[1],
+        )
+        traces = traces[:, ::sample_step]
         trace_scale = float(gain) / 100.0
         max_abs = np.nanmax(np.abs(traces), axis=1, keepdims=True)
         max_abs[~np.isfinite(max_abs) | (max_abs == 0)] = 1.0
-        normalized = traces / max_abs
+        normalized = np.array(traces / max_abs, dtype=np.float32, copy=True)
         return _OffsetRenderState(
             mode="offset",
             x_dim=x_label,
-            x_plot=x_axis,
-            x_coord=x_coord,
+            x_plot=np.array(
+                x_axis_values[::sample_step],
+                dtype=np.float64,
+                copy=True,
+            ),
+            x_coord=x_coord[::sample_step],
             y_dim=selected_trace_dim,
             left_axis_kind=left_axis_kind,
             bottom_axis_kind=bottom_axis_kind,
             title=f"Wiggle ({selected_trace_dim})",
             trace_offsets=offsets,
             trace_indices=trace_indices,
-            normalized_rows=np.asarray(normalized, dtype=np.float64),
+            normalized_rows=normalized,
+            sample_step=sample_step,
             gain_scale=trace_scale,
         )
 
@@ -1126,7 +1196,8 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     ) -> None:
         """Show offset-mode cursor information."""
         state = self._render_state
-        sample_index = nearest_axis_index(plot_x, state.x_plot)
+        rendered_sample_index = nearest_axis_index(plot_x, state.x_plot)
+        sample_index = rendered_sample_index * state.sample_step
         trace_offset_index = nearest_axis_index(plot_y, state.trace_offsets)
         trace_index = int(state.trace_indices[trace_offset_index])
         value = self._raw_trace_value(
@@ -1158,7 +1229,8 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     ) -> None:
         """Show 1D time-series cursor information."""
         state = self._render_state
-        sample_index = nearest_axis_index(plot_x, state.x_plot)
+        rendered_sample_index = nearest_axis_index(plot_x, state.x_plot)
+        sample_index = rendered_sample_index * state.sample_step
         x_value = map_plot_value_to_coord(
             plot_x,
             state.x_plot,

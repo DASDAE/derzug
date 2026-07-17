@@ -64,6 +64,23 @@ def wide_patch_2d():
 
 
 @pytest.fixture(scope="session")
+def large_virtual_patch_2d():
+    """Return a logically huge patch backed by a small broadcast array."""
+    trace_count = 4_000
+    sample_count = 100_000
+    samples = np.linspace(-1.0, 1.0, sample_count, dtype=np.float32)
+    data = np.broadcast_to(samples, (trace_count, sample_count))
+    return dc.Patch(
+        data=data,
+        coords={
+            "distance": np.arange(trace_count, dtype=np.float64),
+            "time": np.arange(sample_count, dtype=np.float64),
+        },
+        dims=("distance", "time"),
+    )
+
+
+@pytest.fixture(scope="session")
 def ricker_moveout_patch():
     """Return the ricker moveout example patch used for direct wiggle regressions."""
     return dc.get_example_patch("ricker_moveout")
@@ -205,7 +222,7 @@ class TestWiggle:
         assert state.x_dim == patch.dims[0]
         assert np.allclose(state.x_plot, patch.get_array(patch.dims[0]))
         assert np.allclose(state.line_values[0], np.asarray(patch.data))
-        assert np.allclose(state.full_line_values[0], np.asarray(patch.data))
+        assert state.sample_step == 1
         assert state.series_dim is None
         assert state.color_levels is None
         assert state.y_dim == "ϵ / s"
@@ -225,7 +242,7 @@ class TestWiggle:
         assert state.x_dim == "time"
         assert state.series_dim == "distance"
         assert state.line_values.shape == (patch.shape[0], patch.shape[1])
-        assert state.full_line_values.shape == (patch.shape[0], patch.shape[1])
+        assert state.sample_step == 1
         assert np.allclose(state.series_coord, patch.get_array("distance"))
         assert state.color_levels == pytest.approx(
             (
@@ -287,9 +304,67 @@ class TestWiggle:
         stride = Wiggle._auto_stride_for_trace_count(trace_count)
         assert stride > 1
         assert state.line_values.shape[0] <= Wiggle._AUTO_STRIDE_TRACE_CAP
-        assert state.full_line_values.shape[0] == trace_count
         assert np.array_equal(state.series_indices, np.arange(trace_count)[::stride])
         assert np.allclose(state.series_coord, patch.get_array("distance")[::stride])
+
+    def test_large_offset_state_has_hard_point_and_memory_bounds(
+        self, large_virtual_patch_2d
+    ):
+        """Offset state should sample a huge logical patch before allocating."""
+        state = Wiggle._build_offset_state_2d(
+            large_virtual_patch_2d,
+            selected_trace_dim="distance",
+            stride=1,
+            gain=150,
+        )
+
+        assert state.normalized_rows.shape[0] <= Wiggle._AUTO_STRIDE_TRACE_CAP
+        assert state.normalized_rows.size <= Wiggle._MAX_RENDER_POINTS
+        assert state.normalized_rows.dtype == np.float32
+        assert state.normalized_rows.nbytes <= Wiggle._MAX_RENDER_POINTS * 4
+        assert state.sample_step > 1
+
+    def test_large_time_series_state_does_not_retain_full_values(
+        self, large_virtual_patch_2d
+    ):
+        """Time-series state should retain only its bounded rendered sample."""
+        state = Wiggle._build_time_series_state_2d(
+            large_virtual_patch_2d,
+            selected_x_dim="time",
+            percentiles_enabled=False,
+            color_limits=None,
+        )
+
+        assert state.line_values.shape[0] <= Wiggle._AUTO_STRIDE_TRACE_CAP
+        assert state.line_values.size <= Wiggle._MAX_RENDER_POINTS
+        assert state.line_values.dtype == np.float32
+        assert state.line_values.nbytes <= Wiggle._MAX_RENDER_POINTS * 4
+        assert state.sample_step > 1
+        assert not hasattr(state, "full_line_values")
+
+    def test_large_percentile_input_is_sampled_to_point_budget(
+        self, large_virtual_patch_2d, monkeypatch
+    ):
+        """Percentile rendering should bound its input before aggregation."""
+        original = np.nanpercentile
+        observed_sizes: list[int] = []
+
+        def _bounded_percentile(values, *args, **kwargs):
+            observed_sizes.append(values.size)
+            return original(values, *args, **kwargs)
+
+        monkeypatch.setattr(np, "nanpercentile", _bounded_percentile)
+
+        state = Wiggle._build_time_series_state_2d(
+            large_virtual_patch_2d,
+            selected_x_dim="time",
+            percentiles_enabled=True,
+            color_limits=None,
+        )
+
+        assert observed_sizes and observed_sizes[0] <= Wiggle._MAX_RENDER_POINTS
+        assert state.line_values.size <= Wiggle._MAX_RENDER_POINTS
+        assert state.line_values.dtype == np.float32
 
     def test_percentiles_use_all_rows_above_cap(self, wide_patch_2d):
         """Percentile aggregation should include rows hidden by the line cap."""

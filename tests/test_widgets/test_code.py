@@ -68,6 +68,18 @@ class TestCode:
         assert second is first
         assert _compile_script.cache_info().hits == 1
 
+    def test_compiled_bytecode_cache_is_bounded(self):
+        """Editing many unique scripts should not grow the process cache forever."""
+        _compile_script.cache_clear()
+        maxsize = _compile_script.cache_info().maxsize
+        assert maxsize is not None
+
+        for index in range(maxsize + 5):
+            _compile_script(f"value = {index}")
+
+        assert _compile_script.cache_info().currsize == maxsize
+        _compile_script.cache_clear()
+
     def test_none_patch_clears_output_without_running(
         self, code_widget, monkeypatch, qtbot
     ):
@@ -159,6 +171,7 @@ class TestCode:
         assert code_widget.Error.execution_failed.is_shown()
         assert "ValueError" in code_widget._log.toPlainText()
         assert "raise ValueError('boom')" in code_widget._editor.toPlainText()
+        assert code_widget._execution_runtime._future is None
 
     def test_syntax_error_shows_error_and_emits_none(self, primed, qtbot):
         """Syntax errors are shown in the log and emit None."""
