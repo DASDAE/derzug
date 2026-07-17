@@ -32,17 +32,6 @@ class CursorField:
     visible_span: float | None = None
 
 
-def _datetime_value_to_ns(value: Any) -> np.int64:
-    """Normalize one datetime-like value into integer nanoseconds since epoch."""
-    if isinstance(value, np.datetime64):
-        return value.astype("datetime64[ns]").astype(np.int64)
-    if isinstance(value, datetime):
-        if value.tzinfo is not None:
-            value = value.astimezone(UTC).replace(tzinfo=None)
-        return np.datetime64(value, "ns").astype(np.int64)
-    return np.datetime64(value, "ns").astype(np.int64)
-
-
 class ContextDateAxisItem(pg.DateAxisItem):
     """Date axis item that can derive compact higher-level datetime context."""
 
@@ -334,32 +323,6 @@ def nearest_value_index(value: float, values: np.ndarray) -> int:
     if not np.any(np.isfinite(deltas)):
         return 0
     return int(np.nanargmin(deltas))
-
-
-def interp_with_extrapolation(
-    value: float,
-    x: np.ndarray,
-    y: np.ndarray,
-) -> float:
-    """Interpolate y(x) and extrapolate linearly outside x bounds."""
-    if x.size == 0 or y.size == 0:
-        return float(value)
-    if x.size == 1 or y.size == 1:
-        return float(y[0])
-
-    if value < x[0]:
-        dx = float(x[1] - x[0])
-        if dx == 0:
-            return float(y[0])
-        slope = float(y[1] - y[0]) / dx
-        return float(y[0]) + (value - float(x[0])) * slope
-    if value > x[-1]:
-        dx = float(x[-1] - x[-2])
-        if dx == 0:
-            return float(y[-1])
-        slope = float(y[-1] - y[-2]) / dx
-        return float(y[-1]) + (value - float(x[-1])) * slope
-    return float(np.interp(value, x, y))
 
 
 def map_plot_value_to_coord(

@@ -78,17 +78,6 @@ def extract_single_patch(spool: dc.BaseSpool) -> dc.Patch | None:
     return None
 
 
-def filter_contents_by_annotations(
-    df: pd.DataFrame,
-    annotation_set: AnnotationSet,
-) -> pd.DataFrame:
-    """Return only rows whose extents overlap at least one annotation."""
-    if df.empty or not annotation_set.annotations:
-        return df.iloc[0:0]
-    mask = annotation_overlap_mask(df, annotation_set)
-    return df.loc[mask]
-
-
 def annotation_overlap_mask(
     df: pd.DataFrame,
     annotation_set: AnnotationSet,
@@ -257,67 +246,6 @@ def _normalize_coord_array(values: np.ndarray) -> np.ndarray:
     return np.asarray(
         [_normalize_coord_scalar(value) for value in values], dtype=object
     )
-
-
-def _annotation_overlap_row(annotation: Annotation, row: pd.Series) -> bool:
-    """Return True when one spool-contents row overlaps one annotation."""
-    geometry = annotation.geometry
-    if isinstance(geometry, PointGeometry):
-        return _row_contains_coord_map(row, geometry.coords)
-    if isinstance(geometry, SpanGeometry):
-        start, end = _ordered_pair(geometry.start, geometry.end)
-        return _row_intersects_span(row, geometry.dim, start, end)
-    if isinstance(geometry, BoxGeometry):
-        return all(
-            _row_intersects_span(row, dim, bounds.min, bounds.max)
-            for dim, bounds in geometry.bounds.items()
-        )
-    if isinstance(geometry, PathGeometry):
-        return any(_row_contains_coord_map(row, point) for point in geometry.points)
-    points = getattr(geometry, "points", ())
-    return any(_row_contains_coord_map(row, point) for point in points)
-
-
-def _row_contains_coord_map(row: pd.Series, values: dict[str, Any]) -> bool:
-    """Return True when one point lies within row extents on every dim."""
-    return all(_row_contains_value(row, dim, value) for dim, value in values.items())
-
-
-def _row_contains_value(row: pd.Series, dim: str, value: Any) -> bool:
-    """Return True when one scalar value lies within one dim extent."""
-    bounds = _row_bounds(row, dim)
-    if bounds is None:
-        return False
-    row_min, row_max = bounds
-    value = _normalize_coord_scalar(value)
-    try:
-        return bool(row_min <= value <= row_max)
-    except TypeError:
-        return False
-
-
-def _row_intersects_span(row: pd.Series, dim: str, start: Any, end: Any) -> bool:
-    """Return True when one interval intersects the row extent on a dim."""
-    bounds = _row_bounds(row, dim)
-    if bounds is None:
-        return False
-    row_min, row_max = bounds
-    start, end = _ordered_pair(start, end)
-    try:
-        return not (end < row_min or start > row_max)
-    except TypeError:
-        return False
-
-
-def _row_bounds(row: pd.Series, dim: str) -> tuple[Any, Any] | None:
-    """Return normalized min/max bounds for one dim from a contents row."""
-    min_key = f"{dim}_min"
-    max_key = f"{dim}_max"
-    if min_key not in row.index or max_key not in row.index:
-        return None
-    row_min = _normalize_coord_scalar(row[min_key])
-    row_max = _normalize_coord_scalar(row[max_key])
-    return _ordered_pair(row_min, row_max)
 
 
 def _ordered_pair(first: Any, second: Any) -> tuple[Any, Any]:

@@ -1804,10 +1804,6 @@ class AnnotationOverlayController:
             self._replace_annotation_items(rebuild_ids)
         self.refresh_item_styles(changed_ids - rebuild_ids)
 
-    def _point_ids_require_rebuild(self, annotation_ids) -> bool:
-        """Return True when selection changes swap render/edit implementations."""
-        return bool(self._point_ids_requiring_rebuild(annotation_ids))
-
     def _point_ids_requiring_rebuild(self, annotation_ids) -> set[str]:
         """Return IDs whose selected state changes their graphics class."""
         out: set[str] = set()

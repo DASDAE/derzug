@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+
 from derzug.models.annotations import (
     Annotation,
     AnnotationSet,
@@ -15,8 +16,14 @@ from derzug.models.annotations import (
 from derzug.utils.spool import (
     annotation_overlap_mask,
     extract_single_patch,
-    filter_contents_by_annotations,
 )
+
+
+def _filter_by_annotations(
+    df: pd.DataFrame, annotation_set: AnnotationSet
+) -> pd.DataFrame:
+    """Filter contents rows via the overlap mask, mirroring widget usage."""
+    return df.loc[annotation_overlap_mask(df, annotation_set)]
 
 
 def _contents_df() -> pd.DataFrame:
@@ -65,7 +72,7 @@ def test_point_annotations_filter_contents_on_shared_dims():
         ),
     )
 
-    out = filter_contents_by_annotations(df, annotation_set)
+    out = _filter_by_annotations(df, annotation_set)
 
     assert list(out["tag"]) == ["second"]
 
@@ -83,7 +90,7 @@ def test_span_annotations_filter_contents_on_interval_intersection():
         ),
     )
 
-    out = filter_contents_by_annotations(df, annotation_set)
+    out = _filter_by_annotations(df, annotation_set)
 
     assert list(out["tag"]) == ["first", "second"]
 
@@ -106,7 +113,7 @@ def test_box_annotations_require_overlap_on_all_box_dims():
         ),
     )
 
-    out = filter_contents_by_annotations(df, annotation_set)
+    out = _filter_by_annotations(df, annotation_set)
 
     assert list(out["tag"]) == ["second"]
 
@@ -130,7 +137,7 @@ def test_path_annotations_match_when_any_sampled_point_falls_inside():
         ),
     )
 
-    out = filter_contents_by_annotations(df, annotation_set)
+    out = _filter_by_annotations(df, annotation_set)
 
     assert list(out["tag"]) == ["first", "second"]
 
@@ -162,7 +169,7 @@ def test_empty_annotation_set_matches_no_rows():
     df = _contents_df()
     annotation_set = AnnotationSet(dims=("distance",), annotations=())
 
-    out = filter_contents_by_annotations(df, annotation_set)
+    out = _filter_by_annotations(df, annotation_set)
 
     assert out.empty
 
