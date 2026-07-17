@@ -6,7 +6,6 @@ import threading
 
 import pytest
 from AnyQt.QtCore import QObject
-
 from derzug.core.widget_runtime import (
     _ISOLATED_EXECUTOR,
     _SHARED_EXECUTOR,
