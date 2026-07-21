@@ -2780,6 +2780,8 @@ class DerZugMain(OMain):
     dev_mode = False
     conductor_enabled = False
     conductor_agent: str | None = None
+    conductor_allow_code = False
+    _conductor_service = None
     startup_workflow_path: str | None = None
     startup_open_widget_ids: ClassVar[list[int]] = []
 
@@ -2903,13 +2905,24 @@ class DerZugMain(OMain):
             return
         try:
             config_path = os.path.join(os.getcwd(), ".mcp.json")
-            self._conductor_thread, _url = start_conductor(
-                window, config_path=config_path, agent=self.conductor_agent
+            self._conductor_service = start_conductor(
+                window,
+                config_path=config_path,
+                agent=self.conductor_agent,
+                allow_code=self.conductor_allow_code,
             )
         except Exception:
             logging.getLogger(__name__).error(
                 "Failed to start the Conductor MCP server", exc_info=True
             )
+            return
+        self.application.aboutToQuit.connect(self._stop_conductor)
+
+    def _stop_conductor(self) -> None:
+        """Shut the Conductor service down at application teardown."""
+        service, self._conductor_service = self._conductor_service, None
+        if service is not None:
+            service.stop()
 
     def main_window_stylesheet(self):
         """

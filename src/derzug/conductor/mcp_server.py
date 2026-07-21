@@ -5,6 +5,15 @@ marshals its call onto the Qt main thread via a ``MainThreadDispatcher``, so an
 external agent client (e.g. Claude Code) can observe and drive the running canvas
 over a localhost transport while DerZug's UI stays responsive.
 
+``ConductorService`` owns the server lifecycle: it pre-binds the port (so a
+conflict fails fast and loudly), serves in a background thread, reports
+readiness, and shuts down cleanly on application teardown.
+
+Trust model: the server binds loopback only and carries no authentication —
+any local process may connect, so local clients are trusted by design. The
+``Code`` widget (arbitrary Python via parameters) is additionally excluded from
+the agent surface unless the user opts in with ``--conductor-allow-code``.
+
 Requires the optional ``mcp`` dependency: ``pip install 'derzug[conductor]'``.
 This module is imported only when the Conductor server is started, so the core
 app never depends on ``mcp``.
@@ -15,11 +24,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shlex
-import shutil
-import subprocess
-import sys
+import socket
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +34,7 @@ from mcp.server.fastmcp import FastMCP
 
 from derzug.conductor.controller import CanvasController
 from derzug.conductor.dispatch import MainThreadDispatcher
+from derzug.conductor.launch import SERVER_NAME, launch_agent_in_terminal
 
 log = logging.getLogger(__name__)
 
@@ -35,11 +43,7 @@ DEFAULT_PORT = 4319
 
 
 def build_conductor_mcp(
-    controller: CanvasController,
-    dispatcher: MainThreadDispatcher,
-    *,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
+    controller: CanvasController, dispatcher: MainThreadDispatcher
 ) -> FastMCP:
     """Return a FastMCP server whose tools drive ``controller`` on the main thread."""
     mcp = FastMCP(
@@ -50,7 +54,7 @@ def build_conductor_mcp(
             "COMMON RECIPE (view data): add_node('Spool') -> "
             "set_params(spool_id, {'spool_input': 'example_event_1'}) -> "
             "add_node('Waterfall') -> connect(spool_id, waterfall_id) -> "
-            "run(spool_id).\n\n"
+            "run(spool_id) -> wait_for_idle().\n\n"
             "CONVENTIONS:\n"
             "- Almost every node has one input port 'Patch' and one output port "
             "'Patch'; connect(source_id, sink_id) defaults to them, so you rarely "
@@ -58,7 +62,11 @@ def build_conductor_mcp(
             "- Omit x/y on add_node; nodes auto-place in a tidy left-to-right "
             "row.\n"
             "- set_params/set_view take PARTIAL updates, are validated against the "
-            "node's schema, and return the prior value.\n"
+            "node's schema, and return the prior value. They do NOT re-run the "
+            "node by default: assemble and configure the graph first, then call "
+            "run(source_id) once and wait_for_idle().\n"
+            "- run() only schedules execution; wait_for_idle() blocks until no "
+            "node is busy (each node also reports a 'busy' flag).\n"
             "- Structural edits (add/remove/connect) are undoable in the app "
             "(Ctrl+Z).\n"
             "- show_node pops up a node's widget window to display results.\n\n"
@@ -70,8 +78,6 @@ def build_conductor_mcp(
             "Detrend, Taper, Resample, Select, Aggregate. See list_widget_types "
             "for the full set and parameters."
         ),
-        host=host,
-        port=port,
     )
 
     def call(func: Any, *args: Any, **kwargs: Any) -> Any:
@@ -104,9 +110,13 @@ def build_conductor_mcp(
 
     @mcp.tool()
     def set_params(
-        node_id: str, params: dict[str, Any], run: bool = True
+        node_id: str, params: dict[str, Any], run: bool = False
     ) -> dict[str, Any]:
-        """Apply a partial params update to a node; returns its prior params."""
+        """Apply a partial params update to a node; returns its prior params.
+
+        Does not re-run the node unless ``run=True``: configure the graph fully,
+        then call the ``run`` tool once and ``wait_for_idle``.
+        """
         return {"prior": call(controller.set_params, node_id, params, run=run)}
 
     @mcp.tool()
@@ -158,8 +168,24 @@ def build_conductor_mcp(
 
     @mcp.tool()
     def run(node_id: str) -> None:
-        """Re-run a node; sources re-emit and propagate downstream."""
+        """Schedule a node re-run (async); follow with wait_for_idle to await it."""
         call(controller.run, node_id)
+
+    @mcp.tool()
+    def wait_for_idle(timeout_seconds: float = 30.0) -> dict[str, Any]:
+        """Block until no node is executing; reports still-busy nodes on timeout.
+
+        Polls from the server thread (brief main-thread hops), so the UI stays
+        responsive while waiting.
+        """
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            busy = call(controller.busy_nodes)
+            if not busy:
+                return {"idle": True, "busy_nodes": []}
+            if time.monotonic() > deadline:
+                return {"idle": False, "busy_nodes": busy}
+            time.sleep(0.1)
 
     @mcp.tool()
     def show_node(node_id: str, x: float | None = None, y: float | None = None) -> None:
@@ -179,15 +205,100 @@ def build_conductor_mcp(
     return mcp
 
 
-def serve_in_thread(mcp: FastMCP) -> threading.Thread:
-    """Run the MCP server (streamable-http) in a daemon thread; return the thread."""
-    thread = threading.Thread(
-        target=lambda: mcp.run(transport="streamable-http"),
-        name="conductor-mcp",
-        daemon=True,
-    )
-    thread.start()
-    return thread
+class ConductorService:
+    """Owns the Conductor MCP server lifecycle: bind, serve, readiness, stop.
+
+    ``start`` pre-binds the listening socket on the calling thread — a port
+    conflict raises immediately instead of dying silently inside a worker —
+    then serves the streamable-http app on a background uvicorn server and
+    blocks until it reports ready (or raises on startup failure). ``stop``
+    halts the dispatcher (releasing any in-flight marshalled calls), signals
+    uvicorn to exit, and joins the thread.
+    """
+
+    def __init__(
+        self,
+        mcp: FastMCP,
+        *,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        dispatcher: MainThreadDispatcher | None = None,
+    ) -> None:
+        self._mcp = mcp
+        self._host = host
+        self._port = port
+        self._dispatcher = dispatcher
+        self._server: Any | None = None
+        self._thread: threading.Thread | None = None
+
+    @property
+    def host(self) -> str:
+        """The interface the server binds (loopback by default)."""
+        return self._host
+
+    @property
+    def port(self) -> int:
+        """The bound port (resolved after ``start`` when constructed with 0)."""
+        return self._port
+
+    @property
+    def url(self) -> str:
+        """The server's MCP endpoint URL."""
+        return f"http://{self._host}:{self._port}/mcp"
+
+    def start(self, timeout: float = 15.0) -> str:
+        """Bind, serve in a background thread, and wait for readiness; return URL.
+
+        Raises ``OSError`` when the port is already taken and ``RuntimeError``
+        when the server exits or is not ready within ``timeout`` seconds.
+        """
+        import uvicorn
+
+        sock = socket.create_server((self._host, self._port))
+        try:
+            self._port = sock.getsockname()[1]  # resolves an ephemeral port (0)
+            config = uvicorn.Config(
+                self._mcp.streamable_http_app(),
+                host=self._host,
+                port=self._port,
+                log_level="warning",
+            )
+            self._server = uvicorn.Server(config)
+            self._thread = threading.Thread(
+                target=self._server.run,
+                kwargs={"sockets": [sock]},
+                name="conductor-mcp",
+                daemon=True,
+            )
+            self._thread.start()
+            deadline = time.monotonic() + timeout
+            while not self._server.started:
+                if not self._thread.is_alive():
+                    raise RuntimeError("Conductor MCP server exited during startup")
+                if time.monotonic() > deadline:
+                    raise RuntimeError(
+                        f"Conductor MCP server not ready after {timeout:.0f}s"
+                    )
+                time.sleep(0.05)
+        except BaseException:
+            self.stop()
+            sock.close()
+            raise
+        log.info("Conductor MCP server ready at %s", self.url)
+        return self.url
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Shut down: stop the dispatcher, signal uvicorn to exit, join the thread."""
+        if self._dispatcher is not None:
+            self._dispatcher.stop()
+        if self._server is not None:
+            self._server.should_exit = True
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout)
+            if self._thread.is_alive():
+                log.warning("Conductor MCP server thread did not stop cleanly")
+        self._server = None
+        self._thread = None
 
 
 def write_mcp_config(
@@ -195,91 +306,38 @@ def write_mcp_config(
     *,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    name: str = "derzug-conductor",
+    name: str = SERVER_NAME,
 ) -> str:
-    """Write an MCP client config pointing at the running server; return its URL.
+    """Merge our server entry into the MCP client config at ``path``; return URL.
 
-    The file is an ``.mcp.json`` a client such as Claude Code can pick up, so the
-    user just launches their agent in that directory and it is wired to the live
-    canvas with no manual endpoint entry.
+    The file is an ``.mcp.json`` a client such as Claude Code picks up. An
+    existing config keeps its other entries — only ``mcpServers[name]`` is
+    replaced — and the file is written atomically (temp file + rename). An
+    existing file that is not valid JSON is left untouched (logged), so a
+    user's hand-edited config is never clobbered.
     """
     url = f"http://{host}:{port}/mcp"
-    config = {"mcpServers": {name: {"type": "http", "url": url}}}
-    Path(path).write_text(json.dumps(config, indent=2))
-    return url
-
-
-# Agents we know how to auto-launch. The command runs in the config directory.
-_AGENT_COMMANDS = {
-    "claude": ["claude"],  # reads the .mcp.json we drop in the launch cwd
-    "codex": ["codex"],  # needs an mcp-remote bridge entry (written below)
-}
-
-
-def _write_codex_config(host: str, port: int, name: str = "derzug-conductor") -> None:
-    """Add an mcp-remote bridge for the server to ``~/.codex/config.toml``.
-
-    Codex speaks stdio MCP, so it reaches our HTTP server through ``mcp-remote``.
-    Appends the section only when absent (best effort; needs ``npx`` at runtime).
-    """
-    path = Path.home() / ".codex" / "config.toml"
-    section = f"[mcp_servers.{name}]"
-    existing = path.read_text() if path.exists() else ""
-    if section in existing:
-        return
-    url = f"http://{host}:{port}/mcp"
-    block = (
-        f"\n{section}\n" 'command = "npx"\n' f'args = ["-y", "mcp-remote", "{url}"]\n'
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(existing + block)
-    log.info("Wrote Codex MCP bridge for %s to %s", url, path)
-
-
-def _open_in_terminal(command: list[str], cwd: str) -> bool:
-    """Best-effort: open a new terminal window running ``command`` in ``cwd``."""
-    joined = " ".join(shlex.quote(part) for part in command)
-
-    def _spawn(argv: list[str], spawn_cwd: str | None = None) -> bool:
+    path = Path(path)
+    config: dict[str, Any] = {}
+    if path.exists():
         try:
-            subprocess.Popen(argv, cwd=spawn_cwd)
-            return True
-        except Exception:
-            log.error("Failed to launch terminal: %s", argv, exc_info=True)
-            return False
-
-    if sys.platform == "darwin":
-        script = (
-            f'tell application "Terminal" to do script '
-            f'"cd {shlex.quote(cwd)} && exec {joined}"'
-        )
-        return _spawn(["osascript", "-e", script])
-    if os.name == "nt":
-        if shutil.which("wt"):
-            return _spawn(["wt", "-d", cwd, *command])
-        return _spawn(["cmd", "/c", "start", "", "cmd", "/k", joined], spawn_cwd=cwd)
-    for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
-        exe = shutil.which(term)
-        if exe is None:
-            continue
-        if term == "gnome-terminal":
-            return _spawn([exe, "--working-directory", cwd, "--", *command])
-        return _spawn([exe, "-e", joined], spawn_cwd=cwd)
-    log.error("No terminal emulator found; run '%s' in %s yourself", joined, cwd)
-    return False
-
-
-def launch_agent_in_terminal(
-    agent: str, cwd: str, *, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
-) -> bool:
-    """Wire the named agent's MCP config and launch it in a new terminal in ``cwd``."""
-    command = _AGENT_COMMANDS.get(agent, [agent])
-    if shutil.which(command[0]) is None:
-        log.error("Agent %r not found on PATH; run it yourself in %s", agent, cwd)
-        return False
-    if agent == "codex":
-        _write_codex_config(host, port)
-    return _open_in_terminal(command, cwd)
+            config = json.loads(path.read_text())
+        except ValueError:
+            log.error(
+                "Existing %s is not valid JSON; leaving it untouched. "
+                "Add the server yourself: %s",
+                path,
+                url,
+            )
+            return url
+        if not isinstance(config, dict):
+            config = {}
+    servers = config.setdefault("mcpServers", {})
+    servers[name] = {"type": "http", "url": url}
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(config, indent=2))
+    os.replace(tmp, path)
+    return url
 
 
 def start_conductor(
@@ -289,27 +347,31 @@ def start_conductor(
     port: int = DEFAULT_PORT,
     config_path: str | Path | None = None,
     agent: str | None = None,
-) -> tuple[threading.Thread, str]:
+    allow_code: bool = False,
+) -> ConductorService:
     """Wire and start the in-app Conductor MCP server for ``window``.
 
-    Builds a ``CanvasController`` + ``MainThreadDispatcher``, serves the MCP tools
-    over streamable-http in a daemon thread (which keeps them alive), and
-    optionally writes an ``.mcp.json`` so a client auto-connects. When ``agent``
-    is given (e.g. ``"claude"`` / ``"codex"``), it is launched in a new terminal
-    in the config directory. Returns the server thread and its URL.
+    Builds a ``CanvasController`` + ``MainThreadDispatcher``, starts a
+    ``ConductorService`` and waits for readiness (raising on bind/startup
+    failure). Only after the server is ready is the client config written and,
+    when ``agent`` is given (e.g. ``"claude"`` / ``"codex"``), the agent
+    launched in a new terminal in the config directory. The caller owns the
+    returned service and should ``stop()`` it on application teardown.
     """
-    controller = CanvasController(window)
+    controller = CanvasController(window, allow_code=allow_code)
     dispatcher = MainThreadDispatcher()
-    mcp = build_conductor_mcp(controller, dispatcher, host=host, port=port)
-    thread = serve_in_thread(mcp)
-    url = f"http://{host}:{port}/mcp"
-    cwd = os.getcwd()
-    if config_path is not None:
-        write_mcp_config(config_path, host=host, port=port)
-        cwd = str(Path(config_path).resolve().parent)
-        log.info("Conductor MCP server at %s (client config: %s)", url, config_path)
-    else:
-        log.info("Conductor MCP server at %s", url)
-    if agent:
-        launch_agent_in_terminal(agent, cwd, host=host, port=port)
-    return thread, url
+    mcp = build_conductor_mcp(controller, dispatcher)
+    service = ConductorService(mcp, host=host, port=port, dispatcher=dispatcher)
+    try:
+        url = service.start()
+        cwd = os.getcwd()
+        if config_path is not None:
+            write_mcp_config(config_path, host=service.host, port=service.port)
+            cwd = str(Path(config_path).resolve().parent)
+            log.info("Conductor client config written to %s", config_path)
+        if agent:
+            launch_agent_in_terminal(agent, cwd, url)
+    except BaseException:
+        service.stop()
+        raise
+    return service

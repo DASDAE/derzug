@@ -24,12 +24,17 @@ Reorder the `connect`/`disconnect` tools to `(source_id, sink_id,
 source_port="Patch", sink_port="Patch")` so the standard case is `connect(src,
 sink)` with no port inspection. (The controller keeps its explicit 4-arg form.)
 
-### 2. High-level "recipe" tools  — pending
+### 2. High-level "recipe" tools  — pending (blocked on transactionality)
 Collapse the common multi-step flows into single calls:
 - `add_chain(["Spool","Filter","Waterfall"])` — add the nodes and auto-connect
   them `Patch`→`Patch`; returns the new node ids. ~6 calls → 1.
 - `load_example(name)` — the hello-world: `Spool(example)` → `Waterfall`,
   connected + shown. One call to "just show me data."
+
+**Precondition (per review):** implement each recipe as one validated
+undo-stack macro (`QUndoStack.beginMacro`/`endMacro`) with rollback on partial
+failure. Without that, a recipe failing halfway leaves a half-built workflow
+and requires several manual undos. Deferred until the macro plumbing exists.
 
 ### 3. Split discovery so the survey is cheap  — pending
 `list_widget_types` returns full schemas for every type (heavy upfront payload).

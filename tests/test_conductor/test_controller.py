@@ -530,3 +530,106 @@ class TestGraphAuthoring:
         assert (widget.pos().x(), widget.pos().y()) == (123, 45)
         controller.hide_node(node_id)
         assert not widget.isVisible()
+
+
+class TestStableNodeIds:
+    """Node ids are persisted UUIDs, stable across undo/redo and re-reads."""
+
+    def test_added_node_gets_persisted_id(self, blank_canvas):
+        """add_node stamps a DerZug node id into the node's properties."""
+        from derzug.widgets.composite import get_node_id
+
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        node_id = controller.add_node("Detrend", title="dt")
+        node = controller._node_for_id(node_id)
+        assert get_node_id(node) == node_id
+
+    def test_id_survives_undo_redo(self, blank_canvas):
+        """The same id resolves the node after an undo/redo cycle."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        node_id = controller.add_node("Detrend", title="dt")
+
+        stack = window.current_document().undoStack()
+        stack.undo()
+        assert all(n.id != node_id for n in controller.get_canvas_state().nodes)
+        stack.redo()
+        assert any(n.id == node_id for n in controller.get_canvas_state().nodes)
+
+    def test_legacy_node_is_normalized_on_read(self, blank_canvas):
+        """A node placed without a DerZug id gets one persisted when observed."""
+        from derzug.widgets.composite import get_node_id
+        from orangecanvas.scheme import SchemeNode
+
+        window, scheme = blank_canvas
+        controller = CanvasController(window)
+        description = controller._description_for("Detrend")
+        node = SchemeNode(description, title="legacy", position=(0.0, 0.0))
+        scheme.add_node(node)
+        assert get_node_id(node) is None
+
+        state = controller.get_canvas_state()
+        assert get_node_id(node) is not None
+        assert any(n.id == get_node_id(node) for n in state.nodes)
+
+
+class TestExecutionStatus:
+    """Widget execution is observable: per-node busy flags and busy_nodes()."""
+
+    def test_idle_canvas_reports_no_busy_nodes(self, blank_canvas):
+        """A canvas with no running widgets is idle."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        controller.add_node("Detrend", title="dt")
+        assert controller.busy_nodes() == []
+        assert all(not n.busy for n in controller.get_canvas_state().nodes)
+
+    def test_busy_widget_is_reported(self, blank_canvas):
+        """A widget with an in-flight async run shows as busy."""
+        window, _ = blank_canvas
+        controller = CanvasController(window)
+        node_id = controller.add_node("Detrend", title="dt")
+        widget = controller._widget_for_id(node_id)
+        widget._async_busy_state = True
+        try:
+            assert controller.busy_nodes() == [node_id]
+            node = controller.describe_node(node_id).node
+            assert node.busy
+        finally:
+            widget._async_busy_state = False
+
+
+class TestCodeWidgetGating:
+    """The Code widget (arbitrary Python) is fenced off unless opted in."""
+
+    def test_code_hidden_from_catalog_by_default(self, blank_canvas):
+        """list_widget_types omits the Code widget without allow_code."""
+        window, _ = blank_canvas
+        names = {info.name for info in CanvasController(window).list_widget_types()}
+        assert "Code" not in names
+
+    def test_add_code_rejected_by_default(self, blank_canvas):
+        """Authoring a Code node is refused with a pointer to the opt-in flag."""
+        window, _ = blank_canvas
+        with pytest.raises(PermissionError, match="conductor-allow-code"):
+            CanvasController(window).add_node("Code")
+
+    def test_configure_existing_code_rejected_by_default(self, blank_canvas):
+        """A user-placed Code node cannot be reconfigured by a gated agent."""
+        window, _ = blank_canvas
+        trusted = CanvasController(window, allow_code=True)
+        node_id = trusted.add_node("Code", title="user-code")
+
+        gated = CanvasController(window)
+        with pytest.raises(PermissionError, match="conductor-allow-code"):
+            gated.set_params(node_id, {"script_text": "import os"})
+
+    def test_allow_code_opts_in(self, blank_canvas):
+        """With allow_code=True the Code widget is listed and authorable."""
+        window, _ = blank_canvas
+        controller = CanvasController(window, allow_code=True)
+        names = {info.name for info in controller.list_widget_types()}
+        assert "Code" in names
+        node_id = controller.add_node("Code", title="code")
+        assert any(n.id == node_id for n in controller.get_canvas_state().nodes)
