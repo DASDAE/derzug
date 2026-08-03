@@ -27,7 +27,7 @@ def test_write_skill_files_covers_every_client_location(tmp_path):
         path.parent for path in written
     }
     for path in written:
-        assert path.read_text() == skill_text()
+        assert path.read_text(encoding="utf-8") == skill_text()
 
 
 def test_write_skill_files_overwrites_only_generated_copies(tmp_path):
@@ -35,16 +35,17 @@ def test_write_skill_files_overwrites_only_generated_copies(tmp_path):
     first = write_skill_files(tmp_path)
     stale = first[0]
     stale.write_text(
-        skill_text().replace("# Drive", "# Old generated content\n# Drive")
+        skill_text().replace("# Drive", "# Old generated content\n# Drive"),
+        encoding="utf-8",
     )
     user_owned = first[1]
-    user_owned.write_text("my own notes, marker removed")
+    user_owned.write_text("my own notes, marker removed", encoding="utf-8")
 
     written = write_skill_files(tmp_path)
 
     assert written == [stale]
-    assert stale.read_text() == skill_text()
-    assert user_owned.read_text() == "my own notes, marker removed"
+    assert stale.read_text(encoding="utf-8") == skill_text()
+    assert user_owned.read_text(encoding="utf-8") == "my own notes, marker removed"
 
 
 def test_write_skill_files_skips_an_undecodable_existing_file(tmp_path):

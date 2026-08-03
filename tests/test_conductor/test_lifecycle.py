@@ -89,7 +89,7 @@ def test_start_emits_started_and_writes_client_config(
     config = json.loads((tmp_path / ".mcp.json").read_text())
     assert config["mcpServers"]["derzug-conductor"]["url"] == service.url
     skill = tmp_path / ".claude" / "skills" / "derzug-conductor" / "SKILL.md"
-    assert "get_derzug_rules" in skill.read_text()
+    assert "get_derzug_rules" in skill.read_text(encoding="utf-8")
 
 
 def test_request_start_is_ignored_while_a_service_exists(
