@@ -2781,9 +2781,11 @@ class DerZugMain(OMain):
     conductor_enabled = False
     conductor_agent: str | None = None
     conductor_allow_code = False
-    _conductor_service = None
+    _conductor_lifecycle = None
     _conductor_window = None
-    _conductor_cwd: str | None = None
+    _conductor_active_settings = None
+    _conductor_pending_agent: str | None = None
+    _conductor_pending_restart: tuple[int, bool] | None = None
     startup_workflow_path: str | None = None
     startup_open_widget_ids: ClassVar[list[int]] = []
 
@@ -2858,7 +2860,7 @@ class DerZugMain(OMain):
 
     def tear_down_application(self):
         """Remove DerZug app-global hooks before base QApplication teardown."""
-        self._stop_conductor()
+        self._shutdown_conductor()
         self._tear_down_application_filters()
         super().tear_down_application()
 
@@ -2903,6 +2905,7 @@ class DerZugMain(OMain):
 
     def _install_conductor_controls(self, window) -> None:
         """Install the always-available menu and connect lifecycle requests."""
+        from derzug.conductor.lifecycle import ConductorLifecycle
         from derzug.views.conductor import (
             ConductorMenuController,
             ConductorSettings,
@@ -2919,6 +2922,13 @@ class DerZugMain(OMain):
         controls = ConductorMenuController(window, settings)
         window.conductor_controls = controls
         self._conductor_window = window
+        if self._conductor_lifecycle is None:
+            lifecycle = ConductorLifecycle()
+            lifecycle.started.connect(self._on_conductor_started)
+            lifecycle.start_failed.connect(self._on_conductor_start_failed)
+            lifecycle.stopped.connect(self._on_conductor_stopped)
+            lifecycle.stop_failed.connect(self._on_conductor_stop_failed)
+            self._conductor_lifecycle = lifecycle
 
         controls.start_requested.connect(
             lambda port, allow_code: self._start_conductor(
@@ -2941,10 +2951,20 @@ class DerZugMain(OMain):
         controls.port_changed.connect(
             lambda port: save_conductor_port(port, _derzug_settings())
         )
-        self.application.aboutToQuit.connect(self._stop_conductor)
+        self.application.aboutToQuit.connect(self._shutdown_conductor)
         # The service drives this window, and only this window can control it,
         # so it must not outlive the window when other windows keep the app up.
-        window.destroyed.connect(lambda *_: self._stop_conductor())
+        window.destroyed.connect(lambda *_: self._shutdown_conductor())
+
+    def _conductor_ui(self):
+        """Return ``(window, controls)``, guarding against a deleted window."""
+        window = self._conductor_window
+        if window is not None and _qt_object_is_deleted(window):
+            window = None
+        controls = (
+            None if window is None else getattr(window, "conductor_controls", None)
+        )
+        return window, controls
 
     def _start_conductor(
         self,
@@ -2954,19 +2974,26 @@ class DerZugMain(OMain):
         allow_code: bool,
         agent: str | None = None,
     ) -> bool:
-        """Start the optional Conductor server and synchronize its menu state."""
+        """Begin an asynchronous Conductor start, reporting immediate failures."""
         import logging
 
         from derzug.views.conductor import ConductorSettings
 
-        if self._conductor_service is not None:
+        lifecycle = self._conductor_lifecycle
+        if lifecycle is None or _qt_object_is_deleted(window):
+            return False
+        if lifecycle.service is not None:
             return True
         controls = window.conductor_controls
         settings = ConductorSettings(port=port, allow_code=allow_code)
         controls.set_starting()
-
         try:
-            from derzug.conductor.mcp_server import start_conductor
+            lifecycle.request_start(
+                window,
+                port=settings.port,
+                allow_code=settings.allow_code,
+                config_dir=Path.cwd(),
+            )
         except ImportError as exc:
             logging.getLogger(__name__).error(
                 "Could not import the Conductor MCP server", exc_info=True
@@ -2981,14 +3008,6 @@ class DerZugMain(OMain):
                 detail = f"The Conductor server could not be imported:\n\n{exc}"
             QMessageBox.critical(window, "Conductor Unavailable", detail)
             return False
-        config_path = Path.cwd() / ".mcp.json"
-        try:
-            service = start_conductor(
-                window,
-                config_path=config_path,
-                port=settings.port,
-                allow_code=settings.allow_code,
-            )
         except Exception as exc:
             logging.getLogger(__name__).error(
                 "Failed to start the Conductor MCP server", exc_info=True
@@ -3001,49 +3020,82 @@ class DerZugMain(OMain):
                 f"Could not start the Conductor server:\n\n{detail}",
             )
             return False
-        self._conductor_service = service
-        self._conductor_cwd = str(config_path.parent)
-        controls.set_running(service.url, settings)
-        if agent is not None:
-            self._launch_conductor_agent(window, agent)
+        self._conductor_active_settings = settings
+        self._conductor_pending_agent = agent
         return True
 
+    def _on_conductor_started(self, url: str) -> None:
+        """Reflect the ready server in the menu and launch any pending agent."""
+        window, controls = self._conductor_ui()
+        if controls is not None and self._conductor_active_settings is not None:
+            controls.set_running(url, self._conductor_active_settings)
+        agent = self._conductor_pending_agent
+        self._conductor_pending_agent = None
+        if agent and window is not None:
+            self._launch_conductor_agent(window, agent)
+
+    def _on_conductor_start_failed(self, message: str) -> None:
+        """Reset the menu and report a start that failed after launch."""
+        window, controls = self._conductor_ui()
+        self._conductor_pending_agent = None
+        self._conductor_pending_restart = None
+        if controls is not None:
+            controls.set_stopped()
+        if window is not None:
+            QMessageBox.critical(
+                window,
+                "Conductor Start Failed",
+                f"Could not start the Conductor server:\n\n{message}",
+            )
+
+    def _on_conductor_stopped(self) -> None:
+        """Reflect the stop in the menu and chain any pending restart."""
+        window, controls = self._conductor_ui()
+        if controls is not None:
+            controls.set_stopped()
+        pending = self._conductor_pending_restart
+        self._conductor_pending_restart = None
+        if pending is not None and window is not None:
+            port, allow_code = pending
+            QTimer.singleShot(
+                0,
+                lambda: self._start_conductor(window, port=port, allow_code=allow_code),
+            )
+
+    def _on_conductor_stop_failed(self, message: str) -> None:
+        """Keep the still-running server owned and report the failed stop."""
+        window, controls = self._conductor_ui()
+        self._conductor_pending_restart = None
+        if controls is not None:
+            controls.set_stop_failed()
+        if window is not None:
+            QMessageBox.warning(
+                window,
+                "Conductor Stop Failed",
+                f"The Conductor server reported an error while stopping:\n\n{message}",
+            )
+
     def _stop_conductor(self) -> None:
-        """Shut the Conductor service down, keeping it owned if that fails."""
-        service = self._conductor_service
-        window = self._conductor_window
-        if window is not None and _qt_object_is_deleted(window):
-            window = None
-        controls = (
-            None if window is None else getattr(window, "conductor_controls", None)
-        )
-        if service is None:
+        """Request an asynchronous Conductor shutdown."""
+        lifecycle = self._conductor_lifecycle
+        _, controls = self._conductor_ui()
+        if lifecycle is None or lifecycle.service is None:
             if controls is not None:
                 controls.set_stopped()
             return
         if controls is not None:
             controls.set_stopping()
-        try:
-            service.stop()
-        except Exception as exc:
-            import logging
+        lifecycle.request_stop()
 
-            logging.getLogger(__name__).error(
-                "Failed to stop the Conductor MCP server", exc_info=True
-            )
-            # The port may still be bound, so keep the service to retry a stop
-            # rather than letting a restart race the old one for the port.
-            if controls is not None:
-                controls.set_stop_failed()
-            if window is not None:
-                QMessageBox.warning(
-                    window,
-                    "Conductor Stop Failed",
-                    f"The Conductor server reported an error while stopping:\n\n{exc}",
-                )
+    def _shutdown_conductor(self) -> None:
+        """Stop the Conductor synchronously during application/window teardown."""
+        self._conductor_pending_agent = None
+        self._conductor_pending_restart = None
+        lifecycle = self._conductor_lifecycle
+        if lifecycle is None:
             return
-        self._conductor_service = None
-        self._conductor_cwd = None
+        lifecycle.shutdown()
+        _, controls = self._conductor_ui()
         if controls is not None:
             controls.set_stopped()
 
@@ -3054,25 +3106,26 @@ class DerZugMain(OMain):
         port: int,
         allow_code: bool,
     ) -> bool:
-        """Restart the server so the current menu settings take effect."""
+        """Stop the server, then start it with the current settings once stopped."""
+        lifecycle = self._conductor_lifecycle
+        if lifecycle is None:
+            return False
+        if lifecycle.service is None:
+            return self._start_conductor(window, port=port, allow_code=allow_code)
+        self._conductor_pending_restart = (port, allow_code)
         self._stop_conductor()
-        if self._conductor_service is not None:
-            return False  # the old server still holds the port
-        return self._start_conductor(
-            window,
-            port=port,
-            allow_code=allow_code,
-        )
+        return True
 
     def _launch_conductor_agent(self, window, agent: str) -> bool:
         """Launch one agent connected to the active Conductor service."""
         from derzug.conductor.launch import launch_agent_in_terminal
 
-        service = self._conductor_service
-        cwd = self._conductor_cwd
-        if service is None or cwd is None:
+        lifecycle = self._conductor_lifecycle
+        url = None if lifecycle is None else lifecycle.url
+        cwd = None if lifecycle is None else lifecycle.agent_cwd
+        if url is None or cwd is None:
             return False
-        if launch_agent_in_terminal(agent, cwd, service.url):
+        if launch_agent_in_terminal(agent, cwd, url):
             return True
         display_name = "Claude Code" if agent == "claude" else "Codex"
         QMessageBox.warning(
