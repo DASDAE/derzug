@@ -31,3 +31,5 @@
 - Preserve the split between headless and interactive Qt test runs:
   - plain `pytest` should remain headless-safe via `QT_QPA_PLATFORM=offscreen`
   - `pytest -m show` should remain interactive, run only the `show` tests, and keep windows open until the developer closes them
+
+- Bare `pytest` collects `tests/` only (`testpaths` in `pyproject.toml`). The benchmark suite is opt-in via an explicit path — see [Benchmarking](benchmarking.md).

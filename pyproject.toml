@@ -126,6 +126,9 @@ test = [
     "pytest-cov>=4",
     "prek",
     "pytest",
+    # v5 is the first release with cp314 wheels; v6 may change the results schema
+    # that scripts/bench_compare.py parses.
+    "pytest-codspeed>=5,<6",
     "pytest-qt",
 ]
 
@@ -213,6 +216,9 @@ max-complexity = 10
 convention = "numpy"
 
 [tool.pytest.ini_options]
+# Bare `pytest` runs the test suite only. The benchmarks/ tree is opt-in via an
+# explicit path, so it never runs (or boots Qt) during ordinary testing.
+testpaths = ["tests"]
 filterwarnings = [
     # Ignore hdf5 warnings from pytables, See pytables #1035
     'ignore::Warning:tables:',

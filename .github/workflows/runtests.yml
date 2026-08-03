@@ -71,6 +71,13 @@ jobs:
 #      - name: Setup tmate session
 #        uses: mxschmitt/action-tmate@v3
 
+      # The benchmark tree is excluded from `testpaths`, so nothing else here
+      # would notice if it stopped importing. Collection is near-free.
+      - name: check benchmarks still collect
+        if: runner.os == 'Linux'
+        shell: bash -el {0}
+        run: python -m pytest benchmarks --collect-only -q
+
       # Runs test suite and calculates coverage
       - name: run test suite (Linux / macOS)
         if: runner.os != 'Windows'

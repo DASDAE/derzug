@@ -48,9 +48,10 @@ pyqtgraph `ImageItem` + `PlotWidget` mirroring the Waterfall render path.
   A cached 2–3 level mip pyramid would keep zoomed-in detail crisp.
 - **Cast display data to float32.** makeARGB on f32 measured ~1.7×
   faster than f64 (101 ms vs 176 ms) and halves memory traffic.
-- **Cursor readout via `searchsorted`.** `nearest_axis_index` allocates
-  a full-axis temp per mouse move (two axes, up to 60 Hz);
-  `searchsorted` + neighbor check is ~10× faster and allocation-free.
+- ~~**Cursor readout via `searchsorted`.**~~ Done — `nearest_axis_index`
+  uses `np.searchsorted` plus a neighbor check and no longer allocates a
+  full-axis temp per mouse move. Guarded by
+  `benchmarks/qt/test_qt_plot_axes_benchmarks.py`.
 - **Wiggle widget rendering.** Done on branch `wiggle-render-perf`; see
   Progress below. Profiling showed the dominant cost was pen width, not
   item count: Qt's raster engine draws width-2 polylines ~16x slower
@@ -106,3 +107,10 @@ pyqtgraph `ImageItem` + `PlotWidget` mirroring the Waterfall render path.
   recolor stay ≤1 ms. Verified before/after screenshots match in all
   three modes (offset, series, percentiles) apart from line width.
   Remaining follow-up: viewport-based lazy loading (above).
+- 2026-08-03: Replaced this document's manual before/after ritual with an
+  automated suite. `benchmarks/qt/` now covers `_compute_default_levels`,
+  `_should_reset_view_for_new_patch`, the Waterfall and Wiggle render paths,
+  and the cursor-readout helpers; `benchmarks/core/` covers the Qt-free
+  workflow and sampling hot paths. Run
+  `python scripts/bench_compare.py --baseline main --suite qt` instead of
+  hand-timing renders. See docs/dev/benchmarking.md.
