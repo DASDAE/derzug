@@ -30,6 +30,8 @@ from derzug.nodes.filter import (
     FilterParams,
     FilterTask,
     filter_settings_from_params,
+    normalize_gaussian_windows,
+    validated_gaussian_kwargs,
 )
 from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.parsing import parse_patch_text_value
@@ -388,23 +390,9 @@ class Filter(PatchDimWidget):
         """Return one blank Gaussian dimension/window row."""
         return {"dim": "", "window": ""}
 
-    def _normalize_gaussian_dim_windows(self, rows: object) -> list[dict[str, str]]:
-        """Normalize serialized Gaussian row settings."""
-        normalized: list[dict[str, str]] = []
-        for row in rows or []:
-            if not isinstance(row, dict):
-                continue
-            normalized.append(
-                {
-                    "dim": str(row.get("dim", "")).strip(),
-                    "window": str(row.get("window", "")).strip(),
-                }
-            )
-        return normalized
-
     def _restore_gaussian_rows(self) -> None:
         """Refresh Gaussian rows from persisted settings and available dims."""
-        rows = self._normalize_gaussian_dim_windows(self.gaussian_dim_windows)
+        rows = normalize_gaussian_windows(self.gaussian_dim_windows)
         if not rows:
             rows = [self._blank_gaussian_dim_window()]
 
@@ -489,7 +477,7 @@ class Filter(PatchDimWidget):
 
     def _refresh_gaussian_rows(self) -> None:
         """Refresh all Gaussian rows from persisted settings."""
-        rows = self._normalize_gaussian_dim_windows(self.gaussian_dim_windows)
+        rows = normalize_gaussian_windows(self.gaussian_dim_windows)
         self._gaussian_row_manager.refresh(rows)
         self._gaussian_add_button.setEnabled(bool(self._available_dims))
 
@@ -517,29 +505,6 @@ class Filter(PatchDimWidget):
         """Persist Gaussian row edits and rerun."""
         self._sync_gaussian_dim_windows_from_ui()
         self.run()
-
-    def _validated_gaussian_kwargs(self) -> dict[str, object]:
-        """Validate active Gaussian rows and return kwargs for DASCore."""
-        kwargs: dict[str, object] = {}
-        seen_dims: set[str] = set()
-        for row in self._normalize_gaussian_dim_windows(self.gaussian_dim_windows):
-            dim = row["dim"]
-            window = row["window"]
-            if not dim and not window:
-                continue
-            if not dim or not window:
-                raise ValueError(
-                    "each Gaussian row needs both a dimension and a window"
-                )
-            if dim not in self._available_dims:
-                raise ValueError(f"'{dim}' is not an available dimension")
-            if dim in seen_dims:
-                raise ValueError(f"duplicate Gaussian dimension '{dim}'")
-            kwargs[dim] = parse_patch_text_value(window, required=True)
-            seen_dims.add(dim)
-        if not kwargs:
-            raise ValueError("at least one Gaussian dimension/window is required")
-        return kwargs
 
     def _build_execution_request(self) -> WidgetExecutionRequest | None:
         """Build one filter execution request with validated parameters."""
@@ -596,7 +561,7 @@ class Filter(PatchDimWidget):
                 allow_ellipsis=True,
             )
         elif selected_filter == "gaussian_filter":
-            self._validated_gaussian_kwargs()
+            validated_gaussian_kwargs(self.gaussian_dim_windows, self._available_dims)
         elif selected_filter == "slope_filter":
             for value in self.slope_filt.split(","):
                 stripped = value.strip()

@@ -11,27 +11,16 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterator
 from functools import cache
-from importlib.metadata import entry_points
 
 import derzug.constants as constants
+from derzug.utils.misc import load_entrypoints
 
 from .spec import NodeSpec
 
 
-@cache
 def load_node_entrypoints():
-    """Return the ``derzug.nodes`` entry points, DerZug's own first.
-
-    The entry point group is the whole contract. Do not also filter by
-    distribution name, or external providers such as SlanRod's ``derzug.nodes``
-    entry point disappear from discovery.
-    """
-    return tuple(
-        sorted(
-            entry_points(group=constants.NODES_ENTRY),
-            key=lambda ep: (0 if ep.dist.name.lower() == constants.PKG_NAME else 1),
-        )
-    )
+    """Return the ``derzug.nodes`` entry points, DerZug's own first."""
+    return load_entrypoints(constants.NODES_ENTRY)
 
 
 def _module_specs(module: object) -> Iterator[NodeSpec]:

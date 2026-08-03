@@ -34,7 +34,7 @@ from derzug.core.services import get_app_shell_service
 from derzug.core.widget_execution import WorkflowExecutionMixin
 from derzug.core.widget_messages import WidgetMessageMixin
 from derzug.core.widget_runtime import WidgetExecutionRequest, WidgetExecutionRuntime
-from derzug.nodes.spec import NodeSpec
+from derzug.nodes.spec import NodeSpec, model_json_schema
 from derzug.settings import Setting
 from derzug.workflow import Pipe, Task
 from derzug.workflow.compiler import DEFAULT_GET_TASK_MARKER
@@ -861,14 +861,7 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
             view, self.view_model, self._view_field_map(), "view_model", run=run
         )
 
-    @staticmethod
-    def _model_json_schema(model) -> dict[str, object] | None:
-        """JSON schema for a params/view model, or ``None``.
-
-        Uses ``TypeAdapter`` so plain models and discriminated unions (e.g.
-        Filter's) are handled the same way.
-        """
-        return None if model is None else TypeAdapter(model).json_schema()
+    _model_json_schema = staticmethod(model_json_schema)
 
     @classmethod
     def params_schema(cls) -> dict[str, object] | None:

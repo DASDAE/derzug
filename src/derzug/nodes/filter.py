@@ -226,6 +226,53 @@ _PARAM_FIELDS: dict[str, dict[str, str]] = {
 }
 
 
+# -- Gaussian rows ------------------------------------------------------------
+
+
+def normalize_gaussian_windows(rows: object) -> list[dict[str, str]]:
+    """Return serialized Gaussian dimension/window rows as clean mappings."""
+    normalized: list[dict[str, str]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        normalized.append(
+            {
+                "dim": str(row.get("dim", "")).strip(),
+                "window": str(row.get("window", "")).strip(),
+            }
+        )
+    return normalized
+
+
+def validated_gaussian_kwargs(
+    rows: object, available_dims: tuple[str, ...]
+) -> dict[str, object]:
+    """Return DASCore kwargs for the active Gaussian rows.
+
+    Shared by the task (which validates against the incoming patch's dims) and
+    the widget (which pre-validates against the dims it is showing), so the
+    canvas rejects exactly what a headless run would.
+    """
+    kwargs: dict[str, object] = {}
+    seen_dims: set[str] = set()
+    for row in normalize_gaussian_windows(rows):
+        dim = row["dim"]
+        window = row["window"]
+        if not dim and not window:
+            continue
+        if not dim or not window:
+            raise ValueError("each Gaussian row needs both a dimension and a window")
+        if dim not in available_dims:
+            raise ValueError(f"'{dim}' is not an available dimension")
+        if dim in seen_dims:
+            raise ValueError(f"duplicate Gaussian dimension '{dim}'")
+        kwargs[dim] = parse_patch_text_value(window, required=True)
+        seen_dims.add(dim)
+    if not kwargs:
+        raise ValueError("at least one Gaussian dimension/window is required")
+    return kwargs
+
+
 # -- Task ---------------------------------------------------------------------
 
 
@@ -260,30 +307,6 @@ class FilterTask(Task):
     slope_directional: bool = False
     slope_notch: bool = False
     slope_invert: bool = False
-
-    def _validated_gaussian_kwargs(
-        self, available_dims: tuple[str, ...]
-    ) -> dict[str, object]:
-        kwargs: dict[str, object] = {}
-        seen_dims: set[str] = set()
-        for row in self.gaussian_dim_windows:
-            dim = str(row.get("dim", "")).strip()
-            window = str(row.get("window", "")).strip()
-            if not dim and not window:
-                continue
-            if not dim or not window:
-                raise ValueError(
-                    "each Gaussian row needs both a dimension and a window"
-                )
-            if dim not in available_dims:
-                raise ValueError(f"'{dim}' is not an available dimension")
-            if dim in seen_dims:
-                raise ValueError(f"duplicate Gaussian dimension '{dim}'")
-            kwargs[dim] = parse_patch_text_value(window, required=True)
-            seen_dims.add(dim)
-        if not kwargs:
-            raise ValueError("at least one Gaussian dimension/window is required")
-        return kwargs
 
     def run(self, patch):
         """Apply the selected persisted DASCore filter to one patch."""
@@ -334,7 +357,7 @@ class FilterTask(Task):
                 mode=self.mode,
                 cval=float(self.cval),
                 truncate=float(self.truncate),
-                **self._validated_gaussian_kwargs(available_dims),
+                **validated_gaussian_kwargs(self.gaussian_dim_windows, available_dims),
             )
         if f == "hampel_filter":
             return fn(

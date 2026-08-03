@@ -14,11 +14,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter
 
-from derzug.workflow import Pipe, Task
+if TYPE_CHECKING:  # keep importing derzug.nodes from pulling in the engine
+    from derzug.workflow import Pipe, Task
 
 
 @dataclass(frozen=True)
@@ -84,11 +85,11 @@ class NodeSpec:
 
     def params_schema(self) -> dict[str, object] | None:
         """Return the JSON schema of :attr:`params_model`, or ``None``."""
-        return _json_schema(self.params_model)
+        return model_json_schema(self.params_model)
 
     def view_schema(self) -> dict[str, object] | None:
         """Return the JSON schema of :attr:`view_model`, or ``None``."""
-        return _json_schema(self.view_model)
+        return model_json_schema(self.view_model)
 
     def build_task(self, params: Any = None) -> Task | Pipe:
         """Return the workflow object for ``params`` (defaults when ``None``).
@@ -102,9 +103,13 @@ class NodeSpec:
         return self.task_factory(params)
 
 
-def _json_schema(model: Any) -> dict[str, object] | None:
-    """Return a JSON schema for a model or discriminated union, or ``None``."""
+def model_json_schema(model: Any) -> dict[str, object] | None:
+    """Return a JSON schema for a params/view model, or ``None``.
+
+    Uses ``TypeAdapter`` so plain models and discriminated unions (Filter's)
+    are handled the same way.
+    """
     return None if model is None else TypeAdapter(model).json_schema()
 
 
-__all__ = ("NodeSpec", "PortSpec")
+__all__ = ("NodeSpec", "PortSpec", "model_json_schema")
