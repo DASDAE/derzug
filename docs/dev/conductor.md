@@ -25,9 +25,7 @@ handles model credentials.
    the server merges a `derzug-conductor` entry into the `.mcp.json` in the
    current directory; other entries are preserved and the file is gitignored.
 
-3. Choose **Open Agent → Claude Code** or **Open Agent → Codex** to launch a
-   pre-wired client in a new terminal. You can also start an agent yourself from
-   the directory containing `.mcp.json` (Claude Code picks it up automatically):
+3. Choose **Conductor → Connect Agent...** (or **Open Agent → Claude Code / Codex** directly). Launching an agent while the server is stopped starts it automatically and connects the agent once it is ready. The Connect Agent dialog also shows copy-paste setup for each client — the `claude mcp add --transport http derzug-conductor <url>` one-liner, the Codex `-c` override and `config.toml` block, and the raw MCP URL — for wiring an agent you run yourself. You can also start an agent from the directory containing `.mcp.json` (Claude Code picks it up automatically):
 
    ```bash
    claude
@@ -75,10 +73,20 @@ configure them → run → `wait_for_idle`. `get_focus` reports what the user is
 looking at and pointing to, so commands can be contextual ("filter *this*
 node").
 
+The briefing itself has one source, `conductor/rules.py`, and reaches agents three ways: the FastMCP `instructions` every client loads, the `get_derzug_rules` tool (returns the rules plus the running server's version, id, and URL — the only briefing channel Codex supports, since it ignores MCP prompts), and a `connect` prompt that Claude Code surfaces as `/mcp__derzug-conductor__connect`.
+
+## Discovery and the agent skill
+
+Every ready server advertises itself for discovery: it writes one JSON record (`server_id`, `pid`, `port`, `base_url`, `mcp_url`, `started_at`, `version`) into the per-user state directory — `$XDG_STATE_HOME/derzug/servers` (default `~/.local/state/derzug/servers`), `%LOCALAPPDATA%\derzug\servers` on Windows — and removes it on stop. Records left by a crash are pruned by a pid probe plus a `GET /health` check, which must answer `healthy` with a matching `server_id`. `python -m derzug.conductor.registry` prints the live servers as JSON.
+
+Starting the server also writes a `derzug-conductor` skill into `.claude/skills/` and `.agents/skills/` next to the `.mcp.json`, teaching an agent the discovery procedure, the per-client connect commands, and the workflow shape; for the full briefing it defers to `get_derzug_rules`, so it cannot drift from the running app. A skill file is only overwritten while it still carries its generated marker — edit it (removing the marker) and DerZug leaves it alone.
+
 ## Trust model
 
 The server binds loopback only (`127.0.0.1`) and has no authentication: any
-local process can connect, so local clients are trusted by design. The **Code**
+local process can connect, so local clients are trusted by design. Requests
+whose `Host` header is not a loopback name are rejected (400), so a hostile
+web page cannot reach the server through DNS rebinding. The **Code**
 widget — whose parameters are executable Python — is excluded from the agent
 surface (hidden from the catalog; add/configure rejected) unless you opt in:
 
@@ -93,20 +101,16 @@ The menu does not persist this permission.
 
 The **Conductor** menu remains available whether the server is running or not:
 
+- **Connect Agent...** opens the non-modal connection dialog (status, per-client setup snippets, launch buttons). It and **Open Agent** work while the server is stopped: launching an agent starts the server automatically first.
 - **Start Server**, **Stop Server**, and **Restart Server** own the service
   lifecycle. Closing DerZug also stops the service.
-- **Copy MCP URL** and **Open Agent** are enabled only while the server is
-  running.
+- **Copy MCP URL** is enabled only while the server is running.
 - **Settings...** configures the port and the Code-widget permission. The port
   is remembered across launches. The arbitrary-code permission is deliberately
   session-only and defaults to off each time DerZug starts. Changes made while
   the server is running take effect after **Restart Server (Apply Settings)**.
 
-The host is fixed to loopback (`127.0.0.1`). Port conflicts, missing optional
-dependencies, and agent-launch failures are reported in the UI and leave the
-menu in a usable state. If a shutdown fails the server keeps its port, so the
-menu stays in the running state and **Restart Server** is refused rather than
-racing the old server for the port; **Stop Server** can be retried.
+Starts and stops are asynchronous: the menu shows the transient **Starting...**/**Stopping...** states while the GUI stays responsive, and only a port conflict or a missing dependency is reported synchronously. The host is fixed to loopback (`127.0.0.1`). Port conflicts, missing optional dependencies, and agent-launch failures are reported in the UI and leave the menu in a usable state. If a shutdown times out the server keeps its port, so the menu stays in the running state and **Restart Server** is refused rather than racing the old server for the port; **Stop Server** can be retried.
 
 ## Architecture
 
@@ -119,12 +123,19 @@ racing the old server for the port; **Stop Server** can be retried.
   main thread fails the call instead of hanging the client) and a stopped state
   used at shutdown.
 - `conductor/mcp_server.py` — builds the FastMCP server (tools wrapped through
-  the dispatcher) and owns its lifecycle via `ConductorService`: the port is
-  pre-bound (a conflict raises at startup), readiness is awaited before the
-  client config is written or an agent launched, and the service stops on
-  application teardown. Imported only when the server is started, so the core
-  app never depends on `mcp`.
+  the dispatcher, plus `get_derzug_rules`, the `connect` prompt, and the
+  `/health` route) and owns the process-side lifecycle via `ConductorService`:
+  the port is pre-bound on the calling thread (a conflict raises immediately),
+  `launch` serves in a background thread, and `status`/`is_stopped` expose the
+  transitions for polling. Imported only when the server is started, so the
+  core app never depends on `mcp`.
+- `conductor/lifecycle.py` — `ConductorLifecycle`, the GUI-side orchestrator: polls service transitions from a `QTimer` (no GUI blocking), reports outcomes through Qt signals, and runs the post-ready side effects — client config, registry record, skill files, pending agent launch.
+- `conductor/registry.py` — the stdlib-only discovery registry and `/health` pruning described above.
+- `conductor/rules.py` — the single source of the agent briefing.
+- `conductor/client_config.py` — stdlib-only `.mcp.json` writer and the per-client connect snippets shown by the dialog.
+- `conductor/skill.py` + `conductor/skill_assets/SKILL.md` — the packaged skill and its marker-aware writer.
 - `conductor/launch.py` — agent launch helpers: the per-agent connect command
   and the cross-platform "open a terminal" spawn.
 - `views/conductor.py` — the always-available menu, lifecycle state display,
-  and settings dialog. It has no dependency on the optional MCP package.
+  the settings dialog, and the Connect Agent dialog. It has no dependency on
+  the optional MCP package.
