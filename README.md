@@ -1,5 +1,7 @@
 # DerZug
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/DASDAE/derzug?utm_source=badge)
+
 > [!WARNING]
 > ## Experimental Software
 > DerZug is an early-stage proof of concept.

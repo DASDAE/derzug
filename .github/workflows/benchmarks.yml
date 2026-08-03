@@ -1,0 +1,73 @@
+# Run the benchmark suite and report the results to CodSpeed.
+name: Benchmarks
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+    paths:
+      - 'pyproject.toml'
+      - 'environment.yml'
+      - '**/*.py'
+      - '.github/workflows/*.yml'
+      - '.github/actions/**/*.yml'
+  # Allows CodSpeed to trigger backtest performance analysis.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for OpenID Connect authentication with CodSpeed.
+  id-token: write
+
+env:
+  # Ensure matplotlib doesn't try to show figures in CI
+  MPLBACKEND: Agg
+  QT_QPA_PLATFORM: offscreen
+  # CPU simulation serializes threads, so thread pools only add overhead and
+  # measurement noise. Keep the numeric stack single threaded.
+  OMP_NUM_THREADS: 1
+  OPENBLAS_NUM_THREADS: 1
+  MKL_NUM_THREADS: 1
+  NUMEXPR_NUM_THREADS: 1
+
+# Cancel previous runs when this one starts.
+concurrency:
+  group: Benchmarks-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # only run if CI isn't turned off
+    if: github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'no_ci')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+
+      - uses: ./.github/actions/load-shared-vars
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          # Defined in .github/actions/load-shared-vars/action.yml
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      # The benchmarks are GUI free, so only the package and the benchmark
+      # runner are needed here (no Qt test tooling).
+      - name: install derzug and benchmark dependencies
+        run: uv pip install --system -e . pytest pytest-codspeed
+
+      - name: run benchmarks
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          run: python -m pytest benchmarks --codspeed
