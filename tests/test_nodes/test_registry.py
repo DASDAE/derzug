@@ -220,13 +220,13 @@ class TestExternalProviderIsolation:
             "load_node_entrypoints",
             lambda: (*real(), _BrokenEntryPoint()),
         )
-        registry.load_node_specs.cache_clear()
+        registry.clear_caches()
         try:
             with pytest.warns(RuntimeWarning, match="ignoring node entry point"):
                 names = {spec.name for spec in registry.load_node_specs()}
             assert {"Filter", "Taper"} <= names
         finally:
-            registry.load_node_specs.cache_clear()
+            registry.clear_caches()
 
     def test_broken_first_party_entry_point_raises(self, monkeypatch):
         """DerZug's own entry points stay fatal — there a failure is a bug."""
@@ -242,12 +242,12 @@ class TestExternalProviderIsolation:
         monkeypatch.setattr(
             registry, "load_node_entrypoints", lambda: (_BrokenEntryPoint(),)
         )
-        registry.load_node_specs.cache_clear()
+        registry.clear_caches()
         try:
             with pytest.raises(ImportError, match="boom"):
                 registry.load_node_specs()
         finally:
-            registry.load_node_specs.cache_clear()
+            registry.clear_caches()
 
 
 class TestBuildTask:

@@ -89,20 +89,33 @@ def load_node_specs() -> tuple[NodeSpec, ...]:
     return tuple(specs)
 
 
+@cache
+def _specs_by_widget_qname() -> dict[str, NodeSpec]:
+    """Return every spec keyed by its widget qualified name.
+
+    Indexed rather than scanned because the Conductor asks this question once
+    per widget type every time it lists them.
+    """
+    return {spec.widget_qualified_name: spec for spec in load_node_specs()}
+
+
+@cache
+def _specs_by_name() -> dict[str, NodeSpec]:
+    """Return every spec keyed by node name."""
+    return {spec.name: spec for spec in load_node_specs()}
+
+
 def spec_by_name(name: str) -> NodeSpec:
     """Return the node spec named ``name``, or raise ``KeyError``."""
-    for spec in load_node_specs():
-        if spec.name == name:
-            return spec
-    raise KeyError(f"no node spec named {name!r}")
+    try:
+        return _specs_by_name()[name]
+    except KeyError:
+        raise KeyError(f"no node spec named {name!r}") from None
 
 
 def spec_for_widget_qname(qualified_name: str) -> NodeSpec | None:
     """Return the node spec for one widget qualified name, when discoverable."""
-    for spec in load_node_specs():
-        if spec.widget_qualified_name == qualified_name:
-            return spec
-    return None
+    return _specs_by_widget_qname().get(qualified_name)
 
 
 def validate_spec(spec: NodeSpec) -> None:
@@ -130,7 +143,20 @@ def validate_spec(spec: NodeSpec) -> None:
         raise ValueError(f"node {spec.name!r} task_factory is not callable")
 
 
+def clear_caches() -> None:
+    """Drop every discovery cache.
+
+    Discovery is cached because entry points do not change within a process;
+    tests that install a fake provider need all three caches dropped together,
+    or an index survives its source.
+    """
+    load_node_specs.cache_clear()
+    _specs_by_name.cache_clear()
+    _specs_by_widget_qname.cache_clear()
+
+
 __all__ = (
+    "clear_caches",
     "load_node_entrypoints",
     "load_node_specs",
     "spec_by_name",
