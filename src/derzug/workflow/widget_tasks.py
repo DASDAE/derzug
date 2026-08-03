@@ -9,6 +9,7 @@ from typing import Any, ClassVar
 
 from pydantic import Field
 
+from .dims import resolve_patch_dim
 from .task import Task
 
 
@@ -52,10 +53,18 @@ class PatchConfiguredMethodTask(Task):
         fn = getattr(patch, self.method_name)
         args = list(self.method_args)
         kwargs = dict(self.method_kwargs)
-        if self.call_style == "positional_dim":
-            args.insert(0, self.dim)
-        elif self.call_style == "keyword_dim":
-            kwargs[self.dim] = self.dim_value
+        if self.call_style in ("positional_dim", "keyword_dim"):
+            # A headless caller may leave ``dim`` unset; resolve it the same
+            # way the widget's dimension chooser would.
+            dim = resolve_patch_dim(self.dim, tuple(patch.dims))
+            if dim is None:
+                raise ValueError(
+                    f"{self.method_name!r} needs a dimension but the patch has none"
+                )
+            if self.call_style == "positional_dim":
+                args.insert(0, dim)
+            else:
+                kwargs[dim] = self.dim_value
         elif self.call_style != "plain":
             raise ValueError(f"unsupported call style {self.call_style!r}")
         return fn(*args, **kwargs)

@@ -572,15 +572,19 @@ class Filter(PatchDimWidget):
         )
 
     def _validated_task(self) -> FilterTask | None:
-        """Return the current validated filter task, or None on invalid state."""
+        """Return the current validated filter task, or None on invalid state.
+
+        Preflight only: the task itself is built by the node spec, so the
+        canvas and a headless caller run byte-identical tasks for the same
+        parameters.
+        """
         selected_filter = self.selected_filter
-        selected_dim = str(self.selected_dim or "")
         if selected_filter not in _FILTER_NAMES:
             raise ValueError(f"Unknown filter: {selected_filter!r}")
         if self.apply_taper and self.taper_window.strip() and self._available_dims:
             parse_patch_text_value(self.taper_window, required=True)
         if selected_filter == "pass_filter":
-            selected_dim = str(self._get_dim() or selected_dim)
+            self._get_dim()
             parse_patch_text_value(
                 self.low_bound,
                 allow_none=True,
@@ -599,8 +603,7 @@ class Filter(PatchDimWidget):
                 if stripped:
                     float(stripped)
         else:
-            selected_dim = str(self._get_dim() or selected_dim)
-            if not selected_dim:
+            if not str(self._get_dim() or self.selected_dim or ""):
                 return None
             parse_patch_text_value(self.filter_window, required=True)
             if selected_filter == "wiener_filter":
@@ -609,35 +612,7 @@ class Filter(PatchDimWidget):
                     allow_none=True,
                     allow_quantity=False,
                 )
-        return FilterTask(
-            selected_filter=str(selected_filter or "pass_filter"),
-            selected_dim=selected_dim,
-            low_bound=str(self.low_bound or ""),
-            high_bound=str(self.high_bound or ""),
-            corners=int(self.corners),
-            zerophase=bool(self.zerophase),
-            filter_window=str(self.filter_window or ""),
-            apply_taper=bool(self.apply_taper),
-            taper_window=str(self.taper_window or ""),
-            samples=bool(self.samples),
-            mode=str(self.mode or "reflect"),
-            cval=float(self.cval),
-            truncate=float(self.truncate),
-            gaussian_dim_windows=tuple(
-                self._normalize_gaussian_dim_windows(self.gaussian_dim_windows)
-            ),
-            threshold=float(self.threshold),
-            approximate=bool(self.approximate),
-            q=float(self.q),
-            polyorder=int(self.polyorder),
-            noise=str(self.noise or ""),
-            slope_filt=str(self.slope_filt or ""),
-            slope_dim0=str(self.slope_dim0 or ""),
-            slope_dim1=str(self.slope_dim1 or ""),
-            slope_directional=bool(self.slope_directional),
-            slope_notch=bool(self.slope_notch),
-            slope_invert=bool(self.slope_invert),
-        )
+        return NODE_SPEC.build_task(self.get_params())
 
     def _on_result(self, result) -> None:
         self.Outputs.patch.send(result)

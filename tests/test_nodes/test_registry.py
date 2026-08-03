@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import importlib
 import json
+from types import SimpleNamespace
 
+import dascore as dc
 import pytest
 from derzug.nodes import NodeSpec, PortSpec, load_node_specs, validate_spec
 from derzug.nodes.registry import spec_by_name, spec_for_widget_qname
+from pydantic import TypeAdapter
 
 
 @pytest.fixture(scope="module")
@@ -73,10 +77,27 @@ class TestSpecContents:
             assert {port.name for port in spec.workflow_inputs()} <= task_inputs
             assert {port.name for port in spec.workflow_outputs()} <= task_outputs
 
-    def test_module_name_is_the_widget_module(self, specs):
-        """``module_name`` strips the class off the widget qualified name."""
+    def test_widget_qualified_name_resolves_back_to_the_spec(self, specs):
+        """Each spec names a real widget class that points back at it."""
         for spec in specs:
-            assert spec.widget_qualified_name.startswith(f"{spec.module_name}.")
+            module = importlib.import_module(spec.module_name)
+            widget = getattr(module, spec.widget_qualified_name.rpartition(".")[2])
+            assert widget.node_spec is spec
+
+    def test_default_task_runs_on_an_example_patch(self, specs):
+        """Every default task runs, without the caller naming a dimension.
+
+        ``example_event_2`` has dims ``(distance, time)``, so a node that
+        silently fell back to the first dimension instead of the widget's
+        ``time`` preference would diverge here.
+        """
+        patch = dc.get_example_patch("example_event_2")
+        assert patch.dims[0] != "time", "example patch no longer exercises the fallback"
+        for spec in specs:
+            if spec.task_factory is None:
+                continue
+            result = spec.build_task().run(patch)
+            assert isinstance(result, dc.Patch), (spec.name, type(result))
 
 
 class TestValidateSpec:
@@ -128,6 +149,105 @@ class TestValidateSpec:
         """``task_factory`` must be callable when set."""
         with pytest.raises(ValueError, match="task_factory is not callable"):
             validate_spec(self._spec(task_factory="nope"))
+
+
+class TestFilterKinds:
+    """Every Filter kind builds and runs from its params alone."""
+
+    KINDS = (
+        {"kind": "pass_filter", "low_bound": "10", "high_bound": "100"},
+        {"kind": "notch_filter", "frequency": "60"},
+        {"kind": "median_filter", "window": "3", "samples": True},
+        {"kind": "hampel_filter", "window": "5", "samples": True},
+        {"kind": "savgol_filter", "window": "5", "samples": True, "polyorder": 2},
+        {"kind": "wiener_filter", "window": "5", "samples": True},
+        {
+            "kind": "gaussian_filter",
+            "windows": [{"dim": "time", "window": "3"}],
+            "samples": True,
+        },
+        {"kind": "sobel_filter"},
+        {"kind": "slope_filter", "slope_filt": "1000,2000,3000,4000"},
+    )
+
+    @pytest.mark.parametrize("payload", KINDS, ids=lambda item: item["kind"])
+    def test_kind_runs_headless(self, payload):
+        """Each filter kind produces a patch from a params dict."""
+        spec = spec_by_name("Filter")
+        params = TypeAdapter(spec.params_model).validate_python(
+            {"dim": "time"} | payload
+        )
+        result = spec.build_task(params).run(dc.get_example_patch("example_event_2"))
+        assert isinstance(result, dc.Patch), (payload["kind"], type(result))
+
+    def test_every_kind_is_covered(self):
+        """Keep pace with the filters the node actually supports."""
+        from derzug.nodes.filter import _FILTER_NAMES
+
+        assert {item["kind"] for item in self.KINDS} == set(_FILTER_NAMES)
+
+    def test_gaussian_windows_survive_the_params_round_trip(self):
+        """Gaussian rows reach the task as dim/window mappings."""
+        spec = spec_by_name("Filter")
+        params = TypeAdapter(spec.params_model).validate_python(
+            {
+                "kind": "gaussian_filter",
+                "dim": "time",
+                "windows": [{"dim": "time", "window": "3"}],
+            }
+        )
+        task = spec.build_task(params)
+        assert task.gaussian_dim_windows == ({"dim": "time", "window": "3"},)
+
+
+class TestExternalProviderIsolation:
+    """A broken third-party provider must not take the built-in nodes down."""
+
+    def test_broken_external_entry_point_is_skipped(self, monkeypatch):
+        """A failing external entry point warns and is dropped."""
+        from derzug.nodes import registry
+
+        class _BrokenEntryPoint:
+            name = "Broken"
+            dist = SimpleNamespace(name="some-plugin")
+
+            def load(self):
+                raise ImportError("boom")
+
+        real = registry.load_node_entrypoints
+        monkeypatch.setattr(
+            registry,
+            "load_node_entrypoints",
+            lambda: (*real(), _BrokenEntryPoint()),
+        )
+        registry.load_node_specs.cache_clear()
+        try:
+            with pytest.warns(RuntimeWarning, match="ignoring node entry point"):
+                names = {spec.name for spec in registry.load_node_specs()}
+            assert {"Filter", "Taper"} <= names
+        finally:
+            registry.load_node_specs.cache_clear()
+
+    def test_broken_first_party_entry_point_raises(self, monkeypatch):
+        """DerZug's own entry points stay fatal — there a failure is a bug."""
+        from derzug.nodes import registry
+
+        class _BrokenEntryPoint:
+            name = "Broken"
+            dist = SimpleNamespace(name="derzug")
+
+            def load(self):
+                raise ImportError("boom")
+
+        monkeypatch.setattr(
+            registry, "load_node_entrypoints", lambda: (_BrokenEntryPoint(),)
+        )
+        registry.load_node_specs.cache_clear()
+        try:
+            with pytest.raises(ImportError, match="boom"):
+                registry.load_node_specs()
+        finally:
+            registry.load_node_specs.cache_clear()
 
 
 class TestBuildTask:

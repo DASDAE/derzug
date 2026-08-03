@@ -306,18 +306,17 @@ class TestWidgetDefaults(WidgetTest):
             assert expected == signal_map
 
         if spec.task_factory is not None and spec.params_model is not None:
-            # The widget may hold more state than its params model exposes
-            # (Filter carries every filter type's fields at once), so assert
-            # the two agree on the task *class* and that params -> task ->
-            # params is stable, not that the widget's task is field-identical.
+            # The canvas and a headless caller must run the same task for the
+            # same parameters, so the widget's task has to be field-identical
+            # to the one the spec builds from the widget's own params.
             params = widget_object.get_params()
-            assert isinstance(widget_object.get_task(), type(spec.build_task(params)))
+            from_widget = widget_object.get_task()
+            from_spec = spec.build_task(params)
+            assert type(from_widget) is type(from_spec)
+            assert from_widget.model_dump() == from_spec.model_dump()
+
             widget_object.apply_params(params, run=False)
             assert widget_object.get_params() == params
-            assert (
-                spec.build_task(widget_object.get_params()).model_dump()
-                == spec.build_task(params).model_dump()
-            )
 
     def test_minimum_size(self):
         """Widget meets Orange minimum-size expectations."""

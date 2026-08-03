@@ -1068,5 +1068,7 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
 
     # The compiler identifies widgets that never implemented ``get_task`` by
     # this marker rather than by importing ``ZugWidget`` to compare functions,
-    # which would drag Qt into ``derzug.workflow``.
-    setattr(get_task, DEFAULT_GET_TASK_MARKER, True)
+    # which would drag Qt into ``derzug.workflow``. The marker points at the
+    # function itself so an override built with ``functools.wraps`` — which
+    # copies ``__dict__`` — is not mistaken for the fallback.
+    setattr(get_task, DEFAULT_GET_TASK_MARKER, get_task)

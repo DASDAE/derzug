@@ -148,13 +148,22 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
         this only covers the ones not yet migrated to the node layer.
         """
         super().__init_subclass__(**kwargs)
-        if cls.__dict__.get("node_spec") is None and cls.__dict__.get("_OPTIONS"):
-            cls.params_model = build_params_model(
-                f"{cls.__name__}Params",
-                cls._OPTIONS,
-                uses_dim=cls.uses_dim,
-                dim_default=_setting_default(cls, "selected_dim", ""),
+        if not cls.__dict__.get("_OPTIONS"):
+            return
+        if "node_spec" not in cls.__dict__ and cls.node_spec is not None:
+            raise TypeError(
+                f"{cls.__name__} overrides _OPTIONS but inherits node_spec "
+                f"{cls.node_spec.name!r}; declare its own node_spec, or set "
+                "node_spec = None to fall back to a generated params model"
             )
+        if cls.node_spec is not None:
+            return
+        cls.params_model = build_params_model(
+            f"{cls.__name__}Params",
+            cls._OPTIONS,
+            uses_dim=cls.uses_dim,
+            dim_default=_setting_default(cls, "selected_dim", ""),
+        )
 
     def _settings_control_map(self) -> dict[str, object]:
         """Map each option setting (and the dim chooser) to its control."""

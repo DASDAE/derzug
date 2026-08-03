@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 from derzug.nodes.spec import NodeSpec, PortSpec
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task
+from derzug.workflow.dims import resolve_patch_dim
 
 _FILTER_NAMES: tuple[str, ...] = (
     "gaussian_filter",
@@ -290,11 +291,7 @@ class FilterTask(Task):
         if f not in _FILTER_NAMES:
             raise ValueError(f"Unknown filter: {f!r}")
         available_dims = tuple(patch.dims)
-        dim = (
-            self.selected_dim
-            if self.selected_dim in available_dims
-            else (available_dims[0] if available_dims else None)
-        )
+        dim = resolve_patch_dim(self.selected_dim, available_dims)
         if self.apply_taper and self.taper_window.strip() and dim is not None:
             patch = patch.taper(
                 **{dim: parse_patch_text_value(self.taper_window, required=True)}

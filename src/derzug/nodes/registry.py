@@ -8,6 +8,7 @@ entry point names a module exposing a module-level ``NODE_SPEC`` (or
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator
 from functools import cache
 from importlib.metadata import entry_points
@@ -48,24 +49,54 @@ def _module_specs(module: object) -> Iterator[NodeSpec]:
         yield spec
 
 
+def _is_first_party(entry_point) -> bool:
+    """Return True when one entry point ships with DerZug itself."""
+    dist = getattr(entry_point, "dist", None)
+    return dist is not None and dist.name.lower() == constants.PKG_NAME
+
+
+def _load_entrypoint_specs(entry_point) -> tuple[NodeSpec, ...]:
+    """Return the validated specs from one entry point.
+
+    A broken third-party provider must not take the built-in nodes down with
+    it — the registry backs the Conductor's schema lookups, so an unrelated
+    plugin failing to import would otherwise blind the whole app. DerZug's own
+    entry points stay fatal, because there a failure is a real bug.
+    """
+    try:
+        specs = tuple(_module_specs(entry_point.load()))
+        for spec in specs:
+            validate_spec(spec)
+    except Exception as exc:
+        if _is_first_party(entry_point):
+            raise
+        warnings.warn(
+            f"ignoring node entry point {entry_point.name!r} from "
+            f"{getattr(entry_point.dist, 'name', 'unknown')}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return ()
+    return specs
+
+
 @cache
 def load_node_specs() -> tuple[NodeSpec, ...]:
     """Return every discoverable node spec, validated and uniquely named."""
     specs: list[NodeSpec] = []
-    for entry_point in load_node_entrypoints():
-        specs.extend(_module_specs(entry_point.load()))
     seen_names: dict[str, NodeSpec] = {}
     seen_qnames: dict[str, NodeSpec] = {}
-    for spec in specs:
-        validate_spec(spec)
-        if spec.name in seen_names:
-            raise ValueError(f"duplicate node spec name {spec.name!r}")
-        if spec.widget_qualified_name in seen_qnames:
-            raise ValueError(
-                f"duplicate node spec widget {spec.widget_qualified_name!r}"
-            )
-        seen_names[spec.name] = spec
-        seen_qnames[spec.widget_qualified_name] = spec
+    for entry_point in load_node_entrypoints():
+        for spec in _load_entrypoint_specs(entry_point):
+            if spec.name in seen_names:
+                raise ValueError(f"duplicate node spec name {spec.name!r}")
+            if spec.widget_qualified_name in seen_qnames:
+                raise ValueError(
+                    f"duplicate node spec widget {spec.widget_qualified_name!r}"
+                )
+            seen_names[spec.name] = spec
+            seen_qnames[spec.widget_qualified_name] = spec
+            specs.append(spec)
     return tuple(specs)
 
 
