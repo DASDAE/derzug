@@ -266,7 +266,6 @@ class ConductorService:
         readiness (``"running"``) or startup failure (``"exited"``).
         """
         import uvicorn
-
         from starlette.middleware.trustedhost import TrustedHostMiddleware
 
         if self._thread is not None:

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import urllib.request
 from contextlib import suppress
 from dataclasses import asdict, dataclass
@@ -120,7 +121,7 @@ def _health_ok(record: ServerRecord, timeout: float = _HEALTH_TIMEOUT) -> bool:
     """Whether the recorded server answers ``/health`` as itself."""
     url = record.base_url.rstrip("/") + "/health"
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=timeout) as response:
             if response.status != 200:
                 return False
             payload = json.loads(response.read().decode())
@@ -134,7 +135,8 @@ def _health_ok(record: ServerRecord, timeout: float = _HEALTH_TIMEOUT) -> bool:
 
 def _main() -> None:
     """Print live server records as JSON for scripts and agents."""
-    print(json.dumps([record.to_dict() for record in discover()], indent=2))
+    records = [record.to_dict() for record in discover()]
+    sys.stdout.write(json.dumps(records, indent=2) + "\n")
 
 
 if __name__ == "__main__":

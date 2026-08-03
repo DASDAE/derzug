@@ -8,7 +8,6 @@ import sys
 import types
 
 import pytest
-
 from derzug.conductor.lifecycle import ConductorLifecycle
 
 

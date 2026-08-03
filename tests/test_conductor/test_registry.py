@@ -8,7 +8,6 @@ import subprocess
 import sys
 
 import pytest
-
 from derzug.conductor import registry
 from derzug.conductor.registry import ServerRecord
 

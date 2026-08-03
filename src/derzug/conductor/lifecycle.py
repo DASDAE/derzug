@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -198,7 +198,7 @@ class ConductorLifecycle(QObject):
                 port=service.port,
                 base_url=f"http://{service.host}:{service.port}",
                 mcp_url=service.url,
-                started_at=datetime.now(timezone.utc).isoformat(),
+                started_at=datetime.now(UTC).isoformat(),
                 version=__version__,
             )
         )

@@ -34,7 +34,9 @@ def test_write_skill_files_overwrites_only_generated_copies(tmp_path):
     """A regenerated skill replaces ours; a user-edited file is left alone."""
     first = write_skill_files(tmp_path)
     stale = first[0]
-    stale.write_text(skill_text().replace("# Drive", "# Old generated content\n# Drive"))
+    stale.write_text(
+        skill_text().replace("# Drive", "# Old generated content\n# Drive")
+    )
     user_owned = first[1]
     user_owned.write_text("my own notes, marker removed")
 
