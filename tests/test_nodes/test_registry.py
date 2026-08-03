@@ -186,6 +186,22 @@ class TestFilterKinds:
 
         assert {item["kind"] for item in self.KINDS} == set(_FILTER_NAMES)
 
+    def test_task_carries_only_the_active_kind(self):
+        """A task holds no state its own filter kind will never read.
+
+        `FilterTask` has a field for every kind at once, but the params model
+        only describes the active one, so building through the spec narrows the
+        task to what it actually uses — a smaller fingerprint, and no spurious
+        re-run when an inactive kind's field changes.
+        """
+        spec = spec_by_name("Filter")
+        params = TypeAdapter(spec.params_model).validate_python(
+            {"kind": "pass_filter", "dim": "time", "low_bound": "10"}
+        )
+        task = spec.build_task(params)
+        assert task.gaussian_dim_windows == ()
+        assert task.slope_filt == ""
+
     def test_gaussian_windows_survive_the_params_round_trip(self):
         """Gaussian rows reach the task as dim/window mappings."""
         spec = spec_by_name("Filter")
