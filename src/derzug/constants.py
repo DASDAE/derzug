@@ -6,6 +6,9 @@ from pathlib import Path
 
 # The entry point name for derzug test_widgets and orange test_widgets.
 WIDGETS_ENTRY = "derzug.widgets"
+
+# The entry point name for Qt-free node specs (see derzug.nodes.registry).
+NODES_ENTRY = "derzug.nodes"
 _ORANGE_ENTRY = "orange.widgets"
 
 # The name of orange test_widgets to explicitly keep.

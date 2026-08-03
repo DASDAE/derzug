@@ -88,6 +88,9 @@ website:
         - text: Design
           href: dev/design.md
 
+        - text: Node Layer
+          href: dev/nodes.md
+
         - text: Workflow Design
           href: dev/workflow-design.md
 

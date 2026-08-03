@@ -1,6 +1,15 @@
 
 # Design
 
+## Layering
+
+DerZug is heading toward a client/server split: a headless workflow engine with
+a separate frontend. The dividing line is `derzug.nodes`, the Qt-free node
+library that says what each node *is* — ports, parameter models, task factory —
+independently of the `OWWidget` that renders it. Everything from `nodes`
+leftward is importable without a display; Qt lives only to its right. See
+[nodes.md](nodes.md).
+
 ## Widget Architecture
 
 Widgets are the primary unit of work. Each widget is a self-contained
@@ -55,8 +64,9 @@ To keep node interoperability predictable:
 
 ## Auto-Generation
 
-The declarative `PatchMethodWidget` family already maps a small `_OPTIONS` spec
-to both its Qt controls and an auto-derived `params_model`, using these
+The declarative option specs in `derzug.nodes._options` map a small `_OPTIONS`
+declaration to a params model and a configured-method task, and
+`PatchMethodWidget` renders the same declaration as Qt controls, using these
 conventions:
 
   - `bool` -> checkbox

@@ -27,6 +27,7 @@ from orangecanvas.registry import WidgetRegistry
 from derzug.core import ZugWidget
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.workflow import Pipe, Task
+from derzug.workflow.compiler import widget_signal_name_map
 
 
 def wait_for_widget_idle(widget: OWWidget, timeout: float = 5.0) -> None:
@@ -280,6 +281,43 @@ class TestWidgetDefaults(WidgetTest):
         workflow_obj = widget_object.get_task()
 
         assert isinstance(workflow_obj, Task | Pipe)
+
+    def test_node_spec_consistency(self):
+        """A declared ``node_spec`` matches the widget it describes.
+
+        The spec is the Qt-free half of a node's identity; nothing enforces at
+        import time that the two halves stay in step, so assert it here.
+        """
+        spec = self.widget.node_spec
+        if spec is None:
+            pytest.skip(f"{self.widget.__name__} declares no node_spec")
+        widget_object = self.create_default_widget()
+
+        qualified_name = f"{self.widget.__module__}.{self.widget.__qualname__}"
+        assert spec.widget_qualified_name == qualified_name
+        assert spec.name == self.widget.name
+        assert spec.params_model is self.widget.params_model
+        assert spec.view_model is self.widget.view_model
+        assert spec.is_source == self.widget.is_source
+
+        for container, ports in (("Inputs", spec.inputs), ("Outputs", spec.outputs)):
+            signal_map = widget_signal_name_map(widget_object, container)
+            expected = {port.display_name: port.name for port in ports}
+            assert expected == signal_map
+
+        if spec.task_factory is not None and spec.params_model is not None:
+            # The widget may hold more state than its params model exposes
+            # (Filter carries every filter type's fields at once), so assert
+            # the two agree on the task *class* and that params -> task ->
+            # params is stable, not that the widget's task is field-identical.
+            params = widget_object.get_params()
+            assert isinstance(widget_object.get_task(), type(spec.build_task(params)))
+            widget_object.apply_params(params, run=False)
+            assert widget_object.get_params() == params
+            assert (
+                spec.build_task(widget_object.get_params()).model_dump()
+                == spec.build_task(params).model_dump()
+            )
 
     def test_minimum_size(self):
         """Widget meets Orange minimum-size expectations."""

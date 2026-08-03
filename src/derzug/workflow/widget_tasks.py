@@ -194,7 +194,7 @@ class CallableTaskAdapter(Task):
 
     def _spec(self):
         """Return normalized callable metadata for this adapter."""
-        from derzug.utils.code2widget import _spec_from_callable
+        from derzug.utils.callable_spec import _spec_from_callable
 
         return _spec_from_callable(
             self._callable(),
@@ -225,7 +225,10 @@ class CallableTaskAdapter(Task):
 
     def run(self, **kwargs):
         """Execute the configured callable through the shared widget adapter path."""
-        from derzug.utils.code2widget import INPUTS_NOT_READY, _invoke_spec_function
+        from derzug.utils.callable_spec import (
+            INPUTS_NOT_READY,
+            _invoke_spec_function,
+        )
 
         spec = self._spec()
         values = _invoke_spec_function(spec, self._callable(), kwargs)

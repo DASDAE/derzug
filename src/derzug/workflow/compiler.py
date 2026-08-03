@@ -212,13 +212,16 @@ def _is_external_source_widget(
     )
 
 
+#: Marker set on the widget base class's fallback ``get_task``. Probing for it
+#: keeps the compiler from importing Qt just to identify an unimplemented
+#: ``get_task``; see ``ZugWidget.get_task``.
+DEFAULT_GET_TASK_MARKER = "__derzug_default_get_task__"
+
+
 def _uses_default_get_task(widget: object) -> bool:
     """Return True when the widget still relies on `ZugWidget`'s fallback contract."""
-    try:
-        from derzug.core.zugwidget import ZugWidget
-    except Exception:
-        return False
-    return getattr(type(widget), "get_task", None) is ZugWidget.get_task
+    get_task = getattr(type(widget), "get_task", None)
+    return bool(getattr(get_task, DEFAULT_GET_TASK_MARKER, False))
 
 
 def _widget_output_ports(widget: object) -> tuple[str, ...]:
@@ -320,4 +323,9 @@ def _inline_workflow_object(
     raise TypeError(f"unsupported workflow object {workflow_obj!r}")
 
 
-__all__ = ("CompiledWorkflow", "compile_workflow", "widget_signal_name_map")
+__all__ = (
+    "DEFAULT_GET_TASK_MARKER",
+    "CompiledWorkflow",
+    "compile_workflow",
+    "widget_signal_name_map",
+)

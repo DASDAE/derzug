@@ -6,9 +6,7 @@ import os
 import tempfile
 
 import pytest
-from derzug.utils.testing import widget_context
-from derzug.widgets.filter import Filter
-from derzug.widgets.filter_params import (
+from derzug.nodes.filter import (
     FilterParams,
     GaussianFilterParams,
     HampelFilterParams,
@@ -20,6 +18,8 @@ from derzug.widgets.filter_params import (
     SobelFilterParams,
     WienerFilterParams,
 )
+from derzug.utils.testing import widget_context
+from derzug.widgets.filter import Filter
 from pydantic import TypeAdapter
 
 

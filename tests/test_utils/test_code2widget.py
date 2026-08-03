@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import dascore as dc
 import pytest
+from derzug.utils.callable_spec import _validate_unique_signal_names
 from derzug.utils.code2widget import (
-    _validate_unique_signal_names,
     function_to_widget,
     task_from_callable,
     widget_class_from_callable,

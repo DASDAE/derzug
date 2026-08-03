@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from orangecanvas.scheme.link import compatible_channels
+from .compiler import widget_signal_name_map
 
 DISABLED_NODE_KEY = "__derzug_widget_disabled"
 
@@ -19,21 +19,6 @@ class DisabledPortPair:
     output_name: str
     input_channel: object | None = None
     output_channel: object | None = None
-
-
-def widget_signal_name_map(widget, container_name: str) -> dict[str, str]:
-    """Return a mapping of display signal names to widget attribute names."""
-    container = getattr(type(widget), container_name, None)
-    if container is None:
-        container = getattr(widget, container_name, None)
-    if container is None:
-        return {}
-    out: dict[str, str] = {}
-    for attr_name, value in vars(container).items():
-        display_name = getattr(value, "name", None)
-        if isinstance(display_name, str):
-            out[display_name] = attr_name
-    return out
 
 
 def is_node_disabled(node_or_properties: object) -> bool:
@@ -78,7 +63,7 @@ def disabled_passthrough_pairs(
         if (
             input_channel is not None
             and output_channel is not None
-            and not compatible_channels(output_channel, input_channel)
+            and not _compatible_channels(output_channel, input_channel)
         ):
             continue
         pairs.append(
@@ -100,6 +85,17 @@ def disabled_output_names(node: object, widget: object) -> tuple[str, ...]:
         return tuple(output_names.values())
     channels = _channels_by_display_name(node, "output_channels")
     return tuple(str(name) for name in channels)
+
+
+def _compatible_channels(output_channel: object, input_channel: object) -> bool:
+    """Return True when one output channel may feed one input channel.
+
+    Imported lazily: channel compatibility is only ever asked about live canvas
+    nodes, and ``derzug.workflow`` must stay importable without Orange.
+    """
+    from orangecanvas.scheme.link import compatible_channels
+
+    return bool(compatible_channels(output_channel, input_channel))
 
 
 def _channels_by_display_name(node: object, method_name: str) -> dict[str, Any]:
