@@ -14,15 +14,15 @@ python scripts/bench_compare.py --baseline main
 
 This checks out `main` into a throwaway worktree, pins its dependencies to match yours, verifies each interpreter really imports its own copy of DerZug, runs your current benchmark files against both sides, and prints a table ranked worst-regression-first. Paste that table into the PR description and investigate anything past 20%.
 
-Expect roughly four minutes. The first run also has to build the baseline environment, which takes a few minutes more and several hundred megabytes when uv's cache is cold; later runs reuse it.
+Expect roughly 45 seconds (`--repeat 2` roughly doubles it). The first run also has to build the baseline environment, which takes a few minutes more and several hundred megabytes when uv's cache is cold; later runs reuse it.
 
 Useful flags:
 
 | Flag | Why |
 |---|---|
 | `-k EXPR` | Compare a single benchmark in about twenty seconds. |
-| `--max-time 1` | Trade precision for speed; the default is three seconds per benchmark. |
-| `--suite qt` | Compare the Qt render benchmarks instead of the Qt-free ones. |
+| `--max-time` / `--warmup-time` | Override the per-benchmark time budget. Runtime is set by this, not by data size — see `benchmarks/readme.md`. Warmup below 0.3s makes the numbers meaningless. |
+| `--suite qt` | Compare the Qt render benchmarks instead of the Qt-free ones (~80s; they use a larger budget because a single render takes 35-340ms). |
 | `--repeat 2` | Interleave two passes per side. Do this before quoting a number anywhere. |
 | `--fail-on-regression` | Exit non-zero on a regression, for scripting. |
 | `--from-json a.json b.json` | Re-render a previous comparison instantly from `.codspeed_compare/`. |
@@ -53,7 +53,7 @@ Note that bare `pytest` does **not** collect `benchmarks/` — `testpaths` in `p
 
 ## Writing a benchmark
 
-Follow the existing modules. The conventions:
+See [`benchmarks/readme.md`](../../benchmarks/readme.md) for the tree layout and why a run costs what it does. The conventions:
 
 - `benchmarks/core/` is Qt-free and `benchmarks/qt/` is not. A session fixture in `benchmarks/core/conftest.py` fails the suite if anything drags a Qt binding in; the authoritative version of that guard is `test_core_modules_stay_qt_free` in `tests/test_utils/test_lazy_imports.py`.
 - The Qt tree skips itself at collection time when no Qt stack is installed, so `pytest benchmarks` works in a minimal environment.
@@ -61,6 +61,7 @@ Follow the existing modules. The conventions:
 - Mark each measured function with `@pytest.mark.benchmark`. That is pytest-codspeed's marker, not the `benchmark` fixture.
 - Hoist every bit of setup into a module-, class-, or session-scoped fixture. Only the operation under test belongs in the timed body.
 - Anything faster than about 50 µs needs an explicit `for _ in range(N)` loop, or it falls below the comparison tool's noise floor and is ignored.
+- Every benchmark costs the same wall time regardless of what it measures, because the runtime is a fixed per-benchmark budget. Add one only if it guards a path that can realistically regress.
 - Prefer **pairs**: a fast path next to the slow path it replaced. `test_run_chain` versus `test_map_chain` is the example worth copying — reverting the executor's spec-hoisting regresses one and not the other, which is a far clearer signal than a single absolute number.
 - Qt render benchmarks must `show()` the widget. `ZugWidget._request_ui_refresh` is a no-op while the window is hidden, so a hidden widget silently measures nothing. End the timed body with `qapp.processEvents()` then `widget.grab()` to force a synchronous paint.
 

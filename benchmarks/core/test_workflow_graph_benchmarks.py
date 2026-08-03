@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from _bench_tasks import build_chain
-from derzug.workflow.graph import PipeGraph, hash_payload, topological_sort
+from derzug.workflow.graph import PipeGraph, topological_sort
 
 
 @pytest.fixture(scope="module")
@@ -35,12 +35,6 @@ class TestGraphBenchmarks:
             topological_sort(chain_pipe.tasks, chain_pipe.edges)
 
     @pytest.mark.benchmark
-    def test_topological_sort_diamond(self, diamond_pipe):
-        """Sort a fan-out/fan-in graph."""
-        for _ in range(20):
-            topological_sort(diamond_pipe.tasks, diamond_pipe.edges)
-
-    @pytest.mark.benchmark
     def test_validate_uncached(self, chain_pipe):
         """Fully validate a 50-node graph.
 
@@ -59,12 +53,6 @@ class TestGraphBenchmarks:
         """
         for _ in range(1000):
             validated_chain.ensure_validated()
-
-    @pytest.mark.benchmark
-    def test_hash_payload(self, chain_payload):
-        """Hash a serialized 50-node graph payload."""
-        for _ in range(10):
-            hash_payload(chain_payload)
 
     @pytest.mark.benchmark
     def test_serialize_to_dict(self, chain_pipe):

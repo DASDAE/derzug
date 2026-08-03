@@ -57,6 +57,23 @@ _SUITE_PATHS = {
     "all": ("benchmarks",),
 }
 
+# (warmup seconds, measured seconds) per benchmark, by suite.
+#
+# Runtime is set almost entirely by this budget rather than by how much work a
+# benchmark does: pytest-codspeed simply fits more rounds into the same window
+# for a faster benchmark. Warmup is the quality-critical half -- below roughly
+# 0.3s CPython has not finished specialising and the spread between two runs of
+# identical code explodes (measured: 8% at 0.3s, 110% at 0.1s).
+#
+# The Qt suite keeps the upstream default because a single Waterfall or Wiggle
+# render takes 35-340ms; a 0.3s window would leave it one or two rounds, which
+# is not a measurement.
+_SUITE_BUDGET = {
+    "core": (0.3, 0.3),
+    "qt": (1.0, 3.0),
+    "all": (1.0, 3.0),
+}
+
 
 def _run(
     command: list[str],
@@ -301,6 +318,7 @@ def _run_benchmarks(
     label: str,
     suite: str,
     keyword: str | None,
+    warmup_time: float,
     max_time: float,
 ) -> dict[str, BenchStat]:
     """Run one benchmark pass and return its parsed statistics.
@@ -317,6 +335,7 @@ def _run_benchmarks(
         *_SUITE_PATHS[suite],
         "--codspeed",
         "--codspeed-mode=walltime",
+        f"--codspeed-warmup-time={warmup_time}",
         f"--codspeed-max-time={max_time}",
         "-q",
         "--no-header",
@@ -421,9 +440,14 @@ def main(
     repeat: int = typer.Option(
         1, help="Interleaved passes per side. Use 2 before quoting a number."
     ),
-    max_time: float = typer.Option(
-        3.0,
-        help="Seconds per benchmark. Lower is faster but noisier.",
+    warmup_time: float | None = typer.Option(
+        None,
+        help="Warmup seconds per benchmark. Below 0.3 the numbers stop meaning "
+        "anything. Defaults to the suite's budget.",
+    ),
+    max_time: float | None = typer.Option(
+        None,
+        help="Measured seconds per benchmark. Defaults to the suite's budget.",
     ),
     noise_floor_ns: float = typer.Option(
         DEFAULT_NOISE_FLOOR_NS, help="Ignore benchmarks faster than this."
@@ -498,16 +522,26 @@ def main(
             typer.echo(f"error: {warning}", err=True)
         raise typer.Exit(code=1)
 
+    default_warmup, default_max = _SUITE_BUDGET[suite]
+    warmup = default_warmup if warmup_time is None else warmup_time
+    measured = default_max if max_time is None else max_time
+    if warmup < 0.3:
+        typer.echo(
+            f"warning: warmup of {warmup}s is below the 0.3s floor; two runs of "
+            "identical code can differ by 100% at that setting",
+            err=True,
+        )
+
     pairs: list[tuple[dict[str, BenchStat], dict[str, BenchStat]]] = []
     for index in range(max(1, repeat)):
         # Interleave the passes so machine drift hits both sides of each pair
         # alike; the pair is the unit that later gets compared.
         suffix = "" if repeat == 1 else f"-{index + 1}"
         baseline_stats = _run_benchmarks(
-            baseline_python, f"baseline{suffix}", suite, keyword, max_time
+            baseline_python, f"baseline{suffix}", suite, keyword, warmup, measured
         )
         head_stats = _run_benchmarks(
-            head_python, f"head{suffix}", suite, keyword, max_time
+            head_python, f"head{suffix}", suite, keyword, warmup, measured
         )
         pairs.append((baseline_stats, head_stats))
 

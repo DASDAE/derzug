@@ -68,8 +68,3 @@ class TestImportBenchmarks:
     def test_import_spool_utils(self):
         """Re-execute the spool-utility module body."""
         _reimport("derzug.utils.spool")
-
-    @pytest.mark.benchmark
-    def test_import_cli(self):
-        """Re-execute the CLI module body, the `derzug` entry-point cost."""
-        _reimport("derzug.cli")

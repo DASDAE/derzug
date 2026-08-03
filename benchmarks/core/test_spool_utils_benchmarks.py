@@ -130,8 +130,3 @@ class TestAnnotationMaskBenchmarks:
     def test_span_mask(self, contents_df, span_annotations):
         """Mask 5000 rows against 50 single-dimension spans."""
         annotation_overlap_mask(contents_df, span_annotations)
-
-    @pytest.mark.benchmark
-    def test_point_mask(self, contents_df, point_annotations):
-        """Mask 5000 rows against 50 points."""
-        annotation_overlap_mask(contents_df, point_annotations)
