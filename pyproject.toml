@@ -99,6 +99,7 @@ zug = "derzug.dascore.namespace:ZugSpoolNameSpace"
 
 [tool.setuptools.package-data]
 "derzug" = ["static/*.png", "styles/*.qss", "styles/orange/*.svg"]
+"derzug.conductor" = ["skill_assets/*.md"]
 "derzug.widgets" = ["icons/*.svg", "icons/annotations/*.svg"]
 "derzug.workflows" = ["*.ows"]
 

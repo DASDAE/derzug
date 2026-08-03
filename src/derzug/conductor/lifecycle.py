@@ -20,6 +20,7 @@ from AnyQt.QtCore import QObject, QTimer, Signal
 
 from derzug.conductor import registry
 from derzug.conductor.client_config import write_mcp_config
+from derzug.conductor.skill import write_skill_files
 from derzug.version import __version__
 
 log = logging.getLogger(__name__)
@@ -184,6 +185,11 @@ class ConductorLifecycle(QObject):
         config_path = self._config_dir / ".mcp.json"
         write_mcp_config(config_path, host=service.host, port=service.port)
         log.info("Conductor client config written to %s", config_path)
+        try:
+            # Best-effort: a read-only project must not fail the server start.
+            write_skill_files(self._config_dir)
+        except OSError:
+            log.warning("Could not write Conductor skill files", exc_info=True)
         registry.write_record(
             registry.ServerRecord(
                 server_id=service.server_id,
