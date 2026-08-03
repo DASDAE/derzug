@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -110,7 +111,10 @@ class ConductorLifecycle(QObject):
 
     def shutdown(self) -> None:
         """Stop synchronously (bounded) for application or window teardown."""
-        self._timer.stop()
+        # At application exit Qt may have deleted the timer's C++ object
+        # already; the service still has to be stopped.
+        with suppress(RuntimeError):
+            self._timer.stop()
         service = self._service
         self._service = None
         self._config_dir = None

@@ -305,9 +305,8 @@ class ConductorMenuController(QObject):
 
     def _copy_url(self) -> None:
         """Copy the active MCP URL to the system clipboard."""
-        clipboard = QApplication.clipboard()
-        if self._url is not None and clipboard is not None:
-            clipboard.setText(self._url)
+        if self._url is not None:
+            _copy_to_clipboard(self._url)
 
     def _open_settings(self) -> None:
         """Open the server settings dialog and retain accepted changes."""
