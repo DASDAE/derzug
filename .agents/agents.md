@@ -9,6 +9,20 @@ This file gives AI/code agents a practical checklist for contributing safely to 
 3. Prefer consistency with existing code/tests/docs in this repo.
 
 
+## Import layering
+
+```
+models  ->  workflow  ->  nodes  ->  { core, widgets, views, conductor }
+                                      ^ Qt lives only here
+```
+
+Nothing left of `derzug.nodes` may import Qt, Orange, or a widget module —
+that is what lets the workflow engine run headlessly. When a task needs
+behavior that currently lives on a widget, move the behavior *down* into the
+node module as a free function and have the widget call it.
+`tests/test_nodes/test_import_layering.py` enforces this in subprocesses. See
+`docs/dev/nodes.md`.
+
 ## Environment setup
 
 See `README.md` for installation and `docs/dev/guidelines.md` for conventions.
@@ -98,6 +112,7 @@ Before handing off:
 4. Docs updated for user-visible behavior changes.
 5. No unrelated refactors bundled with bug fixes.
 6. Hot-path changes compared against `main` with `scripts/bench_compare.py`, with the table in the PR and any regression past 20% explained.
+7. No new Qt/Orange import reachable from `derzug.models`, `derzug.workflow`, or `derzug.nodes`.
 
 ## When uncertain
 

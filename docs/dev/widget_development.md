@@ -27,7 +27,13 @@ Widgets can be internal DerZug widgets or written in their own stand-along progr
 ## Widget state (params & view models)
 
 A widget's persisted state is a typed pydantic model, not a pile of flat Orange
-`Setting`s. When adding a widget:
+`Setting`s. Write the node before the widget: put the params model, the task,
+and a `NODE_SPEC` in a Qt-free module under `src/derzug/nodes/`, then point the
+widget at it with `node_spec = NODE_SPEC` and let it inherit `params_model`,
+`view_model`, and `is_source`. See [nodes.md](nodes.md); the rest of this
+section applies to widgets not yet migrated.
+
+When adding a widget:
 
 - Declare a `params_model` (a `pydantic.BaseModel`) with the parameters that
   affect the widget's output — the ones that feed `get_task()`. For visual
@@ -47,8 +53,10 @@ A widget's persisted state is a typed pydantic model, not a pile of flat Orange
 - Read and write state through `get_params()` / `apply_params()` (and
   `get_view()` / `apply_view()`); never assign model-backed attributes or drive
   Qt controls directly from code.
-- Declarative `PatchMethodWidget` widgets auto-derive their `params_model` from
-  the `_OPTIONS` spec — you only add the option, not a model.
+- Declarative `PatchMethodWidget` widgets derive their `params_model` from the
+  `_OPTIONS` spec — you only add the option, not a model. In a migrated node
+  the `_OPTIONS` declaration lives in the node module and the widget imports
+  it (see `derzug.nodes.taper`).
 - Every widget must have a params model; `tests/test_core/test_params_model_coverage.py`
   enforces it. See
   [plans/widget_state_schema_migration.md](plans/widget_state_schema_migration.md)
