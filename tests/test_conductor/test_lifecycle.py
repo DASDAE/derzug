@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 
@@ -39,6 +40,13 @@ class _FakeService:
     def stop(self, timeout: float = 5.0) -> None:
         self.stop_calls += 1
         self._status = "idle"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state_dir(tmp_path, monkeypatch):
+    """Keep discovery-registry writes inside the test's tmp directory."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "state"))
 
 
 @pytest.fixture()
@@ -155,6 +163,26 @@ def test_start_failure_when_client_config_write_fails(
     assert "not writable" in blocker.args[0]
     assert lifecycle.service is None
     assert fake_mcp_server.services[0].stop_calls == 1
+
+
+def test_start_and_stop_maintain_the_discovery_record(
+    lifecycle, fake_mcp_server, tmp_path, qtbot
+):
+    """A ready server is advertised for discovery; a stopped one is not."""
+    from derzug.conductor import registry
+
+    with qtbot.waitSignal(lifecycle.started):
+        lifecycle.request_start(
+            object(), port=4321, allow_code=False, config_dir=tmp_path
+        )
+    (service,) = fake_mcp_server.services
+    (record,) = registry.list_records()
+    assert record.server_id == service.server_id
+    assert record.mcp_url == service.url
+    assert record.pid == os.getpid()
+    with qtbot.waitSignal(lifecycle.stopped):
+        lifecycle.request_stop()
+    assert registry.list_records() == []
 
 
 def test_stop_emits_stopped_and_releases_the_service(

@@ -26,22 +26,31 @@ import socket
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from derzug.conductor.constants import DEFAULT_HOST, DEFAULT_PORT
+from derzug.conductor.constants import DEFAULT_HOST, DEFAULT_PORT, SERVER_NAME
 from derzug.conductor.controller import CanvasController
 from derzug.conductor.dispatch import MainThreadDispatcher
+from derzug.version import __version__
 
 log = logging.getLogger(__name__)
 
 
 def build_conductor_mcp(
-    controller: CanvasController, dispatcher: MainThreadDispatcher
+    controller: CanvasController,
+    dispatcher: MainThreadDispatcher,
+    runtime_info: Callable[[], dict[str, Any]] | None = None,
 ) -> FastMCP:
-    """Return a FastMCP server whose tools drive ``controller`` on the main thread."""
+    """Return a FastMCP server whose tools drive ``controller`` on the main thread.
+
+    ``runtime_info`` late-binds facts that only exist once the service runs
+    (resolved port, server id); it feeds the ``/health`` endpoint used by
+    discovery.
+    """
     mcp = FastMCP(
         "DerZug Conductor",
         instructions=(
@@ -198,6 +207,21 @@ def build_conductor_mcp(
         """Hide (close) a node's widget window."""
         call(controller.hide_node, node_id)
 
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(_request: Any) -> Any:
+        """Answer discovery probes so stale registry records can be pruned."""
+        from starlette.responses import JSONResponse
+
+        info = {} if runtime_info is None else runtime_info()
+        return JSONResponse(
+            {
+                "status": "healthy",
+                "server": SERVER_NAME,
+                "version": __version__,
+                **info,
+            }
+        )
+
     return mcp
 
 
@@ -254,13 +278,21 @@ class ConductorService:
         """
         import uvicorn
 
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+
         if self._thread is not None:
             raise RuntimeError("Conductor MCP server already launched")
         sock = socket.create_server((self._host, self._port))
         try:
             self._port = sock.getsockname()[1]  # resolves an ephemeral port (0)
+            app = self._mcp.streamable_http_app()
+            # Loopback binding does not stop a hostile web page from steering a
+            # browser at this port via DNS rebinding; validating Host does.
+            app.add_middleware(
+                TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"]
+            )
             config = uvicorn.Config(
-                self._mcp.streamable_http_app(),
+                app,
                 host=self._host,
                 port=self._port,
                 log_level="warning",
@@ -358,5 +390,19 @@ def create_service(
     """
     controller = CanvasController(window, allow_code=allow_code)
     dispatcher = MainThreadDispatcher()
-    mcp = build_conductor_mcp(controller, dispatcher)
-    return ConductorService(mcp, host=host, port=port, dispatcher=dispatcher)
+    holder: dict[str, Any] = {}
+
+    def runtime_info() -> dict[str, Any]:
+        service = holder.get("service")
+        if service is None:
+            return {}
+        return {
+            "server_id": service.server_id,
+            "mcp_url": service.url,
+            "allow_code": allow_code,
+        }
+
+    mcp = build_conductor_mcp(controller, dispatcher, runtime_info=runtime_info)
+    service = ConductorService(mcp, host=host, port=port, dispatcher=dispatcher)
+    holder["service"] = service
+    return service

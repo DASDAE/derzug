@@ -10,13 +10,17 @@ to import whether or not the extra is installed.
 from __future__ import annotations
 
 import logging
+import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from AnyQt.QtCore import QObject, QTimer, Signal
 
+from derzug.conductor import registry
 from derzug.conductor.client_config import write_mcp_config
+from derzug.version import __version__
 
 log = logging.getLogger(__name__)
 
@@ -116,6 +120,7 @@ class ConductorLifecycle(QObject):
             service.stop()
         except Exception:
             log.error("Failed to stop the Conductor MCP server", exc_info=True)
+        registry.remove_record(service.server_id)
 
     def _tick(self) -> None:
         """Advance whichever transition is in flight."""
@@ -158,6 +163,7 @@ class ConductorLifecycle(QObject):
         if service.is_stopped():
             self._timer.stop()
             service.stop()  # finalize: joins the dead thread, releases the socket
+            registry.remove_record(service.server_id)
             self._service = None
             self._config_dir = None
             self._phase = "idle"
@@ -174,10 +180,22 @@ class ConductorLifecycle(QObject):
             )
 
     def _finish_start(self, service: Any) -> None:
-        """Run the post-ready side effects (client config for agents)."""
+        """Run the post-ready side effects (client config, discovery record)."""
         config_path = self._config_dir / ".mcp.json"
         write_mcp_config(config_path, host=service.host, port=service.port)
         log.info("Conductor client config written to %s", config_path)
+        registry.write_record(
+            registry.ServerRecord(
+                server_id=service.server_id,
+                pid=os.getpid(),
+                host=service.host,
+                port=service.port,
+                base_url=f"http://{service.host}:{service.port}",
+                mcp_url=service.url,
+                started_at=datetime.now(timezone.utc).isoformat(),
+                version=__version__,
+            )
+        )
 
     def _discard_service(self) -> None:
         """Drop a service that failed to become ready, stopping its remains."""
@@ -189,6 +207,7 @@ class ConductorLifecycle(QObject):
             service.stop()
         except Exception:
             log.error("Failed to stop the Conductor MCP server", exc_info=True)
+        registry.remove_record(service.server_id)
 
 
 __all__ = ("START_TIMEOUT", "STOP_TIMEOUT", "ConductorLifecycle")

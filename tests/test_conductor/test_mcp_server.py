@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -124,6 +127,41 @@ def test_create_service_builds_a_fresh_dispatcher_per_service(blank_canvas):
     second = create_service(window, port=0)
     assert first._dispatcher is not second._dispatcher
     assert first.server_id != second.server_id
+
+
+def test_health_endpoint_reports_the_server_identity(blank_canvas):
+    """Discovery probes get a healthy answer naming this exact server."""
+    window, _ = blank_canvas
+    service = create_service(window, port=0)
+    service.start(timeout=30.0)
+    try:
+        health_url = f"http://127.0.0.1:{service.port}/health"
+        with urllib.request.urlopen(health_url, timeout=5) as response:
+            payload = json.loads(response.read().decode())
+        assert payload["status"] == "healthy"
+        assert payload["server"] == "derzug-conductor"
+        assert payload["server_id"] == service.server_id
+        assert payload["mcp_url"] == service.url
+        assert payload["allow_code"] is False
+    finally:
+        service.stop()
+
+
+def test_spoofed_host_header_is_rejected(blank_canvas):
+    """DNS-rebinding requests carrying a foreign Host header are refused."""
+    window, _ = blank_canvas
+    service = create_service(window, port=0)
+    service.start(timeout=30.0)
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{service.port}/health",
+            headers={"Host": "evil.example"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request, timeout=5)
+        assert excinfo.value.code == 400
+    finally:
+        service.stop()
 
 
 def test_connect_tool_defaults_ports_to_patch(blank_canvas):
