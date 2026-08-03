@@ -2945,8 +2945,8 @@ class DerZugMain(OMain):
                 allow_code=allow_code,
             )
         )
-        controls.launch_agent_requested.connect(
-            lambda agent: self._launch_conductor_agent(window, agent)
+        controls.connect_agent_requested.connect(
+            lambda agent: self._connect_conductor_agent(window, agent)
         )
         controls.port_changed.connect(
             lambda port: save_conductor_port(port, _derzug_settings())
@@ -3053,6 +3053,7 @@ class DerZugMain(OMain):
         window, controls = self._conductor_ui()
         if controls is not None:
             controls.set_stopped()
+        self._conductor_pending_agent = None
         pending = self._conductor_pending_restart
         self._conductor_pending_restart = None
         if pending is not None and window is not None:
@@ -3115,6 +3116,30 @@ class DerZugMain(OMain):
         self._conductor_pending_restart = (port, allow_code)
         self._stop_conductor()
         return True
+
+    def _connect_conductor_agent(self, window, agent: str) -> bool:
+        """Launch an agent, starting the Conductor server first if needed."""
+        lifecycle = self._conductor_lifecycle
+        if lifecycle is None:
+            return False
+        if lifecycle.url is not None:
+            return self._launch_conductor_agent(window, agent)
+        if lifecycle.service is not None:
+            # A start or stop is in flight; ride the start if there is one.
+            if lifecycle.phase == "starting":
+                self._conductor_pending_agent = agent
+                return True
+            return False
+        controls = getattr(window, "conductor_controls", None)
+        if controls is None:
+            return False
+        settings = controls.settings
+        return self._start_conductor(
+            window,
+            port=settings.port,
+            allow_code=settings.allow_code,
+            agent=agent,
+        )
 
     def _launch_conductor_agent(self, window, agent: str) -> bool:
         """Launch one agent connected to the active Conductor service."""

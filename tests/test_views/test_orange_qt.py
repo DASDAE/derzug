@@ -457,6 +457,53 @@ class TestDerZugMainWindow:
         assert main._conductor_lifecycle.service is None
         assert controls.start_action.isEnabled()
 
+    def test_conductor_open_agent_auto_starts_the_server(
+        self, derzug_app, monkeypatch, tmp_path, qtbot
+    ):
+        """Launching an agent while stopped starts the server, then connects."""
+        window = derzug_app.window
+        controls = window.conductor_controls
+        launch_calls = []
+
+        class _FakeService:
+            host = "127.0.0.1"
+            port = 4319
+            server_id = "auto0000"
+            url = "http://127.0.0.1:4319/mcp"
+            _status = "idle"
+
+            def launch(self):
+                self._status = "running"
+
+            def status(self):
+                return self._status
+
+            def request_stop(self):
+                self._status = "idle"
+
+            def is_stopped(self):
+                return self._status == "idle"
+
+            def stop(self, timeout=5.0):
+                self._status = "idle"
+
+        service = _FakeService()
+        monkeypatch.chdir(tmp_path)
+        mcp_server = types.ModuleType("derzug.conductor.mcp_server")
+        mcp_server.create_service = lambda *_args, **_kwargs: service
+        monkeypatch.setitem(sys.modules, "derzug.conductor.mcp_server", mcp_server)
+        monkeypatch.setattr(
+            "derzug.conductor.launch.launch_agent_in_terminal",
+            lambda agent, cwd, url: launch_calls.append((agent, cwd, url)) or True,
+        )
+
+        assert controls.url is None
+        controls.open_claude_action.trigger()
+        qtbot.waitUntil(lambda: bool(launch_calls))
+
+        assert launch_calls == [("claude", str(tmp_path), service.url)]
+        assert controls.url == service.url
+
     def test_conductor_menu_shows_transient_starting_state(
         self, derzug_app, monkeypatch, tmp_path, qtbot
     ):
