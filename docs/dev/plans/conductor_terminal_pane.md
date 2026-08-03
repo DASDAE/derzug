@@ -32,11 +32,12 @@ rendering. That is the load-bearing engineering piece.
 Phase the risk: prove the connection ergonomics first, then invest in the
 emulator.
 
-**Prototype step 1 — auto-wired external terminal (lowest risk).**
-- On `derzug --conductor`, we already start the MCP server and write `.mcp.json`.
-- Add a **Conductor menu/toolbar action** ("Open agent terminal") that launches
-  the user's *system* terminal in the workflow directory (where `.mcp.json`
-  lives) so `claude` auto-connects. No embedded rendering yet.
+**Prototype step 1 — lifecycle menu + auto-wired external terminal (lowest
+risk).**
+- The always-visible **Conductor** menu starts, stops, and configures the MCP
+  server, with CLI startup retained for automation.
+- **Open Agent** launches Claude Code or Codex in the user's *system* terminal,
+  wired to the running server. No embedded rendering yet.
 - Ships a usable end-to-end demo immediately; validates the "it just connects"
   ergonomics.
 
@@ -59,7 +60,8 @@ emulator.
 | File | Role |
 |---|---|
 | `src/derzug/conductor/terminal.py` | The terminal pane widget (pty + emulator + shell process lifecycle). |
-| `src/derzug/views/orange.py` | Menu/toolbar action to open the pane / external terminal; dock it into the main window; gate behind `--conductor`. |
+| `src/derzug/views/conductor.py` | Existing server lifecycle menu and external-agent controls; later add the pane action here. |
+| `src/derzug/views/orange.py` | Own the service lifecycle and eventually dock the terminal pane into the main window. |
 | `src/derzug/conductor/mcp_server.py` | Already writes `.mcp.json`; may add a helper to resolve the agent launch command/cwd. |
 | `docs/dev/conductor.md` | Update the demo once the pane exists. |
 
@@ -78,7 +80,8 @@ emulator.
 
 - Unit: the launch-command/config helpers (cwd, `.mcp.json` presence) are pure
   and testable; the emulator/pty is integration-level and largely manual.
-- Manual: `derzug --conductor`, open the pane, run `claude`, confirm it connects
+- Manual: start the server from the **Conductor** menu, open the pane, run
+  `claude`, confirm it connects
   and can drive the canvas; confirm `Ctrl+Z` still reverts agent edits and global
   shortcuts behave when the terminal has focus.
 - Keep any Qt/pty rendering out of the headless CI path (guard/skip), matching

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import builtins
 import io
 import os
 import sys
+import types
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -363,6 +365,201 @@ class TestDerZugMainWindow:
         assert "Annotation Settings..." in _menu_labels(window, "Options")
         assert "Settings" in _menu_labels(window, "Options")
         assert window.dock_help_action not in window.canvas_toolbar.actions()
+
+    def test_conductor_menu_is_always_available(self, derzug_app):
+        """Server controls should be discoverable without a startup CLI flag."""
+        window = derzug_app.window
+
+        assert window.conductor_controls is not None
+        assert window.conductor_controls.menu.objectName() == "conductor-menu"
+        assert any(
+            action.text().replace("&", "") == "Conductor"
+            for action in window.menuBar().actions()
+        )
+
+    def test_conductor_menu_controls_service_lifecycle(
+        self, derzug_app, monkeypatch, tmp_path
+    ):
+        """Menu actions start, launch against, and stop the owned service."""
+        main = derzug_app.main
+        window = derzug_app.window
+        controls = window.conductor_controls
+        services = []
+        start_calls = []
+        launch_calls = []
+
+        class _FakeService:
+            def __init__(self, port):
+                self.url = f"http://127.0.0.1:{port}/mcp"
+                self.stop_calls = 0
+
+            def stop(self):
+                self.stop_calls += 1
+
+        def _fake_start(window_arg, **kwargs):
+            assert window_arg is window
+            start_calls.append(kwargs)
+            service = _FakeService(kwargs["port"])
+            services.append(service)
+            return service
+
+        monkeypatch.chdir(tmp_path)
+        mcp_server = types.ModuleType("derzug.conductor.mcp_server")
+        mcp_server.start_conductor = _fake_start
+        monkeypatch.setitem(sys.modules, "derzug.conductor.mcp_server", mcp_server)
+        monkeypatch.setattr(
+            "derzug.conductor.launch.launch_agent_in_terminal",
+            lambda agent, cwd, url: launch_calls.append((agent, cwd, url)) or True,
+        )
+        from derzug.views.conductor import ConductorSettings
+
+        controls.set_settings(ConductorSettings(port=5432, allow_code=True))
+
+        controls.start_action.trigger()
+
+        assert start_calls == [
+            {
+                "config_path": tmp_path / ".mcp.json",
+                "port": 5432,
+                "allow_code": True,
+            }
+        ]
+        assert controls.url == services[0].url
+        assert controls.stop_action.isEnabled()
+
+        controls.set_settings(ConductorSettings(port=5433, allow_code=False))
+        assert controls.restart_action.text() == "Restart Server (Apply Settings)"
+        controls.restart_action.trigger()
+        assert services[0].stop_calls == 1
+        assert start_calls[-1] == {
+            "config_path": tmp_path / ".mcp.json",
+            "port": 5433,
+            "allow_code": False,
+        }
+        assert controls.url == services[1].url
+
+        controls.open_codex_action.trigger()
+        assert launch_calls == [("codex", str(tmp_path), services[1].url)]
+
+        controls.stop_action.trigger()
+        assert services[1].stop_calls == 1
+        assert main._conductor_service is None
+        assert controls.url is None
+        assert controls.start_action.isEnabled()
+
+    def test_conductor_start_failure_returns_menu_to_stopped(
+        self, derzug_app, monkeypatch
+    ):
+        """A startup error should be reported without leaving stale UI state."""
+        window = derzug_app.window
+        controls = window.conductor_controls
+        errors = []
+
+        def _fail_start(*_args, **_kwargs):
+            raise OSError("port is already in use")
+
+        mcp_server = types.ModuleType("derzug.conductor.mcp_server")
+        mcp_server.start_conductor = _fail_start
+        monkeypatch.setitem(sys.modules, "derzug.conductor.mcp_server", mcp_server)
+        monkeypatch.setattr(
+            QMessageBox,
+            "critical",
+            lambda *args: errors.append(args[1:]),
+        )
+
+        controls.start_action.trigger()
+
+        assert errors == [
+            (
+                "Conductor Start Failed",
+                "Could not start the Conductor server:\n\nport is already in use",
+            )
+        ]
+        assert controls.status_action.text() == "Status: Stopped"
+        assert controls.start_action.isEnabled()
+
+    def test_conductor_keeps_service_when_stop_fails(
+        self, derzug_app, monkeypatch, tmp_path
+    ):
+        """A server that will not stop stays owned so a restart cannot race it."""
+        main = derzug_app.main
+        window = derzug_app.window
+        controls = window.conductor_controls
+        warnings = []
+        start_calls = []
+
+        class _UnstoppableService:
+            url = "http://127.0.0.1:4319/mcp"
+
+            def stop(self):
+                raise RuntimeError("server thread did not exit")
+
+        def _fake_start(_window, **kwargs):
+            start_calls.append(kwargs)
+            return _UnstoppableService()
+
+        monkeypatch.chdir(tmp_path)
+        mcp_server = types.ModuleType("derzug.conductor.mcp_server")
+        mcp_server.start_conductor = _fake_start
+        monkeypatch.setitem(sys.modules, "derzug.conductor.mcp_server", mcp_server)
+        monkeypatch.setattr(
+            QMessageBox,
+            "warning",
+            lambda *args: warnings.append(args[1:]),
+        )
+
+        controls.start_action.trigger()
+        assert len(start_calls) == 1
+
+        controls.stop_action.trigger()
+
+        assert warnings == [
+            (
+                "Conductor Stop Failed",
+                "The Conductor server reported an error while stopping:\n\n"
+                "server thread did not exit",
+            )
+        ]
+        assert main._conductor_service is not None
+        assert controls.status_action.text().startswith("Status: Running")
+
+        # A restart must not start a second server against the still-bound port.
+        controls.restart_action.trigger()
+        assert len(start_calls) == 1
+
+        main._conductor_service = None
+
+    def test_conductor_reports_non_mcp_import_errors_verbatim(
+        self, derzug_app, monkeypatch
+    ):
+        """A broken internal import must not read as a missing optional extra."""
+        controls = derzug_app.window.conductor_controls
+        errors = []
+
+        def _raise_import_error(name, *_args, **_kwargs):
+            if name == "derzug.conductor.mcp_server":
+                raise ImportError(
+                    "No module named 'derzug.conductor.dispatch'",
+                    name="derzug.conductor.dispatch",
+                )
+            return original_import(name, *_args, **_kwargs)
+
+        original_import = builtins.__import__
+        monkeypatch.setattr(builtins, "__import__", _raise_import_error)
+        monkeypatch.setattr(
+            QMessageBox,
+            "critical",
+            lambda *args: errors.append(args[1:]),
+        )
+
+        controls.start_action.trigger()
+
+        assert len(errors) == 1
+        title, detail = errors[0]
+        assert title == "Conductor Unavailable"
+        assert "derzug.conductor.dispatch" in detail
+        assert "derzug[conductor]" not in detail
+        assert controls.status_action.text() == "Status: Stopped"
 
     def test_annotation_settings_action_opens_dialog(self, derzug_app, monkeypatch):
         """The Options menu should expose the global annotation settings dialog."""

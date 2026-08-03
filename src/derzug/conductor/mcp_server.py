@@ -32,14 +32,12 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from derzug.conductor.constants import DEFAULT_HOST, DEFAULT_PORT
 from derzug.conductor.controller import CanvasController
 from derzug.conductor.dispatch import MainThreadDispatcher
 from derzug.conductor.launch import SERVER_NAME, launch_agent_in_terminal
 
 log = logging.getLogger(__name__)
-
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 4319
 
 
 def build_conductor_mcp(
