@@ -12,10 +12,9 @@ import shutil
 import subprocess
 import sys
 
-log = logging.getLogger(__name__)
+from derzug.conductor.constants import SERVER_NAME
 
-#: The MCP server entry name clients see (``.mcp.json`` key / Codex table name).
-SERVER_NAME = "derzug-conductor"
+log = logging.getLogger(__name__)
 
 
 def agent_command(agent: str, url: str) -> list[str]:

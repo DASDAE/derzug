@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -12,8 +15,7 @@ pytest.importorskip("mcp")
 from derzug.conductor import CanvasController, MainThreadDispatcher  # noqa: E402
 from derzug.conductor.mcp_server import (  # noqa: E402
     build_conductor_mcp,
-    start_conductor,
-    write_mcp_config,
+    create_service,
 )
 
 _EXPECTED_TOOLS = {
@@ -33,6 +35,7 @@ _EXPECTED_TOOLS = {
     "show_node",
     "move_node_window",
     "hide_node",
+    "get_derzug_rules",
 }
 
 
@@ -59,45 +62,8 @@ def test_add_node_tool_drives_the_controller(blank_canvas):
     assert "dt" in titles
 
 
-def test_write_mcp_config(tmp_path):
-    """The generated MCP config points a client at the server's endpoint."""
-    path = tmp_path / ".mcp.json"
-    url = write_mcp_config(path, port=4321)
-    config = json.loads(path.read_text())
-    assert url == "http://127.0.0.1:4321/mcp"
-    assert config["mcpServers"]["derzug-conductor"]["url"] == url
-    assert config["mcpServers"]["derzug-conductor"]["type"] == "http"
-
-
-def test_write_mcp_config_merges_existing_entries(tmp_path):
-    """An existing .mcp.json keeps its other servers; only ours is replaced."""
-    path = tmp_path / ".mcp.json"
-    path.write_text(
-        json.dumps(
-            {
-                "mcpServers": {
-                    "other": {"type": "stdio", "command": "other-server"},
-                    "derzug-conductor": {"type": "http", "url": "http://stale"},
-                }
-            }
-        )
-    )
-    url = write_mcp_config(path, port=4321)
-    config = json.loads(path.read_text())
-    assert config["mcpServers"]["other"]["command"] == "other-server"
-    assert config["mcpServers"]["derzug-conductor"]["url"] == url
-
-
-def test_write_mcp_config_leaves_invalid_json_untouched(tmp_path):
-    """A hand-edited config that fails to parse is never clobbered."""
-    path = tmp_path / ".mcp.json"
-    path.write_text("{not json")
-    write_mcp_config(path, port=4321)
-    assert path.read_text() == "{not json"
-
-
-def test_service_reports_port_conflict_on_start(blank_canvas):
-    """A taken port raises immediately from start() instead of dying silently."""
+def test_service_reports_port_conflict_on_launch(blank_canvas):
+    """A taken port raises immediately from launch() instead of dying silently."""
     import socket
 
     from derzug.conductor.mcp_server import ConductorService
@@ -108,7 +74,19 @@ def test_service_reports_port_conflict_on_start(blank_canvas):
         taken_port = sock.getsockname()[1]
         service = ConductorService(mcp, port=taken_port)
         with pytest.raises(OSError):
-            service.start()
+            service.launch()
+    assert service.status() == "idle"
+
+
+def test_service_refuses_a_non_loopback_bind(blank_canvas):
+    """The no-auth trust model only holds on loopback, so launch enforces it."""
+    from derzug.conductor.mcp_server import ConductorService
+
+    window, _ = blank_canvas
+    mcp, _ = _server(window)
+    service = ConductorService(mcp, host="0.0.0.0", port=0)
+    with pytest.raises(ValueError, match="loopback only"):
+        service.launch()
 
 
 def test_service_start_ready_and_stop(blank_canvas):
@@ -122,36 +100,116 @@ def test_service_start_ready_and_stop(blank_canvas):
     try:
         assert service.port > 0
         assert url == f"http://127.0.0.1:{service.port}/mcp"
+        assert service.status() == "running"
     finally:
         service.stop()
     assert service._thread is None
+    assert service.status() == "idle"
 
 
-def test_start_conductor_stops_service_when_config_write_fails(
-    blank_canvas, tmp_path, monkeypatch
-):
-    """Failure after bind/readiness must not leave an orphan listening server."""
+def test_service_launch_polls_to_ready_and_stops_without_blocking(blank_canvas):
+    """launch() returns before readiness; status/is_stopped drive the polling."""
     from derzug.conductor.mcp_server import ConductorService
 
     window, _ = blank_canvas
-    stopped: list[ConductorService] = []
-    original_stop = ConductorService.stop
+    mcp, _ = _server(window)
+    service = ConductorService(mcp, port=0)
+    service.launch()
+    try:
+        assert service.port > 0
+        deadline = time.monotonic() + 30
+        while service.status() == "starting":
+            assert time.monotonic() < deadline, "server never became ready"
+            time.sleep(0.02)
+        assert service.status() == "running"
+        service.request_stop()
+        deadline = time.monotonic() + 10
+        while not service.is_stopped():
+            assert time.monotonic() < deadline, "server never stopped"
+            time.sleep(0.02)
+    finally:
+        service.stop()
+    assert service.status() == "idle"
 
-    def track_stop(self, timeout=5.0):
-        stopped.append(self)
-        original_stop(self, timeout)
 
-    def fail_write(*args, **kwargs):
-        raise OSError("config is not writable")
+def test_create_service_builds_a_fresh_dispatcher_per_service(blank_canvas):
+    """Each service gets its own dispatcher (the stop latch is one-way)."""
+    window, _ = blank_canvas
+    first = create_service(window, port=0)
+    second = create_service(window, port=0)
+    assert first._dispatcher is not second._dispatcher
+    assert first.server_id != second.server_id
 
-    monkeypatch.setattr(ConductorService, "stop", track_stop)
-    monkeypatch.setattr("derzug.conductor.mcp_server.write_mcp_config", fail_write)
 
-    with pytest.raises(OSError, match="not writable"):
-        start_conductor(window, port=0, config_path=tmp_path / ".mcp.json")
+def test_get_derzug_rules_returns_the_versioned_briefing(blank_canvas):
+    """The rules tool serves the live app's briefing plus its identity."""
+    from derzug.conductor.rules import AGENT_RULES
+    from derzug.version import __version__
 
-    assert len(stopped) == 1
-    assert stopped[0]._thread is None
+    window, _ = blank_canvas
+    controller = CanvasController(window)
+    mcp = build_conductor_mcp(
+        controller,
+        MainThreadDispatcher(),
+        runtime_info=lambda: {"server_id": "abc", "mcp_url": "http://x/mcp"},
+    )
+    _content, payload = asyncio.run(mcp.call_tool("get_derzug_rules", {}))
+    assert payload["rules"] == AGENT_RULES
+    assert payload["version"] == __version__
+    assert payload["server_id"] == "abc"
+    assert payload["mcp_url"] == "http://x/mcp"
+
+
+def test_connect_prompt_is_registered(blank_canvas):
+    """Claude Code surfaces the connect prompt as a slash command."""
+    window, _ = blank_canvas
+    mcp, _ = _server(window)
+    names = {prompt.name for prompt in asyncio.run(mcp.list_prompts())}
+    assert "connect" in names
+
+
+def test_instructions_are_the_shared_agent_rules(blank_canvas):
+    """The client-visible instructions come from the single rules source."""
+    from derzug.conductor.rules import AGENT_RULES
+
+    window, _ = blank_canvas
+    mcp, _ = _server(window)
+    assert mcp.instructions == AGENT_RULES
+
+
+def test_health_endpoint_reports_the_server_identity(blank_canvas):
+    """Discovery probes get a healthy answer naming this exact server."""
+    window, _ = blank_canvas
+    service = create_service(window, port=0)
+    service.start(timeout=30.0)
+    try:
+        health_url = f"http://127.0.0.1:{service.port}/health"
+        with urllib.request.urlopen(health_url, timeout=5) as response:
+            payload = json.loads(response.read().decode())
+        assert payload["status"] == "healthy"
+        assert payload["server"] == "derzug-conductor"
+        assert payload["server_id"] == service.server_id
+        assert payload["mcp_url"] == service.url
+        assert payload["allow_code"] is False
+    finally:
+        service.stop()
+
+
+def test_spoofed_host_header_is_rejected(blank_canvas):
+    """DNS-rebinding requests carrying a foreign Host header are refused."""
+    window, _ = blank_canvas
+    service = create_service(window, port=0)
+    service.start(timeout=30.0)
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{service.port}/health",
+            headers={"Host": "evil.example"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request, timeout=5)
+        assert excinfo.value.code == 400
+    finally:
+        service.stop()
 
 
 def test_connect_tool_defaults_ports_to_patch(blank_canvas):

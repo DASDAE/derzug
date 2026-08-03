@@ -75,7 +75,9 @@ def test_menu_is_inserted_before_help_and_starts_stopped(conductor_menu):
     assert not controller.stop_action.isEnabled()
     assert not controller.restart_action.isEnabled()
     assert not controller.copy_url_action.isEnabled()
-    assert not controller.agent_menu.menuAction().isEnabled()
+    # Connecting an agent while stopped auto-starts the server first.
+    assert controller.connect_action.isEnabled()
+    assert controller.agent_menu.menuAction().isEnabled()
 
 
 def test_menu_emits_lifecycle_requests_with_current_settings(conductor_menu, qtbot):
@@ -111,13 +113,77 @@ def test_running_state_enables_runtime_actions_and_copies_url(conductor_menu, qt
 
     controller.copy_url_action.trigger()
     assert QApplication.clipboard().text() == URL
-    with qtbot.waitSignal(controller.launch_agent_requested) as launched:
+    with qtbot.waitSignal(controller.connect_agent_requested) as launched:
         controller.open_codex_action.trigger()
     assert launched.args == ["codex"]
 
     controller.set_stopped()
     assert controller.status_action.text() == "Status: Stopped"
     assert controller.start_action.isEnabled()
+
+
+def test_open_agent_while_stopped_requests_a_connect(conductor_menu, qtbot):
+    """The Open Agent entries work while stopped, requesting an auto-start."""
+    _, controller = conductor_menu
+    with qtbot.waitSignal(controller.connect_agent_requested) as connected:
+        controller.open_claude_action.trigger()
+    assert connected.args == ["claude"]
+
+
+def test_state_changes_are_broadcast_for_dependent_views(conductor_menu, qtbot):
+    """Every state transition is observable (the connect dialog relies on it)."""
+    _, controller = conductor_menu
+    with qtbot.waitSignal(controller.state_changed) as changed:
+        controller.set_starting()
+    assert changed.args == ["starting", ""]
+    with qtbot.waitSignal(controller.state_changed) as changed:
+        controller.set_running(URL, controller.settings)
+    assert changed.args == ["running", URL]
+
+
+def test_connect_dialog_tracks_server_state(conductor_menu, qtbot):
+    """The dialog shows live snippets for the configured or actual server."""
+    _, controller = conductor_menu
+    controller.set_settings(ConductorSettings(port=4321))
+    controller.connect_action.trigger()
+    dialog = controller._connect_dialog
+    assert dialog is not None
+    assert dialog.isVisible()
+
+    assert ":4321/mcp" in dialog.claude_command.text()
+    assert dialog.claude_command.text().startswith("claude mcp add")
+    assert ":4321/mcp" in dialog.codex_config.toPlainText()
+    assert dialog.start_button.isVisible()
+    assert "Stopped" in dialog.status_label.text()
+
+    controller.set_running(URL, controller.settings)
+    assert URL in dialog.claude_command.text()
+    assert dialog.url_field.text() == URL
+    assert not dialog.start_button.isVisible()
+    assert "Running" in dialog.status_label.text()
+
+    dialog.claude_copy.click()
+    assert QApplication.clipboard().text() == dialog.claude_command.text()
+    with qtbot.waitSignal(controller.connect_agent_requested) as connected:
+        dialog.claude_launch.click()
+    assert connected.args == ["claude"]
+
+    # Re-triggering raises the same dialog rather than building a second one.
+    controller.connect_action.trigger()
+    assert controller._connect_dialog is dialog
+    dialog.close()
+
+
+def test_connect_dialog_start_button_requests_a_start(conductor_menu, qtbot):
+    """The explicit start button uses the currently configured settings."""
+    _, controller = conductor_menu
+    controller.set_settings(ConductorSettings(port=4321, allow_code=True))
+    controller.show_connect_dialog()
+    dialog = controller._connect_dialog
+    with qtbot.waitSignal(controller.start_requested) as started:
+        dialog.start_button.click()
+    assert started.args == [4321, True]
+    dialog.close()
 
 
 def test_accepted_settings_mark_running_server_for_restart(

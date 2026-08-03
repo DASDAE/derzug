@@ -19,6 +19,8 @@ it a real cheat-sheet: the canonical "view data" recipe, conventions (single
 undoable), the discovery tools, and the common node types. Removes most flailing
 because the agent follows the recipe instead of discovering the workflow.
 
+Since extended: the briefing lives in `conductor/rules.py` and is also served by a `get_derzug_rules` tool (works in Codex, which ignores MCP prompts) and referenced by the generated project skill (`conductor/skill_assets/SKILL.md`), which teaches discovery via the server registry.
+
 ### 4. Default `connect` ports to `"Patch"`  ✅ implemented
 Reorder the `connect`/`disconnect` tools to `(source_id, sink_id,
 source_port="Patch", sink_port="Patch")` so the standard case is `connect(src,

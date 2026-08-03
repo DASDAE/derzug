@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import io
+import json
 import os
 import sys
 import types
@@ -378,34 +379,51 @@ class TestDerZugMainWindow:
         )
 
     def test_conductor_menu_controls_service_lifecycle(
-        self, derzug_app, monkeypatch, tmp_path
+        self, derzug_app, monkeypatch, tmp_path, qtbot
     ):
         """Menu actions start, launch against, and stop the owned service."""
         main = derzug_app.main
         window = derzug_app.window
         controls = window.conductor_controls
         services = []
-        start_calls = []
+        create_calls = []
         launch_calls = []
 
         class _FakeService:
             def __init__(self, port):
+                self.host = "127.0.0.1"
+                self.port = port
+                self.server_id = f"fake{port}"
                 self.url = f"http://127.0.0.1:{port}/mcp"
                 self.stop_calls = 0
+                self._status = "idle"
 
-            def stop(self):
+            def launch(self):
+                self._status = "running"
+
+            def status(self):
+                return self._status
+
+            def request_stop(self):
+                self._status = "idle"
+
+            def is_stopped(self):
+                return self._status == "idle"
+
+            def stop(self, timeout=5.0):
                 self.stop_calls += 1
+                self._status = "idle"
 
-        def _fake_start(window_arg, **kwargs):
+        def _fake_create(window_arg, **kwargs):
             assert window_arg is window
-            start_calls.append(kwargs)
+            create_calls.append(kwargs)
             service = _FakeService(kwargs["port"])
             services.append(service)
             return service
 
         monkeypatch.chdir(tmp_path)
         mcp_server = types.ModuleType("derzug.conductor.mcp_server")
-        mcp_server.start_conductor = _fake_start
+        mcp_server.create_service = _fake_create
         monkeypatch.setitem(sys.modules, "derzug.conductor.mcp_server", mcp_server)
         monkeypatch.setattr(
             "derzug.conductor.launch.launch_agent_in_terminal",
@@ -416,36 +434,118 @@ class TestDerZugMainWindow:
         controls.set_settings(ConductorSettings(port=5432, allow_code=True))
 
         controls.start_action.trigger()
+        qtbot.waitUntil(lambda: controls.url == services[0].url)
 
-        assert start_calls == [
-            {
-                "config_path": tmp_path / ".mcp.json",
-                "port": 5432,
-                "allow_code": True,
-            }
-        ]
-        assert controls.url == services[0].url
+        assert create_calls == [{"port": 5432, "allow_code": True}]
+        config = json.loads((tmp_path / ".mcp.json").read_text())
+        assert config["mcpServers"]["derzug-conductor"]["url"] == services[0].url
         assert controls.stop_action.isEnabled()
 
         controls.set_settings(ConductorSettings(port=5433, allow_code=False))
         assert controls.restart_action.text() == "Restart Server (Apply Settings)"
         controls.restart_action.trigger()
+        qtbot.waitUntil(lambda: len(services) > 1 and controls.url == services[1].url)
         assert services[0].stop_calls == 1
-        assert start_calls[-1] == {
-            "config_path": tmp_path / ".mcp.json",
-            "port": 5433,
-            "allow_code": False,
-        }
-        assert controls.url == services[1].url
+        assert create_calls[-1] == {"port": 5433, "allow_code": False}
 
         controls.open_codex_action.trigger()
         assert launch_calls == [("codex", str(tmp_path), services[1].url)]
 
         controls.stop_action.trigger()
+        qtbot.waitUntil(lambda: controls.url is None)
         assert services[1].stop_calls == 1
-        assert main._conductor_service is None
-        assert controls.url is None
+        assert main._conductor_lifecycle.service is None
         assert controls.start_action.isEnabled()
+
+    def test_conductor_open_agent_auto_starts_the_server(
+        self, derzug_app, monkeypatch, tmp_path, qtbot
+    ):
+        """Launching an agent while stopped starts the server, then connects."""
+        window = derzug_app.window
+        controls = window.conductor_controls
+        launch_calls = []
+
+        class _FakeService:
+            host = "127.0.0.1"
+            port = 4319
+            server_id = "auto0000"
+            url = "http://127.0.0.1:4319/mcp"
+            _status = "idle"
+
+            def launch(self):
+                self._status = "running"
+
+            def status(self):
+                return self._status
+
+            def request_stop(self):
+                self._status = "idle"
+
+            def is_stopped(self):
+                return self._status == "idle"
+
+            def stop(self, timeout=5.0):
+                self._status = "idle"
+
+        service = _FakeService()
+        monkeypatch.chdir(tmp_path)
+        mcp_server = types.ModuleType("derzug.conductor.mcp_server")
+        mcp_server.create_service = lambda *_args, **_kwargs: service
+        monkeypatch.setitem(sys.modules, "derzug.conductor.mcp_server", mcp_server)
+        monkeypatch.setattr(
+            "derzug.conductor.launch.launch_agent_in_terminal",
+            lambda agent, cwd, url: launch_calls.append((agent, cwd, url)) or True,
+        )
+
+        assert controls.url is None
+        controls.open_claude_action.trigger()
+        qtbot.waitUntil(lambda: bool(launch_calls))
+
+        assert launch_calls == [("claude", str(tmp_path), service.url)]
+        assert controls.url == service.url
+
+    def test_conductor_menu_shows_transient_starting_state(
+        self, derzug_app, monkeypatch, tmp_path, qtbot
+    ):
+        """A slow start leaves the GUI live, showing the intermediate state."""
+        window = derzug_app.window
+        controls = window.conductor_controls
+
+        class _SlowService:
+            host = "127.0.0.1"
+            port = 4319
+            server_id = "slow0000"
+            url = "http://127.0.0.1:4319/mcp"
+            _status = "idle"
+
+            def launch(self):
+                self._status = "starting"
+
+            def status(self):
+                return self._status
+
+            def stop(self, timeout=5.0):
+                self._status = "idle"
+
+        service = _SlowService()
+        monkeypatch.chdir(tmp_path)
+        mcp_server = types.ModuleType("derzug.conductor.mcp_server")
+        mcp_server.create_service = lambda *_args, **_kwargs: service
+        monkeypatch.setitem(sys.modules, "derzug.conductor.mcp_server", mcp_server)
+
+        controls.start_action.trigger()
+        assert controls.status_action.text() == "Status: Starting..."
+        assert not controls.start_action.isEnabled()
+
+        # A restart mid-start is refused: honoring it would strand a stop
+        # request and fire the pending restart on some unrelated later stop.
+        main = derzug_app.main
+        assert main._restart_conductor(window, port=9999, allow_code=False) is False
+        assert main._conductor_pending_restart is None
+
+        service._status = "running"
+        qtbot.waitUntil(lambda: controls.url == service.url)
+        assert controls.status_action.text().startswith("Status: Running")
 
     def test_conductor_start_failure_returns_menu_to_stopped(
         self, derzug_app, monkeypatch
@@ -455,11 +555,12 @@ class TestDerZugMainWindow:
         controls = window.conductor_controls
         errors = []
 
-        def _fail_start(*_args, **_kwargs):
-            raise OSError("port is already in use")
+        class _FailingService:
+            def launch(self):
+                raise OSError("port is already in use")
 
         mcp_server = types.ModuleType("derzug.conductor.mcp_server")
-        mcp_server.start_conductor = _fail_start
+        mcp_server.create_service = lambda *_args, **_kwargs: _FailingService()
         monkeypatch.setitem(sys.modules, "derzug.conductor.mcp_server", mcp_server)
         monkeypatch.setattr(
             QMessageBox,
@@ -479,28 +580,46 @@ class TestDerZugMainWindow:
         assert controls.start_action.isEnabled()
 
     def test_conductor_keeps_service_when_stop_fails(
-        self, derzug_app, monkeypatch, tmp_path
+        self, derzug_app, monkeypatch, tmp_path, qtbot
     ):
         """A server that will not stop stays owned so a restart cannot race it."""
         main = derzug_app.main
         window = derzug_app.window
         controls = window.conductor_controls
         warnings = []
-        start_calls = []
+        create_calls = []
 
         class _UnstoppableService:
+            host = "127.0.0.1"
+            port = 4319
+            server_id = "stuck000"
             url = "http://127.0.0.1:4319/mcp"
+            _status = "idle"
+            stop_calls = 0
 
-            def stop(self):
-                raise RuntimeError("server thread did not exit")
+            def launch(self):
+                self._status = "running"
 
-        def _fake_start(_window, **kwargs):
-            start_calls.append(kwargs)
+            def status(self):
+                return self._status
+
+            def request_stop(self):
+                pass
+
+            def is_stopped(self):
+                return False
+
+            def stop(self, timeout=5.0):
+                self.stop_calls += 1
+
+        def _fake_create(_window, **kwargs):
+            create_calls.append(kwargs)
             return _UnstoppableService()
 
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("derzug.conductor.lifecycle.STOP_TIMEOUT", 0.05)
         mcp_server = types.ModuleType("derzug.conductor.mcp_server")
-        mcp_server.start_conductor = _fake_start
+        mcp_server.create_service = _fake_create
         monkeypatch.setitem(sys.modules, "derzug.conductor.mcp_server", mcp_server)
         monkeypatch.setattr(
             QMessageBox,
@@ -509,25 +628,25 @@ class TestDerZugMainWindow:
         )
 
         controls.start_action.trigger()
-        assert len(start_calls) == 1
+        qtbot.waitUntil(lambda: controls.url is not None)
+        assert len(create_calls) == 1
 
         controls.stop_action.trigger()
+        qtbot.waitUntil(lambda: bool(warnings))
 
-        assert warnings == [
-            (
-                "Conductor Stop Failed",
-                "The Conductor server reported an error while stopping:\n\n"
-                "server thread did not exit",
-            )
-        ]
-        assert main._conductor_service is not None
+        title, detail = warnings[0]
+        assert title == "Conductor Stop Failed"
+        assert "did not stop within" in detail
+        assert main._conductor_lifecycle.service is not None
         assert controls.status_action.text().startswith("Status: Running")
 
         # A restart must not start a second server against the still-bound port.
         controls.restart_action.trigger()
-        assert len(start_calls) == 1
+        qtbot.waitUntil(lambda: len(warnings) == 2)
+        assert len(create_calls) == 1
+        assert main._conductor_lifecycle.service is not None
 
-        main._conductor_service = None
+        main._conductor_lifecycle.shutdown()
 
     def test_conductor_reports_non_mcp_import_errors_verbatim(
         self, derzug_app, monkeypatch

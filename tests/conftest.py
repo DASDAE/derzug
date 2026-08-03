@@ -193,8 +193,12 @@ def derzug_app(qapp, tmp_path_factory) -> DerZugAppContext:
     # Keep Orange cache writes inside a sandbox-writable location.
     cache_home = tmp_path_factory.mktemp("derzug-app-cache")
     data_home = tmp_path_factory.mktemp("derzug-app-data")
+    state_home = tmp_path_factory.mktemp("derzug-app-state")
     os.environ["XDG_CACHE_HOME"] = str(cache_home)
     os.environ["XDG_DATA_HOME"] = str(data_home)
+    # Keep the Conductor discovery registry out of the user's real state dir.
+    os.environ["XDG_STATE_HOME"] = str(state_home)
+    os.environ["LOCALAPPDATA"] = str(state_home)
     main.parse_arguments(
         [sys.argv[0], "--no-splash", "--no-welcome", "--force-discovery"]
     )

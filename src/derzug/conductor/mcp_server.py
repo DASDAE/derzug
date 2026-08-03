@@ -21,62 +21,38 @@ app never depends on ``mcp``.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import socket
 import threading
 import time
-from pathlib import Path
+import uuid
+from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from derzug.conductor.constants import DEFAULT_HOST, DEFAULT_PORT
+from derzug.conductor.constants import DEFAULT_HOST, DEFAULT_PORT, SERVER_NAME
 from derzug.conductor.controller import CanvasController
 from derzug.conductor.dispatch import MainThreadDispatcher
-from derzug.conductor.launch import SERVER_NAME, launch_agent_in_terminal
+from derzug.conductor.rules import AGENT_RULES
+from derzug.version import __version__
 
 log = logging.getLogger(__name__)
 
 
 def build_conductor_mcp(
-    controller: CanvasController, dispatcher: MainThreadDispatcher
+    controller: CanvasController,
+    dispatcher: MainThreadDispatcher,
+    runtime_info: Callable[[], dict[str, Any]] | None = None,
 ) -> FastMCP:
-    """Return a FastMCP server whose tools drive ``controller`` on the main thread."""
-    mcp = FastMCP(
-        "DerZug Conductor",
-        instructions=(
-            "Drive a live DerZug DAS (distributed acoustic sensing) workflow "
-            "canvas of connected widget nodes.\n\n"
-            "COMMON RECIPE (view data): add_node('Spool') -> "
-            "set_params(spool_id, {'spool_input': 'example_event_1'}) -> "
-            "add_node('Waterfall') -> connect(spool_id, waterfall_id) -> "
-            "run(spool_id) -> wait_for_idle().\n\n"
-            "CONVENTIONS:\n"
-            "- Almost every node has one input port 'Patch' and one output port "
-            "'Patch'; connect(source_id, sink_id) defaults to them, so you rarely "
-            "need port names.\n"
-            "- Omit x/y on add_node; nodes auto-place in a tidy left-to-right "
-            "row.\n"
-            "- set_params/set_view take PARTIAL updates, are validated against the "
-            "node's schema, and return the prior value. They do NOT re-run the "
-            "node by default: assemble and configure the graph first, then call "
-            "run(source_id) once and wait_for_idle().\n"
-            "- run() only schedules execution; wait_for_idle() blocks until no "
-            "node is busy (each node also reports a 'busy' flag).\n"
-            "- Structural edits (add/remove/connect) are undoable in the app "
-            "(Ctrl+Z).\n"
-            "- show_node pops up a node's widget window to display results.\n\n"
-            "DISCOVERY: list_widget_types = the catalog with each type's "
-            "params/view schema; get_canvas_state = the current graph; "
-            "describe_node = one node's detail incl. its output patch shape.\n\n"
-            "COMMON NODE TYPES: Spool (source; loads data/examples), Filter "
-            "(bandpass etc.), Waterfall (2D image view), Wiggle (trace view), "
-            "Detrend, Taper, Resample, Select, Aggregate. See list_widget_types "
-            "for the full set and parameters."
-        ),
-    )
+    """Return a FastMCP server whose tools drive ``controller`` on the main thread.
+
+    ``runtime_info`` late-binds facts that only exist once the service runs
+    (resolved port, server id); it feeds the ``/health`` endpoint used by
+    discovery.
+    """
+    mcp = FastMCP("DerZug Conductor", instructions=AGENT_RULES)
 
     def call(func: Any, *args: Any, **kwargs: Any) -> Any:
         return dispatcher.run(func, *args, **kwargs)
@@ -200,18 +176,55 @@ def build_conductor_mcp(
         """Hide (close) a node's widget window."""
         call(controller.hide_node, node_id)
 
+    @mcp.tool()
+    def get_derzug_rules() -> dict[str, Any]:
+        """Version-matched briefing for driving this DerZug instance; call first.
+
+        Returns the authoritative conventions and recipes for this running
+        app, plus its version and connection identity. This supersedes any
+        generated skill or documentation file.
+        """
+        info = {} if runtime_info is None else runtime_info()
+        return {"version": __version__, **info, "rules": AGENT_RULES}
+
+    @mcp.prompt(name="connect")
+    def connect_prompt() -> str:
+        """Orient on the running DerZug canvas and await instructions."""
+        return (
+            "Call get_derzug_rules to load the current briefing for this "
+            "DerZug instance, then get_canvas_state to see the live canvas. "
+            "Briefly summarize what is on the canvas and await instructions."
+        )
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(_request: Any) -> Any:
+        """Answer discovery probes so stale registry records can be pruned."""
+        from starlette.responses import JSONResponse
+
+        info = {} if runtime_info is None else runtime_info()
+        return JSONResponse(
+            {
+                "status": "healthy",
+                "server": SERVER_NAME,
+                "version": __version__,
+                **info,
+            }
+        )
+
     return mcp
 
 
 class ConductorService:
     """Owns the Conductor MCP server lifecycle: bind, serve, readiness, stop.
 
-    ``start`` pre-binds the listening socket on the calling thread — a port
+    ``launch`` pre-binds the listening socket on the calling thread — a port
     conflict raises immediately instead of dying silently inside a worker —
     then serves the streamable-http app on a background uvicorn server and
-    blocks until it reports ready (or raises on startup failure). ``stop``
-    halts the dispatcher (releasing any in-flight marshalled calls), signals
-    uvicorn to exit, and joins the thread.
+    returns at once; callers poll ``status`` for readiness. ``request_stop``
+    halts the dispatcher (releasing any in-flight marshalled calls) and
+    signals uvicorn to exit without blocking; ``is_stopped`` reports thread
+    exit. The blocking ``start``/``stop`` pair remains for non-GUI callers
+    (tests, teardown) that can afford to wait.
     """
 
     def __init__(
@@ -228,6 +241,8 @@ class ConductorService:
         self._dispatcher = dispatcher
         self._server: Any | None = None
         self._thread: threading.Thread | None = None
+        self._sock: socket.socket | None = None
+        self.server_id = uuid.uuid4().hex[:12]
 
     @property
     def host(self) -> str:
@@ -236,7 +251,7 @@ class ConductorService:
 
     @property
     def port(self) -> int:
-        """The bound port (resolved after ``start`` when constructed with 0)."""
+        """The bound port (resolved after ``launch`` when constructed with 0)."""
         return self._port
 
     @property
@@ -244,19 +259,33 @@ class ConductorService:
         """The server's MCP endpoint URL."""
         return f"http://{self._host}:{self._port}/mcp"
 
-    def start(self, timeout: float = 15.0) -> str:
-        """Bind, serve in a background thread, and wait for readiness; return URL.
+    def launch(self) -> None:
+        """Bind the port and serve in a background thread; return immediately.
 
-        Raises ``OSError`` when the port is already taken and ``RuntimeError``
-        when the server exits or is not ready within ``timeout`` seconds.
+        Raises ``OSError`` when the port is already taken. Poll ``status`` for
+        readiness (``"running"``) or startup failure (``"exited"``).
         """
         import uvicorn
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+        if self._thread is not None:
+            raise RuntimeError("Conductor MCP server already launched")
+        if self._host not in ("127.0.0.1", "localhost"):
+            # The trust model (no auth, Host allowlist) only holds on loopback.
+            raise ValueError(
+                f"Conductor binds loopback only; refusing host {self._host!r}"
+            )
         sock = socket.create_server((self._host, self._port))
         try:
             self._port = sock.getsockname()[1]  # resolves an ephemeral port (0)
+            app = self._mcp.streamable_http_app()
+            # Loopback binding does not stop a hostile web page from steering a
+            # browser at this port via DNS rebinding; validating Host does.
+            app.add_middleware(
+                TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"]
+            )
             config = uvicorn.Config(
-                self._mcp.streamable_http_app(),
+                app,
                 host=self._host,
                 port=self._port,
                 log_level="warning",
@@ -269,9 +298,48 @@ class ConductorService:
                 daemon=True,
             )
             self._thread.start()
-            deadline = time.monotonic() + timeout
-            while not self._server.started:
-                if not self._thread.is_alive():
+        except BaseException:
+            self._server = None
+            self._thread = None
+            sock.close()
+            raise
+        self._sock = sock
+
+    def status(self) -> str:
+        """One of ``"idle"``, ``"starting"``, ``"running"``, or ``"exited"``."""
+        thread = self._thread
+        if thread is None:
+            return "idle"
+        server = self._server
+        if server is not None and server.started and thread.is_alive():
+            return "running"
+        if not thread.is_alive():
+            return "exited"
+        return "starting"
+
+    def request_stop(self) -> None:
+        """Signal shutdown without blocking; poll ``is_stopped`` for completion."""
+        if self._dispatcher is not None:
+            self._dispatcher.stop()
+        if self._server is not None:
+            self._server.should_exit = True
+
+    def is_stopped(self) -> bool:
+        """Whether the server thread has exited (or never ran)."""
+        return self._thread is None or not self._thread.is_alive()
+
+    def start(self, timeout: float = 15.0) -> str:
+        """Launch and block until ready; return the URL.
+
+        A blocking convenience for callers off the GUI thread. Raises
+        ``OSError`` when the port is already taken and ``RuntimeError`` when
+        the server exits or is not ready within ``timeout`` seconds.
+        """
+        self.launch()
+        deadline = time.monotonic() + timeout
+        try:
+            while (status := self.status()) != "running":
+                if status == "exited":
                     raise RuntimeError("Conductor MCP server exited during startup")
                 if time.monotonic() > deadline:
                     raise RuntimeError(
@@ -280,96 +348,54 @@ class ConductorService:
                 time.sleep(0.05)
         except BaseException:
             self.stop()
-            sock.close()
             raise
         log.info("Conductor MCP server ready at %s", self.url)
         return self.url
 
     def stop(self, timeout: float = 5.0) -> None:
         """Shut down: stop the dispatcher, signal uvicorn to exit, join the thread."""
-        if self._dispatcher is not None:
-            self._dispatcher.stop()
-        if self._server is not None:
-            self._server.should_exit = True
+        self.request_stop()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout)
             if self._thread.is_alive():
                 log.warning("Conductor MCP server thread did not stop cleanly")
+        if self._sock is not None and self.is_stopped():
+            with suppress(OSError):
+                self._sock.close()
+        self._sock = None
         self._server = None
         self._thread = None
 
 
-def write_mcp_config(
-    path: str | Path,
-    *,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
-    name: str = SERVER_NAME,
-) -> str:
-    """Merge our server entry into the MCP client config at ``path``; return URL.
-
-    The file is an ``.mcp.json`` a client such as Claude Code picks up. An
-    existing config keeps its other entries — only ``mcpServers[name]`` is
-    replaced — and the file is written atomically (temp file + rename). An
-    existing file that is not valid JSON is left untouched (logged), so a
-    user's hand-edited config is never clobbered.
-    """
-    url = f"http://{host}:{port}/mcp"
-    path = Path(path)
-    config: dict[str, Any] = {}
-    if path.exists():
-        try:
-            config = json.loads(path.read_text())
-        except ValueError:
-            log.error(
-                "Existing %s is not valid JSON; leaving it untouched. "
-                "Add the server yourself: %s",
-                path,
-                url,
-            )
-            return url
-        if not isinstance(config, dict):
-            config = {}
-    servers = config.setdefault("mcpServers", {})
-    servers[name] = {"type": "http", "url": url}
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(config, indent=2))
-    os.replace(tmp, path)
-    return url
-
-
-def start_conductor(
+def create_service(
     window: Any,
     *,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    config_path: str | Path | None = None,
-    agent: str | None = None,
     allow_code: bool = False,
 ) -> ConductorService:
-    """Wire and start the in-app Conductor MCP server for ``window``.
+    """Wire an unstarted Conductor service for ``window``.
 
-    Builds a ``CanvasController`` + ``MainThreadDispatcher``, starts a
-    ``ConductorService`` and waits for readiness (raising on bind/startup
-    failure). Only after the server is ready is the client config written and,
-    when ``agent`` is given (e.g. ``"claude"`` / ``"codex"``), the agent
-    launched in a new terminal in the config directory. The caller owns the
-    returned service and should ``stop()`` it on application teardown.
+    Builds a fresh ``CanvasController`` + ``MainThreadDispatcher`` per service
+    (the dispatcher's stop latch is one-way, so a service is never reused
+    across starts). The caller owns the returned service: ``launch`` it, poll
+    ``status``, and ``stop`` it on teardown.
     """
     controller = CanvasController(window, allow_code=allow_code)
     dispatcher = MainThreadDispatcher()
-    mcp = build_conductor_mcp(controller, dispatcher)
+    holder: dict[str, Any] = {}
+
+    def runtime_info() -> dict[str, Any]:
+        service = holder.get("service")
+        if service is None:
+            return {}
+        return {
+            "server_id": service.server_id,
+            "mcp_url": service.url,
+            "allow_code": allow_code,
+        }
+
+    mcp = build_conductor_mcp(controller, dispatcher, runtime_info=runtime_info)
     service = ConductorService(mcp, host=host, port=port, dispatcher=dispatcher)
-    try:
-        url = service.start()
-        cwd = os.getcwd()
-        if config_path is not None:
-            write_mcp_config(config_path, host=service.host, port=service.port)
-            cwd = str(Path(config_path).resolve().parent)
-            log.info("Conductor client config written to %s", config_path)
-        if agent:
-            launch_agent_in_terminal(agent, cwd, url)
-    except BaseException:
-        service.stop()
-        raise
+    holder["service"] = service
     return service
