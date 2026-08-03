@@ -14,27 +14,30 @@ handles model credentials.
    pip install '.[conductor]'
    ```
 
-2. Start DerZug with the Conductor server:
+2. Start DerZug:
 
    ```bash
-   derzug --conductor
+   derzug
    ```
 
-   This starts an MCP server on `http://127.0.0.1:4319/mcp` and merges a
-   `derzug-conductor` entry into the `.mcp.json` in the current directory
-   (other entries in an existing file are preserved; the file is gitignored).
-   A port conflict or startup failure is reported immediately, and the server
-   shuts down with the application.
+   Open the **Conductor** menu and choose **Start Server**. The status entry
+   reports the active MCP URL (by default `http://127.0.0.1:4319/mcp`). Starting
+   the server merges a `derzug-conductor` entry into the `.mcp.json` in the
+   current directory; other entries are preserved and the file is gitignored.
 
-3. From that directory, start your agent (Claude Code picks up `.mcp.json`):
+3. Choose **Open Agent → Claude Code** or **Open Agent → Codex** to launch a
+   pre-wired client in a new terminal. You can also start an agent yourself from
+   the directory containing `.mcp.json` (Claude Code picks it up automatically):
 
    ```bash
    claude
    ```
 
-   Or let DerZug launch it for you in a new terminal, pre-wired:
+   For automation or the previous one-command workflow, the CLI flags remain
+   available:
 
    ```bash
+   derzug --conductor
    derzug --agent claude   # or: derzug --agent codex
    ```
 
@@ -83,6 +86,28 @@ surface (hidden from the catalog; add/configure rejected) unless you opt in:
 derzug --conductor --conductor-allow-code
 ```
 
+You can also opt in for the current session through **Conductor → Settings...**.
+The menu does not persist this permission.
+
+## Menu controls
+
+The **Conductor** menu remains available whether the server is running or not:
+
+- **Start Server**, **Stop Server**, and **Restart Server** own the service
+  lifecycle. Closing DerZug also stops the service.
+- **Copy MCP URL** and **Open Agent** are enabled only while the server is
+  running.
+- **Settings...** configures the port and the Code-widget permission. The port
+  is remembered across launches. The arbitrary-code permission is deliberately
+  session-only and defaults to off each time DerZug starts. Changes made while
+  the server is running take effect after **Restart Server (Apply Settings)**.
+
+The host is fixed to loopback (`127.0.0.1`). Port conflicts, missing optional
+dependencies, and agent-launch failures are reported in the UI and leave the
+menu in a usable state. If a shutdown fails the server keeps its port, so the
+menu stays in the running state and **Restart Server** is refused rather than
+racing the old server for the port; **Stop Server** can be retried.
+
 ## Architecture
 
 - `conductor/controller.py` — `CanvasController`, the main-thread surface over the
@@ -97,7 +122,9 @@ derzug --conductor --conductor-allow-code
   the dispatcher) and owns its lifecycle via `ConductorService`: the port is
   pre-bound (a conflict raises at startup), readiness is awaited before the
   client config is written or an agent launched, and the service stops on
-  application teardown. Imported only when `--conductor` is used, so the core
+  application teardown. Imported only when the server is started, so the core
   app never depends on `mcp`.
 - `conductor/launch.py` — agent launch helpers: the per-agent connect command
   and the cross-platform "open a terminal" spawn.
+- `views/conductor.py` — the always-available menu, lifecycle state display,
+  and settings dialog. It has no dependency on the optional MCP package.

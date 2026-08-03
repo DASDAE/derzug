@@ -64,3 +64,33 @@ def test_workflow_argument_allows_dev_flag_after_path(monkeypatch):
     assert seen["dev_mode"] is True
     assert seen["show_demo"] is False
     assert seen["startup_workflow_path"] == "file_path.ows"
+
+
+def test_agent_flag_keeps_conductor_cli_startup_wiring(monkeypatch):
+    """Agent startup still enables Conductor and forwards the security opt-in."""
+    seen: dict[str, object] = {}
+
+    class _FakeMain:
+        def run(self, argv):
+            seen["argv"] = argv
+            seen["conductor_enabled"] = self.conductor_enabled
+            seen["conductor_agent"] = self.conductor_agent
+            seen["conductor_allow_code"] = self.conductor_allow_code
+            return 0
+
+    monkeypatch.setattr("derzug.views.orange.DerZugMain", _FakeMain)
+    monkeypatch.setattr("derzug.views.orange.ensure_linux_desktop_entry", lambda: None)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.app,
+        ["--agent", "codex", "--conductor-allow-code"],
+    )
+
+    assert result.exit_code == 0
+    assert seen == {
+        "argv": ["derzug"],
+        "conductor_enabled": True,
+        "conductor_agent": "codex",
+        "conductor_allow_code": True,
+    }
