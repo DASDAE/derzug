@@ -190,9 +190,9 @@ class ConductorLifecycle(QObject):
         write_mcp_config(config_path, host=service.host, port=service.port)
         log.info("Conductor client config written to %s", config_path)
         try:
-            # Best-effort: a read-only project must not fail the server start.
+            # Best-effort: a broken project dir must not fail the server start.
             write_skill_files(self._config_dir)
-        except OSError:
+        except Exception:
             log.warning("Could not write Conductor skill files", exc_info=True)
         registry.write_record(
             registry.ServerRecord(

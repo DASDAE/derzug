@@ -78,6 +78,17 @@ def test_service_reports_port_conflict_on_launch(blank_canvas):
     assert service.status() == "idle"
 
 
+def test_service_refuses_a_non_loopback_bind(blank_canvas):
+    """The no-auth trust model only holds on loopback, so launch enforces it."""
+    from derzug.conductor.mcp_server import ConductorService
+
+    window, _ = blank_canvas
+    mcp, _ = _server(window)
+    service = ConductorService(mcp, host="0.0.0.0", port=0)
+    with pytest.raises(ValueError, match="loopback only"):
+        service.launch()
+
+
 def test_service_start_ready_and_stop(blank_canvas):
     """The service binds an ephemeral port, reports ready, and stops cleanly."""
     from derzug.conductor.mcp_server import ConductorService

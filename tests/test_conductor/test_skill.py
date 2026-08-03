@@ -45,3 +45,15 @@ def test_write_skill_files_overwrites_only_generated_copies(tmp_path):
     assert written == [stale]
     assert stale.read_text() == skill_text()
     assert user_owned.read_text() == "my own notes, marker removed"
+
+
+def test_write_skill_files_skips_an_undecodable_existing_file(tmp_path):
+    """A file we cannot even read back is treated as user-owned, not an error."""
+    first = write_skill_files(tmp_path)
+    binary = first[0]
+    binary.write_bytes(b"\xff\xfe not utf-8 \xff")
+
+    written = write_skill_files(tmp_path)
+
+    assert written == [first[1]]
+    assert binary.read_bytes() == b"\xff\xfe not utf-8 \xff"

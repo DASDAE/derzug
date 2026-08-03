@@ -270,6 +270,11 @@ class ConductorService:
 
         if self._thread is not None:
             raise RuntimeError("Conductor MCP server already launched")
+        if self._host not in ("127.0.0.1", "localhost"):
+            # The trust model (no auth, Host allowlist) only holds on loopback.
+            raise ValueError(
+                f"Conductor binds loopback only; refusing host {self._host!r}"
+            )
         sock = socket.create_server((self._host, self._port))
         try:
             self._port = sock.getsockname()[1]  # resolves an ephemeral port (0)

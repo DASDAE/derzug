@@ -3027,6 +3027,7 @@ class DerZugMain(OMain):
     def _on_conductor_started(self, url: str) -> None:
         """Reflect the ready server in the menu and launch any pending agent."""
         window, controls = self._conductor_ui()
+        self._conductor_pending_restart = None
         if controls is not None and self._conductor_active_settings is not None:
             controls.set_running(url, self._conductor_active_settings)
         agent = self._conductor_pending_agent
@@ -3113,6 +3114,10 @@ class DerZugMain(OMain):
             return False
         if lifecycle.service is None:
             return self._start_conductor(window, port=port, allow_code=allow_code)
+        if lifecycle.phase != "running":
+            # A start or stop is already in flight; a stop request would be
+            # ignored and the pending restart would fire on some later stop.
+            return False
         self._conductor_pending_restart = (port, allow_code)
         self._stop_conductor()
         return True

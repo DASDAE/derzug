@@ -65,7 +65,7 @@ def test_prune_removes_dead_pid_records(tmp_path, monkeypatch):
 
     probes = []
     monkeypatch.setattr(
-        registry, "_health_ok", lambda record: probes.append(record) or True
+        registry, "_probe_health", lambda record: probes.append(record) or "live"
     )
     assert registry.prune_stale(tmp_path) == []
     assert probes == []  # short-circuited by the pid check
@@ -73,16 +73,27 @@ def test_prune_removes_dead_pid_records(tmp_path, monkeypatch):
 
 
 def test_prune_health_checks_live_pids(tmp_path, monkeypatch):
-    """A live process that no longer answers /health is pruned; healthy stays."""
+    """A provably dead server is pruned; a healthy one stays advertised."""
     healthy = _record("healthy00001")
     silent = _record("silent000002")
     monkeypatch.setattr(
-        registry, "_health_ok", lambda record: record.server_id == healthy.server_id
+        registry,
+        "_probe_health",
+        lambda record: "live" if record.server_id == healthy.server_id else "stale",
     )
     registry.write_record(healthy, tmp_path)
     registry.write_record(silent, tmp_path)
     assert registry.discover(tmp_path) == [healthy]
     assert registry.list_records(tmp_path) == [healthy]
+
+
+def test_prune_keeps_records_whose_probe_is_inconclusive(tmp_path, monkeypatch):
+    """A timeout must not erase a live sibling; the record just isn't reported."""
+    busy = _record("busy00000001")
+    monkeypatch.setattr(registry, "_probe_health", lambda record: "unknown")
+    registry.write_record(busy, tmp_path)
+    assert registry.discover(tmp_path) == []
+    assert registry.list_records(tmp_path) == [busy]
 
 
 def test_pid_alive_reports_this_process_and_a_reaped_child():
@@ -95,8 +106,8 @@ def test_pid_alive_reports_this_process_and_a_reaped_child():
     assert registry._pid_alive(proc.pid) is False
 
 
-def test_health_ok_requires_a_healthy_matching_identity(monkeypatch):
-    """The probe accepts only a 200 'healthy' answer from the same server."""
+def test_probe_health_requires_the_full_matching_identity(monkeypatch):
+    """Only a 200 'healthy' answer naming this exact server counts as live."""
     record = _record()
     payloads = {}
 
@@ -115,19 +126,37 @@ def test_health_ok_requires_a_healthy_matching_identity(monkeypatch):
     monkeypatch.setattr(
         registry.urllib.request, "urlopen", lambda url, timeout: _Response()
     )
-    payloads.update({"status": "healthy", "server_id": record.server_id})
-    assert registry._health_ok(record) is True
-    payloads["server_id"] = "someone-else"
-    assert registry._health_ok(record) is False
-    payloads.update({"status": "stopping", "server_id": record.server_id})
-    assert registry._health_ok(record) is False
+    identity = {
+        "status": "healthy",
+        "server": "derzug-conductor",
+        "server_id": record.server_id,
+    }
+    payloads.update(identity)
+    assert registry._probe_health(record) == "live"
+    # A reused port answering as someone (or something) else is stale.
+    payloads.update(identity | {"server_id": "someone-else"})
+    assert registry._probe_health(record) == "stale"
+    payloads.update(identity | {"server": "another-app"})
+    assert registry._probe_health(record) == "stale"
+    payloads.clear()
+    payloads.update({"status": "healthy", "server": "derzug-conductor"})
+    assert registry._probe_health(record) == "stale"  # identity missing
+    payloads.update(identity | {"status": "stopping"})
+    assert registry._probe_health(record) == "stale"
 
 
-def test_health_ok_is_false_when_nothing_answers(monkeypatch):
-    """A connection failure marks the record stale instead of raising."""
+def test_probe_health_distinguishes_refusal_from_timeout(monkeypatch):
+    """Nothing-listening is provably stale; a slow answer stays inconclusive."""
+    import urllib.error
 
     def _refuse(url, timeout):
-        raise OSError("connection refused")
+        raise urllib.error.URLError(ConnectionRefusedError("refused"))
 
     monkeypatch.setattr(registry.urllib.request, "urlopen", _refuse)
-    assert registry._health_ok(_record()) is False
+    assert registry._probe_health(_record()) == "stale"
+
+    def _hang(url, timeout):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(registry.urllib.request, "urlopen", _hang)
+    assert registry._probe_health(_record()) == "unknown"

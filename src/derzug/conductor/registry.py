@@ -15,10 +15,13 @@ import json
 import logging
 import os
 import sys
+import urllib.error
 import urllib.request
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from derzug.conductor.constants import SERVER_NAME
 
 log = logging.getLogger(__name__)
 
@@ -88,14 +91,23 @@ def list_records(directory: Path | None = None) -> list[ServerRecord]:
 
 
 def prune_stale(directory: Path | None = None) -> list[ServerRecord]:
-    """Delete records whose server is gone; return the live ones."""
+    """Delete records whose server is provably gone; return the live ones.
+
+    A probe that cannot tell dead from busy (e.g. a timeout under load) keeps
+    the record on disk — one slow answer must not erase a live sibling — but
+    does not report it live either.
+    """
     directory = state_dir() if directory is None else directory
     live = []
     for record in list_records(directory):
-        if _pid_alive(record.pid) is False or not _health_ok(record):
+        if _pid_alive(record.pid) is False:
             remove_record(record.server_id, directory)
-        else:
+            continue
+        probe = _probe_health(record)
+        if probe == "live":
             live.append(record)
+        elif probe == "stale":
+            remove_record(record.server_id, directory)
     return live
 
 
@@ -117,20 +129,42 @@ def _pid_alive(pid: int) -> bool | None:
     return True
 
 
-def _health_ok(record: ServerRecord, timeout: float = _HEALTH_TIMEOUT) -> bool:
-    """Whether the recorded server answers ``/health`` as itself."""
+def _probe_health(record: ServerRecord, timeout: float = _HEALTH_TIMEOUT) -> str:
+    """Classify a record as ``"live"``, ``"stale"``, or ``"unknown"``.
+
+    ``"stale"`` means provably gone: nothing listens on the port, or whatever
+    answered is not this server (wrong identity, non-health payload — e.g. the
+    port was reused by another process). ``"unknown"`` covers probes that
+    could equally hit a busy server (timeouts and the like), so callers keep
+    the record.
+    """
     url = record.base_url.rstrip("/") + "/health"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            if response.status != 200:
-                return False
-            payload = json.loads(response.read().decode())
+            status = response.status
+            body = response.read()
+    except urllib.error.HTTPError:
+        return "stale"  # something answered, but not our health route
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, ConnectionRefusedError):
+            return "stale"  # nothing listens on the port anymore
+        return "unknown"
+    except ConnectionRefusedError:
+        return "stale"
     except Exception:
-        return False
-    if payload.get("status") != "healthy":
-        return False
-    server_id = payload.get("server_id")
-    return server_id is None or server_id == record.server_id
+        return "unknown"
+    if status != 200:
+        return "stale"
+    try:
+        payload = json.loads(body.decode())
+    except ValueError:
+        return "stale"
+    identity_matches = (
+        payload.get("status") == "healthy"
+        and payload.get("server") == SERVER_NAME
+        and payload.get("server_id") == record.server_id
+    )
+    return "live" if identity_matches else "stale"
 
 
 def _main() -> None:

@@ -537,6 +537,12 @@ class TestDerZugMainWindow:
         assert controls.status_action.text() == "Status: Starting..."
         assert not controls.start_action.isEnabled()
 
+        # A restart mid-start is refused: honoring it would strand a stop
+        # request and fire the pending restart on some unrelated later stop.
+        main = derzug_app.main
+        assert main._restart_conductor(window, port=9999, allow_code=False) is False
+        assert main._conductor_pending_restart is None
+
         service._status = "running"
         qtbot.waitUntil(lambda: controls.url == service.url)
         assert controls.status_action.text().startswith("Status: Running")

@@ -28,25 +28,32 @@ SKILL_DIRS = (
 def skill_text() -> str:
     """Return the packaged SKILL.md content."""
     asset = resources.files("derzug.conductor") / "skill_assets" / "SKILL.md"
-    return asset.read_text()
+    return asset.read_text(encoding="utf-8")
 
 
 def write_skill_files(project_dir: str | Path) -> list[Path]:
     """Write the skill into each client's skill dir under ``project_dir``.
 
     An existing file is overwritten only while it still carries the generated
-    marker; a user-modified copy is left alone (logged) and goes stale by
-    design. Returns the paths written.
+    marker; a copy that was modified — or that cannot even be read back —
+    belongs to the user and is left alone (logged), going stale by design.
+    Returns the paths written.
     """
     text = skill_text()
     written = []
     for skill_dir in SKILL_DIRS:
         path = Path(project_dir) / skill_dir / "SKILL.md"
-        if path.exists() and GENERATED_MARKER not in path.read_text():
-            log.info("Leaving user-modified skill file untouched: %s", path)
-            continue
+        if path.exists():
+            try:
+                existing = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                log.info("Leaving unreadable skill file untouched: %s", path)
+                continue
+            if GENERATED_MARKER not in existing:
+                log.info("Leaving user-modified skill file untouched: %s", path)
+                continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         written.append(path)
     return written
 

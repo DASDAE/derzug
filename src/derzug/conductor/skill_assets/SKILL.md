@@ -30,7 +30,7 @@ DerZug is a desktop app for DAS (distributed acoustic sensing) workflows: a canv
        r = json.loads(p.read_text())
        try:
            h = json.load(urllib.request.urlopen(r['base_url'] + '/health', timeout=1))
-           if h.get('status') == 'healthy' and h.get('server_id') == r['server_id']:
+           if h.get('status') == 'healthy' and h.get('server') == 'derzug-conductor' and h.get('server_id') == r['server_id']:
                print(json.dumps(r))
        except Exception:
            pass
