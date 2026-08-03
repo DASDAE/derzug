@@ -5,38 +5,36 @@ This file gives AI/code agents a practical checklist for contributing safely to 
 ## Scope and priorities
 
 1. Keep changes minimal, targeted, and test-backed.
-2. Preserve DASCore conventions over personal preferences.
+2. Preserve existing DerZug conventions over personal preferences.
 3. Prefer consistency with existing code/tests/docs in this repo.
 
 
 ## Environment setup
 
-Follow `docs/contributing/dev_install.qmd`.
+See `README.md` for installation and `docs/dev/guidelines.md` for conventions.
 
 Typical setup:
 
 ```bash
-git pull origin master --tags
+git pull origin main --tags
 pip install -e ".[dev]"
-pre-commit install -f
 ```
 
 ## Linting and formatting
 
 - Always run `prek run --all-files` before considering a job complete.
-- Run pre-commit hooks before finalizing changes.
-- Project lint/format is driven by pre-commit and Ruff config in `pyproject.toml`.
+- This repo uses **prek**, configured in `prek.toml`; there is no `.pre-commit-config.yaml`.
+- Project lint/format is driven by those hooks and the Ruff config in `pyproject.toml`.
 
 ```bash
 prek run --all-files
-pre-commit run --all
 ```
 
 Tip: running twice can apply auto-fixes on first pass.
 
 ## Testing requirements
 
-Follow `docs/contributing/testing.qmd`.
+See `docs/dev/guidelines.md` for test-authoring conventions.
 
 Run targeted tests for changed behavior, then broader tests as needed:
 
@@ -45,17 +43,31 @@ pytest tests/path/to/affected_test.py
 pytest tests
 ```
 
+Bare `pytest` collects `tests/` only; the benchmark suite is opt-in via an explicit path.
+
 For coverage checks:
 
 ```bash
-pytest tests --cov dascore --cov-report term-missing
+pytest tests --cov derzug --cov-report term-missing
 ```
 
 For doctests:
 
 ```bash
-pytest dascore --doctest-modules
+pytest src/derzug --doctest-modules
 ```
+
+## Benchmarks
+
+If the change touches a hot path — the workflow graph, executor, or task layer; the spool
+utilities; sampling; or a widget render path — compare against `main` before opening the PR:
+
+```bash
+python scripts/bench_compare.py --baseline main
+```
+
+Paste the resulting table into the PR description and investigate anything past 20%.
+Add the `benchmark` label to the PR so CodSpeed runs in CI. See `docs/dev/benchmarking.md`.
 
 ## Test authoring conventions
 
@@ -85,9 +97,10 @@ Before handing off:
 3. Lint/format checks pass.
 4. Docs updated for user-visible behavior changes.
 5. No unrelated refactors bundled with bug fixes.
+6. Hot-path changes compared against `main` with `scripts/bench_compare.py`, with the table in the PR and any regression past 20% explained.
 
 ## When uncertain
 
-- Prefer existing patterns in nearby DASCore modules/tests.
+- Prefer existing patterns in nearby DerZug modules/tests.
 - Call out assumptions explicitly in PR notes.
 - Choose the simpler behavior-preserving implementation first.

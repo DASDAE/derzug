@@ -5,8 +5,15 @@ args="tests -s --cov derzug --cov-append --cov-report=xml"
 if [[ "$1" == "doctest" ]]; then
   args="derzug --doctest-modules"
 fi
+# Only the Qt-free tree is instrumented: CodSpeed's simulation mode is
+# valgrind-based, and an instruction count for a Qt paint is dominated by Qt's
+# own instructions rather than DerZug's. See docs/dev/benchmarking.md.
 if [[ "$1" == "profile" ]]; then
-  args="benchmarks --codspeed"
+  args="benchmarks/core --codspeed"
+fi
+# Executes every benchmark once, un-instrumented, so the Qt tree cannot rot.
+if [[ "$1" == "benchmarks" ]]; then
+  args="benchmarks -q"
 fi
 
 exit_code=0

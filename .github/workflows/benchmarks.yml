@@ -1,0 +1,88 @@
+# Run the CodSpeed benchmark suite. See docs/dev/benchmarking.md.
+name: Benchmarks
+on:
+  push:
+    branches:
+      - main
+  # No `paths:` filter here on purpose: `labeled` is a trigger type, and a
+  # label event changes no file path, so a filter would make labelling a PR a
+  # no-op -- which is exactly the case this workflow exists to support.
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+env:
+  MPLBACKEND: Agg
+  QT_QPA_PLATFORM: offscreen
+
+concurrency:
+  group: Benchmarks-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  codspeed:
+    name: CodSpeed (core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Always on push and manual dispatch; on pull requests only when labeled.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'benchmark')
+
+    permissions:
+      contents: read
+      # Required for CodSpeed's OIDC upload; no CODSPEED_TOKEN secret is used.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: 'true'
+          fetch-depth: '0'
+
+      - uses: ./.github/actions/load-shared-vars
+
+      # Qt's offscreen platform plugin still links against EGL/GL.
+      - name: install Qt runtime libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1
+
+      - name: install uv
+        uses: astral-sh/setup-uv@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          # Defined in .github/actions/load-shared-vars/action.yml
+          python-version: ${{ env.PYTHON_DEFAULT }}
+
+      - name: create environment
+        run: |
+          uv venv --python "${PYTHON_DEFAULT}"
+          uv pip install -e ".[test]"
+
+      # The Qt benchmarks never run under valgrind, so execute the whole tree
+      # once, un-instrumented, to keep it from rotting.
+      - name: smoke-run all benchmarks
+        run: .venv/bin/python -m pytest benchmarks -q --no-header
+
+      # Skipped until the repository is registered at codspeed.io and the
+      # CODSPEED_ENABLED repository variable is set to 'true'. Without the
+      # gate this step would fail its OIDC upload and turn the workflow red
+      # on every run. Everything above still guards the benchmark code.
+      - name: run CodSpeed benchmarks
+        if: vars.CODSPEED_ENABLED == 'true'
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: simulation
+          run: .venv/bin/python -m pytest benchmarks/core --codspeed
+
+      - name: note that CodSpeed is not enabled
+        if: vars.CODSPEED_ENABLED != 'true'
+        run: |
+          echo "::notice::CodSpeed upload skipped. Register the repo at" \
+               "codspeed.io and set the CODSPEED_ENABLED repository variable" \
+               "to 'true' to enable it."

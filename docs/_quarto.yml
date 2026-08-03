@@ -74,6 +74,9 @@ website:
         - text: Guidelines
           href: dev/guidelines.md
 
+        - text: Benchmarking
+          href: dev/benchmarking.md
+
     - id: architecture
       title: "Architecture"
       style: "floating"

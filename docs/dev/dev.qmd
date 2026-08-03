@@ -8,3 +8,4 @@ This section covers developer-facing guides for working on DerZug and creating c
 - [Creating Widgets](creating_widgets.qmd) — how to generate DerZug widgets from callables and tasks
 - [Widget Development](widget_development.md) — writing full custom `ZugWidget` subclasses
 - [Guidelines](guidelines.md) — coding style, testing conventions, and tooling requirements
+- [Benchmarking](benchmarking.md) — running the benchmark suite and comparing against `main`

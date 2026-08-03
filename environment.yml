@@ -12,6 +12,7 @@ dependencies:
   - coverage>=7.4,<8
   - prek
   - pytest
+  - pytest-codspeed>=5,<6
   - pytest-cov>=4
   - pytest-qt
   # Conductor MCP server (streamable HTTP needs >=1.8; <2 before breaking v2)
