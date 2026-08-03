@@ -35,6 +35,7 @@ _EXPECTED_TOOLS = {
     "show_node",
     "move_node_window",
     "hide_node",
+    "get_derzug_rules",
 }
 
 
@@ -127,6 +128,42 @@ def test_create_service_builds_a_fresh_dispatcher_per_service(blank_canvas):
     second = create_service(window, port=0)
     assert first._dispatcher is not second._dispatcher
     assert first.server_id != second.server_id
+
+
+def test_get_derzug_rules_returns_the_versioned_briefing(blank_canvas):
+    """The rules tool serves the live app's briefing plus its identity."""
+    from derzug.conductor.rules import AGENT_RULES
+    from derzug.version import __version__
+
+    window, _ = blank_canvas
+    controller = CanvasController(window)
+    mcp = build_conductor_mcp(
+        controller,
+        MainThreadDispatcher(),
+        runtime_info=lambda: {"server_id": "abc", "mcp_url": "http://x/mcp"},
+    )
+    _content, payload = asyncio.run(mcp.call_tool("get_derzug_rules", {}))
+    assert payload["rules"] == AGENT_RULES
+    assert payload["version"] == __version__
+    assert payload["server_id"] == "abc"
+    assert payload["mcp_url"] == "http://x/mcp"
+
+
+def test_connect_prompt_is_registered(blank_canvas):
+    """Claude Code surfaces the connect prompt as a slash command."""
+    window, _ = blank_canvas
+    mcp, _ = _server(window)
+    names = {prompt.name for prompt in asyncio.run(mcp.list_prompts())}
+    assert "connect" in names
+
+
+def test_instructions_are_the_shared_agent_rules(blank_canvas):
+    """The client-visible instructions come from the single rules source."""
+    from derzug.conductor.rules import AGENT_RULES
+
+    window, _ = blank_canvas
+    mcp, _ = _server(window)
+    assert mcp.instructions == AGENT_RULES
 
 
 def test_health_endpoint_reports_the_server_identity(blank_canvas):

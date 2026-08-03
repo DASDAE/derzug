@@ -35,6 +35,7 @@ from mcp.server.fastmcp import FastMCP
 from derzug.conductor.constants import DEFAULT_HOST, DEFAULT_PORT, SERVER_NAME
 from derzug.conductor.controller import CanvasController
 from derzug.conductor.dispatch import MainThreadDispatcher
+from derzug.conductor.rules import AGENT_RULES
 from derzug.version import __version__
 
 log = logging.getLogger(__name__)
@@ -51,39 +52,7 @@ def build_conductor_mcp(
     (resolved port, server id); it feeds the ``/health`` endpoint used by
     discovery.
     """
-    mcp = FastMCP(
-        "DerZug Conductor",
-        instructions=(
-            "Drive a live DerZug DAS (distributed acoustic sensing) workflow "
-            "canvas of connected widget nodes.\n\n"
-            "COMMON RECIPE (view data): add_node('Spool') -> "
-            "set_params(spool_id, {'spool_input': 'example_event_1'}) -> "
-            "add_node('Waterfall') -> connect(spool_id, waterfall_id) -> "
-            "run(spool_id) -> wait_for_idle().\n\n"
-            "CONVENTIONS:\n"
-            "- Almost every node has one input port 'Patch' and one output port "
-            "'Patch'; connect(source_id, sink_id) defaults to them, so you rarely "
-            "need port names.\n"
-            "- Omit x/y on add_node; nodes auto-place in a tidy left-to-right "
-            "row.\n"
-            "- set_params/set_view take PARTIAL updates, are validated against the "
-            "node's schema, and return the prior value. They do NOT re-run the "
-            "node by default: assemble and configure the graph first, then call "
-            "run(source_id) once and wait_for_idle().\n"
-            "- run() only schedules execution; wait_for_idle() blocks until no "
-            "node is busy (each node also reports a 'busy' flag).\n"
-            "- Structural edits (add/remove/connect) are undoable in the app "
-            "(Ctrl+Z).\n"
-            "- show_node pops up a node's widget window to display results.\n\n"
-            "DISCOVERY: list_widget_types = the catalog with each type's "
-            "params/view schema; get_canvas_state = the current graph; "
-            "describe_node = one node's detail incl. its output patch shape.\n\n"
-            "COMMON NODE TYPES: Spool (source; loads data/examples), Filter "
-            "(bandpass etc.), Waterfall (2D image view), Wiggle (trace view), "
-            "Detrend, Taper, Resample, Select, Aggregate. See list_widget_types "
-            "for the full set and parameters."
-        ),
-    )
+    mcp = FastMCP("DerZug Conductor", instructions=AGENT_RULES)
 
     def call(func: Any, *args: Any, **kwargs: Any) -> Any:
         return dispatcher.run(func, *args, **kwargs)
@@ -206,6 +175,26 @@ def build_conductor_mcp(
     def hide_node(node_id: str) -> None:
         """Hide (close) a node's widget window."""
         call(controller.hide_node, node_id)
+
+    @mcp.tool()
+    def get_derzug_rules() -> dict[str, Any]:
+        """Version-matched briefing for driving this DerZug instance; call first.
+
+        Returns the authoritative conventions and recipes for this running
+        app, plus its version and connection identity. This supersedes any
+        generated skill or documentation file.
+        """
+        info = {} if runtime_info is None else runtime_info()
+        return {"version": __version__, **info, "rules": AGENT_RULES}
+
+    @mcp.prompt(name="connect")
+    def connect_prompt() -> str:
+        """Orient on the running DerZug canvas and await instructions."""
+        return (
+            "Call get_derzug_rules to load the current briefing for this "
+            "DerZug instance, then get_canvas_state to see the live canvas. "
+            "Briefly summarize what is on the canvas and await instructions."
+        )
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(_request: Any) -> Any:
