@@ -98,7 +98,7 @@ class TestHeadlessExecution:
         result = run_isolated(
             """
             import dascore as dc
-            from derzug.workflow.widget_tasks import (
+            from derzug.nodes.selection import (
                 PatchSelectionTask,
                 PatchSelectionWithParamsTask,
             )
@@ -123,6 +123,47 @@ class TestHeadlessExecution:
             out = PatchSelectionWithParamsTask(selection_payload=payload).run(patch)
             assert out["patch"].shape == narrowed.shape
             assert out["select_params"] is not None
+            """
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_spool_source_feeds_a_filter_headless(self):
+        """A Spool source loads an example and hands its patch to Filter.
+
+        This is the whole point of the extraction: a saved graph that starts
+        at a real data source runs end to end with no canvas.
+        """
+        result = run_isolated(
+            """
+            import dascore as dc
+            from derzug.nodes.registry import spec_by_name
+            from derzug.workflow import PipeBuilder
+            from pydantic import TypeAdapter
+
+            spool = spec_by_name("Spool")
+            filt = spec_by_name("Filter")
+            source_params = spool.params_model(spool_input="example_event_2")
+            filter_params = TypeAdapter(filt.params_model).validate_python(
+                {
+                    "kind": "pass_filter",
+                    "dim": "time",
+                    "low_bound": "10",
+                    "high_bound": "100",
+                }
+            )
+
+            builder = PipeBuilder()
+            source = builder.add(spool.build_task(source_params))
+            filtered = builder.add(filt.build_task(filter_params))
+            builder.connect(source, filtered, from_output="patch")
+            pipe = builder.build()
+            pipe.validate()
+
+            results = pipe.run()
+            assert results.ok, results.errors
+            out = results[filtered]
+            assert isinstance(out, dc.Patch), type(out)
+            assert out.dims == dc.get_example_patch("example_event_2").dims
             """
         )
         assert result.returncode == 0, result.stderr

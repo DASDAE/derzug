@@ -5,6 +5,11 @@ how does it run?" without importing Qt, Orange, or `derzug.widgets`, so a
 headless host — a server, a notebook, eventually a browser — can introspect a
 node type and execute its task with no display attached.
 
+Every bundled node lives here, sources included: a saved graph that starts at a
+Spool reading an example (or a directory) and runs through a chain of
+processing nodes executes end to end in an interpreter that has never imported
+Qt. `tests/test_nodes/test_headless_pipeline.py` runs exactly that.
+
 ## Layering
 
 ```
@@ -56,6 +61,11 @@ into a widget module at run time and neither Select nor Waterfall could execute
 headlessly. The state moved to `derzug/models/selection_state.py`; the widget
 module kept the panel and re-exports every name, so no call site changed.
 
+`derzug/utils/example_parameters.py` is the same shape one layer over: the
+signature-reading policy stayed put and turned Qt-free, and only the editing
+form moved out, to `example_parameters_dialog.py`. Spool's task needs the
+policy to rebuild an example's call kwargs; it must never need the form.
+
 That is the shape to copy: the Qt-free half moves down, the Qt half stays and
 re-exports, and callers are none the wiser.
 
@@ -96,7 +106,8 @@ raises rather than returning `None`.
 ## Discovery
 
 Node modules advertise themselves through the `derzug.nodes` entry-point group,
-mirroring the `derzug.widgets` group Orange's canvas uses:
+mirroring the `derzug.widgets` group Orange's canvas uses — one entry per
+bundled node:
 
 ```toml
 [project.entry-points."derzug.nodes"]
@@ -125,7 +136,18 @@ params = self.get_params()
 return self.node_spec.build_task(params)
 ```
 
-Widgets with no `node_spec` yet keep their existing path unchanged.
+Every bundled widget does this, so a widget's task and a headless caller's task
+are the same object built from the same parameters — which is exactly what
+`test_node_spec_consistency` asserts, field by field. A widget's `get_task()`
+may still *coerce* its controls first (clamping an out-of-range spin box,
+resyncing a dimension chooser to one the patch actually has); what it may not
+do is assemble a different task.
+
+Two consumers read the registry rather than the widget classes:
+`CanvasController._widget_type_info` takes param/view schemas from the spec, so
+the Conductor can list a node type without importing Qt, and
+`unsafe_widget_qnames()` derives the code-execution blocklist from
+`executes_arbitrary_code` instead of naming `Code` in a constant.
 
 ## Writing a new node
 
@@ -139,3 +161,15 @@ The node module must import nothing from `derzug.widgets`, `derzug.core`,
 `derzug.views`, or `derzug.conductor`. If a task needs behavior that currently
 lives on a widget, move that behavior down into the node module as a free
 function and have the widget call it — that direction is the whole point.
+
+### Defaults have to run
+
+A node's parameters default to whatever a headless caller gets when it names
+none, so `spec.build_task()` with no arguments has to produce something that
+works. In particular a blank dimension is not an error: `resolve_patch_dim`
+picks the same axis the widget's chooser would (`time` when present), and
+`derzug.nodes.fourier` extends that with its own Fourier-axis preference for
+the inverse transform. A node whose default configuration is genuinely
+incomplete — Coords with nothing to rename — is the exception, and its widget
+already reports that as an error rather than silently passing the patch
+through.

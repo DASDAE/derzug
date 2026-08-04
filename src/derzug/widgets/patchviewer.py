@@ -25,13 +25,12 @@ from AnyQt.QtWidgets import (
 )
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
+from derzug.nodes.patchviewer import NODE_SPEC
 from derzug.utils.display import format_display
 from derzug.utils.sampling import strided_sample, strided_step
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchPassThroughTask
 
 _MAX_STATS_SAMPLES = 1_000_000
 _MAX_LINE_SAMPLES = 100_000
@@ -55,19 +54,11 @@ class _NodeDescriptor:
     stats: str = ""
 
 
-class PatchViewerParams(BaseModel):
-    """Parameters for the PatchViewer widget.
-
-    PatchViewer is a pure viewer with no persisted state; it passes the patch
-    through unchanged and has no output-affecting parameters.
-    """
-
-
 class PatchViewer(ZugWidget):
     """Inspect patch structure and preview selected arrays."""
 
+    node_spec = NODE_SPEC
     name = "PatchViewer"
-    params_model = PatchViewerParams
     authoritative_state = True
     description = "Inspect a DAS patch and preview its arrays"
     want_control_area = False
@@ -220,7 +211,7 @@ class PatchViewer(ZugWidget):
 
     def get_task(self) -> Task:
         """Return the compiled workflow representation for PatchViewer."""
-        return PatchPassThroughTask()
+        return NODE_SPEC.build_task(self.get_params())
 
     def _refresh_ui(self) -> None:
         """Rebuild the visible tree and preview for the current patch."""

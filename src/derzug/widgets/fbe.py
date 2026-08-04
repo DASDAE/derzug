@@ -2,101 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
-from dascore.units import percent
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
+from derzug.nodes.fbe import NODE_SPEC, WINDOW_TYPES, parse_fbe_bound
+from derzug.nodes.stft import parse_overlap
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task
-
-
-class FBETask(Task):
-    """Portable FBE task mirroring the widget's persisted settings."""
-
-    input_variables: ClassVar[dict[str, object]] = {"patch": object}
-    output_variables: ClassVar[dict[str, object]] = {"patch": object}
-
-    selected_dim: str = "time"
-    window_length: str = "0.01"
-    overlap: str = "50 %"
-    taper_window: str = "hann"
-    samples: bool = False
-    detrend: bool = False
-    fbe_lower: str = ""
-    fbe_upper: str = ""
-
-    def _parse_overlap(self):
-        text = self.overlap.strip()
-        if not text:
-            return None
-        lowered = text.lower()
-        if "%" in text or "percent" in lowered:
-            value = parse_patch_text_value(
-                text.replace("%", "").replace("percent", "").strip(),
-                required=True,
-            )
-            return value * percent
-        return parse_patch_text_value(text, allow_none=True, required=False)
-
-    def _parse_fbe_bound(self, text: str):
-        if not text.strip():
-            return None
-        return parse_patch_text_value(text, allow_none=True, required=False)
-
-    def run(self, patch):
-        """Apply FBE reduction to one patch using persisted settings."""
-        if "time" not in patch.dims:
-            return None
-        dim = self.selected_dim if self.selected_dim in patch.dims else "time"
-        window_length = parse_patch_text_value(self.window_length, required=True)
-        overlap = self._parse_overlap()
-        stft_patch = patch.stft(
-            overlap=overlap,
-            taper_window=self.taper_window,
-            samples=bool(self.samples),
-            detrend=bool(self.detrend),
-            **{dim: window_length},
-        )
-        ft_values = stft_patch.get_array("ft_time")
-        low = self._parse_fbe_bound(self.fbe_lower)
-        high = self._parse_fbe_bound(self.fbe_upper)
-        low = ft_values[0] if low is None else low
-        high = ft_values[-1] if high is None else high
-        if low > high:
-            raise ValueError("lower must be less than or equal to upper")
-        return (
-            (stft_patch * stft_patch.conj())
-            .select(ft_time=(low, high))
-            .sum("ft_time")
-            .squeeze()
-        )
-
-
-class FBEParams(BaseModel):
-    """Parameters for the FBE widget."""
-
-    selected_dim: str = ""
-    window_length: str = "0.01"
-    overlap: str = "50 %"
-    taper_window: Literal["hann", "hamming", "blackman", "nuttall"] = "hann"
-    samples: bool = False
-    detrend: bool = False
-    fbe_lower: str = ""
-    fbe_upper: str = ""
 
 
 class FBE(PatchDimWidget):
     """Extract one frequency band energy trace via STFT power reduction."""
 
+    node_spec = NODE_SPEC
     name = "FBE"
-    params_model = FBEParams
     authoritative_state = True
     description = "Extract one frequency band energy feature from a patch"
     icon = "icons/FBE.svg"
@@ -105,12 +30,7 @@ class FBE(PatchDimWidget):
     priority = 21.14
     want_main_area = False
 
-    _WINDOW_TYPES: ClassVar[tuple[str, ...]] = (
-        "hann",
-        "hamming",
-        "blackman",
-        "nuttall",
-    )
+    _WINDOW_TYPES: ClassVar[tuple[str, ...]] = WINDOW_TYPES
 
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""
@@ -236,17 +156,7 @@ class FBE(PatchDimWidget):
 
     def _parse_overlap(self) -> Any:
         """Parse the optional STFT overlap value."""
-        text = self.overlap.strip()
-        if not text:
-            return None
-        lowered = text.lower()
-        if "%" in text or "percent" in lowered:
-            value = parse_patch_text_value(
-                text.replace("%", "").replace("percent", "").strip(),
-                required=True,
-            )
-            return value * percent
-        return parse_patch_text_value(text, allow_none=True, required=False)
+        return parse_overlap(self.overlap)
 
     def _coerce_taper_window(self) -> str:
         """Return the selected taper window or reset to the default."""
@@ -261,9 +171,7 @@ class FBE(PatchDimWidget):
 
     def _parse_fbe_bound(self, text: str) -> Any | None:
         """Parse one optional FBE frequency-band endpoint."""
-        if not text.strip():
-            return None
-        return parse_patch_text_value(text, allow_none=True, required=False)
+        return parse_fbe_bound(text)
 
     def _resolved_fbe_bounds(self, stft_patch: dc.Patch) -> tuple[Any, Any]:
         """Return validated FBE bounds, defaulting blanks to full ft_time extent."""
@@ -331,16 +239,8 @@ class FBE(PatchDimWidget):
             except Exception as exc:
                 self._show_exception("invalid_fbe_band", exc)
                 return None
-        return FBETask(
-            selected_dim=str(dim or "time"),
-            window_length=str(self.window_length or ""),
-            overlap=str(self.overlap or ""),
-            taper_window=str(self._coerce_taper_window()),
-            samples=bool(self.samples),
-            detrend=bool(self.detrend),
-            fbe_lower=str(self.fbe_lower or ""),
-            fbe_upper=str(self.fbe_upper or ""),
-        )
+        self._coerce_taper_window()
+        return NODE_SPEC.build_task(self.get_params())
 
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the transform-specific banner."""
@@ -355,16 +255,8 @@ class FBE(PatchDimWidget):
 
     def get_task(self) -> Task:
         """Return the current FBE semantics as a workflow task."""
-        return FBETask(
-            selected_dim=str(self.selected_dim or "time"),
-            window_length=str(self.window_length or ""),
-            overlap=str(self.overlap or ""),
-            taper_window=str(self._coerce_taper_window()),
-            samples=bool(self.samples),
-            detrend=bool(self.detrend),
-            fbe_lower=str(self.fbe_lower or ""),
-            fbe_upper=str(self.fbe_upper or ""),
-        )
+        self._coerce_taper_window()
+        return NODE_SPEC.build_task(self.get_params())
 
 
 if __name__ == "__main__":  # pragma: no cover

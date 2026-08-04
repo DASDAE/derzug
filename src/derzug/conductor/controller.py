@@ -27,6 +27,7 @@ controller is built with ``allow_code=True``.
 from __future__ import annotations
 
 import importlib
+from functools import cache
 from typing import Any, get_args
 
 import dascore as dc
@@ -44,18 +45,29 @@ from derzug.conductor.schema import (
     PortInfo,
     WidgetTypeInfo,
 )
-from derzug.nodes.registry import spec_for_widget_qname
+from derzug.nodes.registry import load_node_specs, spec_for_widget_qname
 from derzug.widgets.composite import ensure_node_id
 from derzug.workflow.compiler import compile_workflow
 
 # Horizontal gap (scheme units) between auto-placed nodes; keeps chains compact.
 _NODE_GAP = 150.0
 
-# Widget types whose parameters are executable Python. Excluded from the
-# Conductor catalog and rejected on add/configure unless the user opts in
-# (``--conductor-allow-code``): a connected agent must not gain arbitrary
-# code execution through widget parameters.
-UNSAFE_WIDGET_QNAMES = frozenset({"derzug.widgets.code.Code"})
+
+@cache
+def unsafe_widget_qnames() -> frozenset[str]:
+    """Return widget types whose parameters are executable Python.
+
+    These are excluded from the Conductor catalog and rejected on
+    add/configure unless the user opts in (``--conductor-allow-code``): a
+    connected agent must not gain arbitrary code execution through widget
+    parameters. Each node declares this itself, so a third-party node that
+    runs user code is covered without editing this module.
+    """
+    return frozenset(
+        spec.widget_qualified_name
+        for spec in load_node_specs()
+        if spec.executes_arbitrary_code
+    )
 
 
 def _widget_class(qualified_name: str) -> type | None:
@@ -183,7 +195,7 @@ class CanvasController:
 
     def _check_type_allowed(self, qualified_name: str) -> None:
         """Raise unless ``qualified_name`` may be authored/configured."""
-        if not self._allow_code and qualified_name in UNSAFE_WIDGET_QNAMES:
+        if not self._allow_code and qualified_name in unsafe_widget_qnames():
             raise PermissionError(
                 f"widget type {qualified_name!r} executes arbitrary Python and is "
                 "disabled for agents; start DerZug with --conductor-allow-code "
@@ -304,7 +316,7 @@ class CanvasController:
             self._widget_type_info(description)
             for description in registry.widgets()
             if self._allow_code
-            or description.qualified_name not in UNSAFE_WIDGET_QNAMES
+            or description.qualified_name not in unsafe_widget_qnames()
         ]
         return sorted(
             types, key=lambda widget_type: (widget_type.category, widget_type.name)

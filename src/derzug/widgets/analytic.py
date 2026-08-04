@@ -6,12 +6,14 @@ from typing import ClassVar
 
 from Orange.widgets.widget import Msg
 
-from derzug.core.patchmethodwidget import ComboOption, PatchMethodWidget
+from derzug.core.patchmethodwidget import PatchMethodWidget
+from derzug.nodes.analytic import _OPTIONS, NODE_SPEC
 
 
 class Analytic(PatchMethodWidget):
     """Apply Hilbert-derived transforms to an input patch."""
 
+    node_spec = NODE_SPEC
     name = "Analytic"
     description = "Apply Hilbert-derived transforms to a patch"
     icon = "icons/Analytic.svg"
@@ -24,15 +26,7 @@ class Analytic(PatchMethodWidget):
 
     call_style = "positional_dim"
     error_key = "transform_failed"
-    _OPTIONS: ClassVar[tuple[ComboOption, ...]] = (
-        ComboOption(
-            "transform",
-            ("hilbert", "envelope"),
-            role="method",
-            label="Transform:",
-            combo_attr="_transform_combo",
-        ),
-    )
+    _OPTIONS: ClassVar[tuple[object, ...]] = _OPTIONS
 
     class Error(PatchMethodWidget.Error):
         """Errors shown by the widget."""

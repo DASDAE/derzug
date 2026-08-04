@@ -84,20 +84,36 @@ class TestSpecContents:
             widget = getattr(module, spec.widget_qualified_name.rpartition(".")[2])
             assert widget.node_spec is spec
 
-    def test_default_task_runs_on_an_example_patch(self, specs):
-        """Every default task runs, without the caller naming a dimension.
+    def test_dimension_defaulting_nodes_run_on_an_example_patch(self, specs):
+        """A node that chooses a dimension defaults it the way the widget would.
 
         ``example_event_2`` has dims ``(distance, time)``, so a node that
         silently fell back to the first dimension instead of the widget's
-        ``time`` preference would diverge here.
+        ``time`` preference would produce something other than a patch — or
+        the wrong patch — here.
+
+        The subject is every patch-in node whose params carry a dimension
+        field but leave it blank by default; that blank is exactly the state a
+        headless caller lands in, and exactly what the fallback has to cover.
         """
         patch = dc.get_example_patch("example_event_2")
         assert patch.dims[0] != "time", "example patch no longer exercises the fallback"
+        exercised = []
         for spec in specs:
-            if spec.task_factory is None:
+            if spec.task_factory is None or spec.params_model is None:
                 continue
-            result = spec.build_task().run(patch)
+            fields = getattr(spec.params_model, "model_fields", {})
+            if not {"dim", "selected_dim"} & set(fields):
+                continue
+            task = spec.build_task()
+            if set(task.resolved_required_scalar_inputs()) != {"patch"}:
+                continue
+            exercised.append(spec.name)
+            result = task.run(patch)
+            if isinstance(result, dict):
+                result = result["patch"]
             assert isinstance(result, dc.Patch), (spec.name, type(result))
+        assert len(exercised) >= 5, exercised
 
 
 class TestValidateSpec:

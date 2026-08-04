@@ -4,66 +4,22 @@ Widget for converting an AnnotationSet into a tidy pandas DataFrame.
 
 from __future__ import annotations
 
-import json
-from typing import ClassVar
-
 import pandas as pd
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.models.annotations import AnnotationSet, PointGeometry
-from derzug.utils.annotation_metadata import annotation_metadata_row
+from derzug.models.annotations import AnnotationSet
+from derzug.nodes.annotation2dataframe import NODE_SPEC
 from derzug.workflow import Task
-
-
-class AnnotationSetToDataFrameTask(Task):
-    """Convert point annotations into a tidy DataFrame."""
-
-    include_properties: bool = False
-    input_variables: ClassVar[dict[str, object]] = {"annotation_set": object}
-    output_variables: ClassVar[dict[str, object]] = {"data": object}
-
-    def run(self, annotation_set):
-        """Convert point annotations from one set into rows."""
-        set_dims = annotation_set.dims
-        rows = []
-        for ann in annotation_set.annotations:
-            if ann.geometry.type != "point":
-                continue
-            geom = ann.geometry
-            if not isinstance(geom, PointGeometry):
-                continue
-            dim_vals = {d: None for d in set_dims}
-            for dim, value in geom.coords.items():
-                if dim in dim_vals:
-                    dim_vals[dim] = value
-            row = {
-                **dim_vals,
-                "id": ann.id,
-                **annotation_metadata_row(ann),
-            }
-            if self.include_properties:
-                row["properties"] = json.dumps(ann.properties)
-            rows.append(row)
-        if not rows:
-            return pd.DataFrame()
-        return pd.DataFrame(rows)
-
-
-class Annotation2DataFrameParams(BaseModel):
-    """Parameters for the Annotations to DataFrame widget."""
-
-    include_properties: bool = False
 
 
 class Annotation2DataFrame(ZugWidget):
     """Orange widget that extracts point annotations into a DataFrame."""
 
+    node_spec = NODE_SPEC
     name = "Annotations to DataFrame"
-    params_model = Annotation2DataFrameParams
     authoritative_state = True
     description = "Extract point annotations from an AnnotationSet into a DataFrame."
     icon = "icons/Annotation2DataFrame.svg"
@@ -133,7 +89,7 @@ class Annotation2DataFrame(ZugWidget):
         skipped = sum(1 for ann in ann_set.annotations if ann.geometry.type != "point")
         if skipped:
             self.Warning.non_point_skipped(skipped)
-        return AnnotationSetToDataFrameTask(include_properties=self.include_properties)
+        return NODE_SPEC.build_task(self.get_params())
 
     def _run(self) -> pd.DataFrame | None:
         ann_set = self._ann_set
@@ -148,7 +104,7 @@ class Annotation2DataFrame(ZugWidget):
 
     def get_task(self) -> Task:
         """Return the configured annotation conversion task."""
-        return AnnotationSetToDataFrameTask(include_properties=self.include_properties)
+        return NODE_SPEC.build_task(self.get_params())
 
     def _on_result(self, result: pd.DataFrame | None) -> None:
         self.Outputs.data.send(result)

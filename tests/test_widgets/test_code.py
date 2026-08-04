@@ -10,13 +10,14 @@ import pytest
 from AnyQt.QtCore import Qt
 from AnyQt.QtWidgets import QWidget
 from derzug.core.error_dialog import DerZugErrorDialog
+from derzug.nodes.code import compile_script
 from derzug.utils.testing import (
     TestWidgetDefaults,
     capture_output,
     wait_for_output,
     widget_context,
 )
-from derzug.widgets.code import Code, _compile_script
+from derzug.widgets.code import Code
 from orangewidget.utils.signals import PartialSummary
 
 
@@ -62,25 +63,25 @@ class TestCode:
     def test_identical_scripts_reuse_compiled_bytecode(self):
         """Repeated runs of unchanged source should avoid recompilation."""
         script = "def transform(patch):\n    return patch"
-        _compile_script.cache_clear()
+        compile_script.cache_clear()
 
-        first = _compile_script(script)
-        second = _compile_script(script)
+        first = compile_script(script)
+        second = compile_script(script)
 
         assert second is first
-        assert _compile_script.cache_info().hits == 1
+        assert compile_script.cache_info().hits == 1
 
     def test_compiled_bytecode_cache_is_bounded(self):
         """Editing many unique scripts should not grow the process cache forever."""
-        _compile_script.cache_clear()
-        maxsize = _compile_script.cache_info().maxsize
+        compile_script.cache_clear()
+        maxsize = compile_script.cache_info().maxsize
         assert maxsize is not None
 
         for index in range(maxsize + 5):
-            _compile_script(f"value = {index}")
+            compile_script(f"value = {index}")
 
-        assert _compile_script.cache_info().currsize == maxsize
-        _compile_script.cache_clear()
+        assert compile_script.cache_info().currsize == maxsize
+        compile_script.cache_clear()
 
     def test_none_patch_clears_output_without_running(
         self, code_widget, monkeypatch, qtbot

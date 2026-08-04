@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import ClassVar
 
 import dascore as dc
 import numpy as np
@@ -11,15 +10,17 @@ from AnyQt.QtCore import QTimer
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
 from derzug.models.selection import SelectParams
-from derzug.utils.spool import (
-    annotation_overlap_mask,
-    extract_single_patch,
+from derzug.nodes.select import (
+    NODE_SPEC,
+    SelectTask,
+    saved_patch_selection_payload,
+    saved_spool_filter_rows,
 )
+from derzug.utils.spool import annotation_overlap_mask, extract_single_patch
 from derzug.widgets.selection import (
     PatchSelectionBasis,
     SelectionControlsMixin,
@@ -27,77 +28,13 @@ from derzug.widgets.selection import (
     SelectionState,
 )
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchSelectionTask
-
-
-class SelectTask(Task):
-    """Workflow task mirroring Select's persisted patch/spool semantics."""
-
-    input_variables: ClassVar[dict[str, object]] = {
-        "patch": object,
-        "spool": object,
-        "annotation_set": object,
-        "select_params": object,
-    }
-    output_variables: ClassVar[dict[str, object]] = {
-        "patch": object,
-        "spool": object,
-    }
-
-    patch_selection_payload: dict[str, object] | None = None
-    spool_filters: tuple[tuple[str, str], ...] = ()
-    unpack_single_patch: bool = True
-
-    def run(self, patch=None, spool=None, annotation_set=None, select_params=None):
-        """Apply persisted selection state to a patch or spool input."""
-        if patch is not None:
-            if select_params is not None:
-                return {"patch": select_params.apply_to_patch(patch), "spool": None}
-            selected = PatchSelectionTask(
-                selection_payload=self.patch_selection_payload
-            ).run(patch)
-            return {"patch": selected, "spool": None}
-
-        if spool is not None:
-            selected = spool
-            if select_params is not None:
-                selected = select_params.apply_to_spool(selected)
-            if annotation_set is not None:
-                contents = selected.get_contents()
-                mask = annotation_overlap_mask(contents, annotation_set)
-                if not bool(mask.all()):
-                    positions = np.flatnonzero(mask.to_numpy(dtype=bool, copy=False))
-                    if not positions.size:
-                        selected = dc.spool([])
-                    else:
-                        selected = selected[positions.astype(np.int64, copy=False)]
-            state = SelectionState()
-            state.set_spool_source(selected)
-            state.set_spool_filters(list(self.spool_filters))
-            selected = state.apply_to_spool(selected)
-            selected_patch = None
-            if self.unpack_single_patch:
-                selected_patch = extract_single_patch(selected)
-            return {"patch": selected_patch, "spool": selected}
-
-        return {"patch": None, "spool": None}
-
-
-class SelectWidgetParams(BaseModel):
-    """Parameters for the Select widget (named to avoid the models.SelectParams)."""
-
-    unpack_single_patch: bool = True
-    saved_patch_selection: dict = Field(default_factory=dict)
-    saved_selection_basis: str = ""
-    saved_selection_ranges: list = Field(default_factory=list)
-    saved_spool_filters: list = Field(default_factory=list)
 
 
 class Select(SelectionControlsMixin, ZugWidget):
     """Select subsets of patches or spools using shared left-side controls."""
 
+    node_spec = NODE_SPEC
     name = "Select"
-    params_model = SelectWidgetParams
     authoritative_state = True
     want_main_area = False
     description = "Select subsets of patches or spools"
@@ -400,39 +337,15 @@ class Select(SelectionControlsMixin, ZugWidget):
 
     def _load_saved_patch_selection_state(self) -> dict[str, object] | None:
         """Return serialized patch selection settings staged from widget state."""
-        payload = self.saved_patch_selection
-        if isinstance(payload, dict):
-            basis_name = str(payload.get("basis", "")).strip()
-            rows = payload.get("rows")
-            if basis_name and isinstance(rows, list) and rows:
-                return {"basis": basis_name, "rows": deepcopy(rows)}
-        basis_name = str(self.saved_selection_basis or "").strip()
-        rows = (
-            self.saved_selection_ranges
-            if isinstance(self.saved_selection_ranges, list)
-            else []
+        return saved_patch_selection_payload(
+            self.saved_patch_selection,
+            self.saved_selection_basis,
+            self.saved_selection_ranges,
         )
-        if not basis_name or not rows:
-            return None
-        return {"basis": basis_name, "rows": deepcopy(rows)}
 
     def _load_saved_spool_filter_state(self) -> list[tuple[str, str]]:
         """Return persisted spool filter rows from widget settings."""
-        rows = (
-            self.saved_spool_filters
-            if isinstance(self.saved_spool_filters, list)
-            else []
-        )
-        restored: list[tuple[str, str]] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            key = str(row.get("key", "")).strip()
-            raw_value = str(row.get("raw_value", ""))
-            if not key and not raw_value:
-                continue
-            restored.append((key, raw_value))
-        return restored
+        return saved_spool_filter_rows(self.saved_spool_filters)
 
     def _prime_saved_selection_state(self) -> None:
         """Load persisted settings that do not require a bound patch source."""
@@ -609,7 +522,14 @@ class Select(SelectionControlsMixin, ZugWidget):
         return self._selection_task()
 
     def _selection_task(self) -> SelectTask:
-        """Return the current canonical selection task."""
+        """Return the current canonical selection task.
+
+        Built directly rather than through ``node_spec.build_task``: while an
+        input is bound, the authority is the live ``SelectionState``, which the
+        user may have edited since the last settings sync. With no input bound
+        the two paths agree, which is what ``test_node_spec_consistency``
+        checks.
+        """
         patch_payload = self._current_patch_selection_payload()
         spool_filters = self._current_spool_filter_state()
         return SelectTask(

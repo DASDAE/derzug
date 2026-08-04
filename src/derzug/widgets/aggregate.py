@@ -2,106 +2,29 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
+from derzug.nodes.aggregate import (
+    DIM_REDUCES,
+    METHODS,
+    NODE_SPEC,
+    infer_phase_weighted_stack_transform_dim,
+)
 from derzug.workflow import Task
-
-
-class AggregateTask(Task):
-    """Task wrapper around DASCore aggregate reduction."""
-
-    selected_dim: str = ""
-    transform_dim: str = ""
-    method: str = "mean"
-    dim_reduce: str = "empty"
-    input_variables: ClassVar[dict[str, object]] = {"patch": object}
-    output_variables: ClassVar[dict[str, object]] = {"patch": object}
-
-    @staticmethod
-    def _infer_phase_weighted_stack_transform_dim(
-        patch: dc.Patch, stack_dim: str
-    ) -> str:
-        """Pick a deterministic transform axis for phase-weighted stacking."""
-        candidates = tuple(dim for dim in patch.dims if dim != stack_dim)
-        if not candidates:
-            msg = "Phase-weighted stack requires at least two patch dimensions."
-            raise ValueError(msg)
-        if "time" in candidates:
-            return "time"
-        sized_candidates = tuple(
-            dim for dim in candidates if patch.shape[patch.dims.index(dim)] > 1
-        )
-        if len(sized_candidates) == 1:
-            return sized_candidates[0]
-        if len(candidates) == 1:
-            return candidates[0]
-        msg = (
-            "Phase-weighted stack could not infer the transform dimension from "
-            f"{candidates}. Add a 'time' dimension or reduce the patch to one "
-            "non-stack dimension before stacking."
-        )
-        raise ValueError(msg)
-
-    def run(self, patch):
-        """Apply the configured aggregate reduction to one patch."""
-        dim = None if self.selected_dim in ("", "All") else self.selected_dim
-        if self.method == "phase_weighted_stack":
-            if dim is None:
-                msg = "Phase-weighted stack requires selecting one stack dimension."
-                raise ValueError(msg)
-            transform_dim = (
-                self.transform_dim
-                if self.transform_dim and self.transform_dim in patch.dims
-                else self._infer_phase_weighted_stack_transform_dim(patch, dim)
-            )
-            if transform_dim == dim:
-                msg = (
-                    "Phase-weighted stack transform dimension must differ from "
-                    "stack dimension."
-                )
-                raise ValueError(msg)
-            return patch.phase_weighted_stack(
-                stack_dim=dim,
-                transform_dim=transform_dim,
-                dim_reduce=self.dim_reduce,
-            )
-        return patch.aggregate(dim=dim, method=self.method, dim_reduce=self.dim_reduce)
-
-
-class AggregateParams(BaseModel):
-    """Parameters for the Aggregate widget."""
-
-    selected_dim: str = ""
-    transform_dim: str = ""
-    method: Literal[
-        "first",
-        "last",
-        "max",
-        "mean",
-        "median",
-        "min",
-        "phase_weighted_stack",
-        "std",
-        "sum",
-    ] = "mean"
-    dim_reduce: Literal["empty", "squeeze", "mean", "min", "max", "first", "last"] = (
-        "empty"
-    )
 
 
 class Aggregate(ZugWidget):
     """Apply DASCore aggregate reduction to an input patch."""
 
+    node_spec = NODE_SPEC
     name = "Aggregate"
-    params_model = AggregateParams
     authoritative_state = True
     description = "Apply DASCore aggregate reduction to a patch"
     icon = "icons/AggregateColumns.svg"
@@ -111,26 +34,8 @@ class Aggregate(ZugWidget):
 
     want_main_area = False
 
-    _METHODS: ClassVar[tuple[str, ...]] = (
-        "first",
-        "last",
-        "max",
-        "mean",
-        "median",
-        "min",
-        "phase_weighted_stack",
-        "std",
-        "sum",
-    )
-    _DIM_REDUCES: ClassVar[tuple[str, ...]] = (
-        "empty",
-        "squeeze",
-        "mean",
-        "min",
-        "max",
-        "first",
-        "last",
-    )
+    _METHODS: ClassVar[tuple[str, ...]] = METHODS
+    _DIM_REDUCES: ClassVar[tuple[str, ...]] = DIM_REDUCES
 
     @staticmethod
     def _default_phase_weighted_stack_dim(dims: tuple[str, ...]) -> str:
@@ -244,7 +149,7 @@ class Aggregate(ZugWidget):
             and dims
         ):
             try:
-                inferred = AggregateTask._infer_phase_weighted_stack_transform_dim(
+                inferred = infer_phase_weighted_stack_transform_dim(
                     self._patch, stack_dim
                 )
             except ValueError:
@@ -336,12 +241,7 @@ class Aggregate(ZugWidget):
             self._dim_reduce_combo.blockSignals(True)
             self._dim_reduce_combo.setCurrentText(dim_reduce)
             self._dim_reduce_combo.blockSignals(False)
-        return AggregateTask(
-            selected_dim=self.selected_dim,
-            transform_dim=self.transform_dim,
-            method=method,
-            dim_reduce=dim_reduce,
-        )
+        return NODE_SPEC.build_task(self.get_params())
 
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the aggregate-specific banner."""

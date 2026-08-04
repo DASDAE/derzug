@@ -2,37 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
+from derzug.nodes.rolling import AGGREGATIONS, NODE_SPEC
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchRollingTask
-
-
-class RollingParams(BaseModel):
-    """Parameters for the Rolling widget."""
-
-    selected_dim: str = ""
-    rolling_window: str = "0.01"
-    step: str = ""
-    center: bool = False
-    dropna: bool = False
-    aggregation: Literal["mean", "median", "sum", "min", "max", "std"] = "mean"
 
 
 class Rolling(PatchDimWidget):
     """Apply DASCore rolling aggregations to an input patch."""
 
+    node_spec = NODE_SPEC
     name = "Rolling"
-    params_model = RollingParams
     authoritative_state = True
     description = "Apply DASCore rolling aggregation to a patch"
     icon = "icons/Rolling.svg"
@@ -43,14 +31,7 @@ class Rolling(PatchDimWidget):
     # This is a non-graphical widget; we dont need main area.
     want_main_area = False
 
-    _AGGREGATIONS: ClassVar[tuple[str, ...]] = (
-        "mean",
-        "median",
-        "sum",
-        "min",
-        "max",
-        "std",
-    )
+    _AGGREGATIONS: ClassVar[tuple[str, ...]] = AGGREGATIONS
 
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""
@@ -147,41 +128,39 @@ class Rolling(PatchDimWidget):
         self._show_exception("rolling_failed", exc)
 
     def _validated_task(self) -> Task | None:
-        """Return the current rolling task after widget-side validation."""
-        dim = self._get_dim()
-        if dim is None:
+        """Return the current rolling task after widget-side validation.
+
+        The parses below are preflight only: they exist to raise the right
+        error banner. The task itself is built from the params model, which
+        parses the same text again.
+        """
+        if self._get_dim() is None:
             return None
 
         try:
-            window = self._parse_window_value(self.rolling_window, allow_none=False)
+            self._parse_window_value(self.rolling_window, allow_none=False)
         except Exception as exc:
             self._show_exception("invalid_window", exc, self.rolling_window)
             return None
 
         try:
-            step = self._parse_window_value(self.step, allow_none=True)
+            self._parse_window_value(self.step, allow_none=True)
         except Exception as exc:
             self._show_exception("invalid_step", exc, self.step)
             return None
 
-        aggregation = (
-            self.aggregation
-            if self.aggregation in self._AGGREGATIONS
-            else self._AGGREGATIONS[0]
-        )
-        if aggregation != self.aggregation:
-            self.aggregation = aggregation
-            self._agg_combo.blockSignals(True)
-            self._agg_combo.setCurrentText(aggregation)
-            self._agg_combo.blockSignals(False)
-        return PatchRollingTask(
-            dim=dim,
-            window=window,
-            step=step,
-            center=bool(self.center),
-            dropna=bool(self.dropna),
-            aggregation=aggregation,
-        )
+        self._coerce_aggregation()
+        return NODE_SPEC.build_task(self.get_params())
+
+    def _coerce_aggregation(self) -> str:
+        """Return the selected aggregation, resetting an invalid one."""
+        if self.aggregation in self._AGGREGATIONS:
+            return self.aggregation
+        self.aggregation = self._AGGREGATIONS[0]
+        self._agg_combo.blockSignals(True)
+        self._agg_combo.setCurrentText(self.aggregation)
+        self._agg_combo.blockSignals(False)
+        return self.aggregation
 
     def _settings_control_map(self) -> dict[str, object]:
         """Map settings to their controls for unified apply_settings sync."""
@@ -192,18 +171,10 @@ class Rolling(PatchDimWidget):
 
     def get_task(self) -> Task:
         """Return the current rolling aggregation as a workflow task."""
-        return PatchRollingTask(
-            dim=self._get_dim() or self.selected_dim,
-            window=self._parse_window_value(self.rolling_window, allow_none=False),
-            step=self._parse_window_value(self.step, allow_none=True),
-            center=bool(self.center),
-            dropna=bool(self.dropna),
-            aggregation=(
-                self.aggregation
-                if self.aggregation in self._AGGREGATIONS
-                else self._AGGREGATIONS[0]
-            ),
-        )
+        self._coerce_aggregation()
+        # Side effect: resyncs ``selected_dim`` to an available dimension.
+        self._get_dim()
+        return NODE_SPEC.build_task(self.get_params())
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -22,13 +22,12 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.zugwidget import ZugWidget
+from derzug.nodes.playaudio import NODE_SPEC
 from derzug.utils.display import format_display
 from derzug.utils.sampling import strided_step
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchPassThroughTask
 
 
 def _load_qt_multimedia():
@@ -135,18 +134,11 @@ class _PreparedAudio:
     sample_count: int
 
 
-class PlayAudioParams(BaseModel):
-    """Parameters for the PlayAudio widget."""
-
-    time_scale: float = 1.0
-    volume_percent: int = 100
-
-
 class PlayAudio(ZugWidget):
     """Play 1D DAS patches as audio with a configurable time scale."""
 
+    node_spec = NODE_SPEC
     name = "PlayAudio"
-    params_model = PlayAudioParams
     authoritative_state = True
     description = "Play a 1D time patch as audio"
     icon = "icons/PlayAudio.svg"
@@ -172,7 +164,7 @@ class PlayAudio(ZugWidget):
 
     def get_task(self) -> Task:
         """Return the compiled patch semantics for the widget."""
-        return PatchPassThroughTask()
+        return NODE_SPEC.build_task(self.get_params())
 
     def __init__(self) -> None:
         super().__init__()

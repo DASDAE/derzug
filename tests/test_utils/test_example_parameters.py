@@ -6,12 +6,12 @@ import inspect
 
 import numpy as np
 from derzug.utils.example_parameters import (
-    ExampleParametersDialog,
     build_example_call_kwargs,
     filter_example_overrides,
     get_example_parameter_specs,
     parse_example_parameter_text,
 )
+from derzug.utils.example_parameters_dialog import ExampleParametersDialog
 
 
 def _fake_example(

@@ -12,40 +12,17 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
-from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
+from derzug.nodes.ufunc_binary import NODE_SPEC, OP_LABEL_TO_UFUNC
 from derzug.workflow import Task
-
-
-class UFuncBinaryTask(Task):
-    """Task wrapper around one selected binary NumPy ufunc."""
-
-    selected_op: str
-    input_variables: ClassVar[dict[str, object]] = {"x": object, "y": object}
-    output_variables: ClassVar[dict[str, object]] = {"result": object}
-
-    def run(self, x, y):
-        """Apply the selected NumPy ufunc to both inputs."""
-        ufunc = UFuncBinary._OP_LABEL_TO_UFUNC.get(self.selected_op)
-        if ufunc is None:
-            ufunc = UFuncBinary._OP_LABEL_TO_UFUNC[
-                next(iter(UFuncBinary._OP_LABEL_TO_UFUNC))
-            ]
-        return ufunc(x, y)
-
-
-class UFuncBinaryParams(BaseModel):
-    """Parameters for the binary UFunc operator."""
-
-    selected_op: str = "x+y"
 
 
 class UFuncBinary(ZugWidget):
     """Apply a selected binary NumPy ufunc to two generic inputs."""
 
+    node_spec = NODE_SPEC
     name = "UFuncBinary"
-    params_model = UFuncBinaryParams
     authoritative_state = True
     description = "Apply selected NumPy ufunc to x and y inputs"
     icon = "icons/UFunc.svg"
@@ -56,22 +33,7 @@ class UFuncBinary(ZugWidget):
     # This is a non-graphical widget; we dont need main area.
     want_main_area = False
 
-    _OP_LABEL_TO_UFUNC: ClassVar[dict[str, np.ufunc]] = {
-        "x+y": np.add,
-        "x-y": np.subtract,
-        "x*y": np.multiply,
-        "x/y": np.divide,
-        "x**y": np.power,
-        "x%y": np.remainder,
-        "maximum(x,y)": np.maximum,
-        "minimum(x,y)": np.minimum,
-        "x>y": np.greater,
-        "x<y": np.less,
-        "x==y": np.equal,
-        "x!=y": np.not_equal,
-        "x>=y": np.greater_equal,
-        "x<=y": np.less_equal,
-    }
+    _OP_LABEL_TO_UFUNC: ClassVar[dict[str, np.ufunc]] = OP_LABEL_TO_UFUNC
     _UNSET: ClassVar[object] = object()
 
     class Error(ZugWidget.Error):
@@ -178,7 +140,7 @@ class UFuncBinary(ZugWidget):
     def get_task(self) -> Task:
         """Return the configured binary ufunc task."""
         self._get_selected_ufunc()
-        return UFuncBinaryTask(selected_op=self.selected_op)
+        return NODE_SPEC.build_task(self.get_params())
 
     def _resolve_operand(self, value: object, label: str) -> object:
         """Unwrap length-1 spools to patches and reject unsupported spool inputs."""

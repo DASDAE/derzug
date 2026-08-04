@@ -2,33 +2,24 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QLabel, QStackedWidget, QVBoxLayout, QWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
+from derzug.nodes.normalize import NODE_SPEC, NORMS, OPERATIONS
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
-
-
-class NormalizeParams(BaseModel):
-    """Parameters for the Normalize widget."""
-
-    operation: Literal["normalize", "standardize"] = "normalize"
-    selected_dim: str = ""
-    norm: Literal["l1", "l2", "max", "bit"] = "l2"
 
 
 class Normalize(PatchDimWidget):
     """Apply DASCore normalize and standardize operations to a patch."""
 
+    node_spec = NODE_SPEC
     name = "Normalize"
-    params_model = NormalizeParams
     authoritative_state = True
     description = "Apply DASCore normalize or standardize to a patch"
     icon = "icons/Normalize.svg"
@@ -37,8 +28,8 @@ class Normalize(PatchDimWidget):
     priority = 21.5
     want_main_area = False
 
-    _OPERATIONS: ClassVar[tuple[str, ...]] = ("normalize", "standardize")
-    _NORMS: ClassVar[tuple[str, ...]] = ("l1", "l2", "max", "bit")
+    _OPERATIONS: ClassVar[tuple[str, ...]] = OPERATIONS
+    _NORMS: ClassVar[tuple[str, ...]] = NORMS
 
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""
@@ -167,14 +158,11 @@ class Normalize(PatchDimWidget):
 
     def get_task(self) -> Task:
         """Return the current normalize/standardize operation as a workflow task."""
-        operation = self._coerce_operation()
-        kwargs = {"norm": self._coerce_norm()} if operation == "normalize" else {}
-        return PatchConfiguredMethodTask(
-            method_name=operation,
-            call_style="positional_dim",
-            dim=self._get_dim() or self.selected_dim,
-            method_kwargs=kwargs,
-        )
+        self._coerce_operation()
+        self._coerce_norm()
+        # Side effect: resyncs ``selected_dim`` to an available dimension.
+        self._get_dim()
+        return NODE_SPEC.build_task(self.get_params())
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -2,35 +2,24 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QSpinBox, QStackedWidget, QVBoxLayout, QWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
+from derzug.nodes.calculus import NODE_SPEC, TRANSFORMS
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
-
-
-class CalculusParams(BaseModel):
-    """Parameters for the Calculus widget."""
-
-    transform: Literal["differentiate", "integrate"] = "differentiate"
-    selected_dim: str = ""
-    order: int = 2
-    step: int = 1
-    definite: bool = False
 
 
 class Calculus(PatchDimWidget):
     """Apply differentiation and integration transforms to an input patch."""
 
+    node_spec = NODE_SPEC
     name = "Calculus"
-    params_model = CalculusParams
     authoritative_state = True
     description = "Apply differentiation and integration transforms to a patch"
     icon = "icons/Calculus.svg"
@@ -39,7 +28,7 @@ class Calculus(PatchDimWidget):
     priority = 21.3
     want_main_area = False
 
-    _TRANSFORMS: ClassVar[tuple[str, ...]] = ("differentiate", "integrate")
+    _TRANSFORMS: ClassVar[tuple[str, ...]] = TRANSFORMS
 
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""
@@ -176,18 +165,10 @@ class Calculus(PatchDimWidget):
 
     def get_task(self) -> Task:
         """Return the current calculus operation as a workflow task."""
-        transform = self._coerce_transform()
-        kwargs = (
-            {"order": int(self.order), "step": int(self.step)}
-            if transform == "differentiate"
-            else {"definite": bool(self.definite)}
-        )
-        return PatchConfiguredMethodTask(
-            method_name=transform,
-            call_style="positional_dim",
-            dim=self._get_dim() or self.selected_dim,
-            method_kwargs=kwargs,
-        )
+        self._coerce_transform()
+        # Side effect: resyncs ``selected_dim`` to an available dimension.
+        self._get_dim()
+        return NODE_SPEC.build_task(self.get_params())
 
 
 if __name__ == "__main__":  # pragma: no cover

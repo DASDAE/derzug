@@ -2,39 +2,29 @@
 
 from __future__ import annotations
 
-import ast
 from typing import Any
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox
-from dascore.units import percent
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.utils.parsing import parse_patch_text_value
+from derzug.nodes.stft import (
+    NODE_SPEC,
+    parse_overlap,
+    parse_taper_window,
+    parse_window_length,
+)
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
-
-
-class StftParams(BaseModel):
-    """Parameters for the Stft widget."""
-
-    selected_dim: str = ""
-    window_length: str = "0.01"
-    overlap: str = "50 %"
-    taper_window: str = "hann"
-    samples: bool = False
-    detrend: bool = False
 
 
 class Stft(PatchDimWidget):
     """Apply a DASCore short-time Fourier transform to an input patch."""
 
+    node_spec = NODE_SPEC
     name = "Stft"
-    params_model = StftParams
     authoritative_state = True
     description = "Apply a short-time Fourier transform to a patch"
     icon = "icons/Stft.svg"
@@ -120,79 +110,36 @@ class Stft(PatchDimWidget):
 
     def _parse_window_length(self) -> Any:
         """Parse the required STFT window-length value."""
-        return parse_patch_text_value(
-            self.window_length,
-            required=True,
-        )
+        return parse_window_length(self.window_length)
 
     def _parse_overlap(self) -> Any:
         """Parse the optional STFT overlap value."""
-        text = self.overlap.strip()
-        if not text:
-            return None
-        lowered = text.lower()
-        if "%" in text or "percent" in lowered:
-            value = parse_patch_text_value(
-                text.replace("%", "").replace("percent", "").strip(),
-                required=True,
-            )
-            return value * percent
-        return parse_patch_text_value(
-            text,
-            allow_none=True,
-            required=False,
-        )
+        return parse_overlap(self.overlap)
 
     def _parse_taper_window(self) -> str | tuple:
-        """
-        Parse the taper-window input.
-
-        The widget intentionally supports string names and tuple specs only.
-        Array-valued windows remain out of scope for the text-based UI.
-        """
-        value = self.taper_window.strip()
-        if not value:
-            raise ValueError("value must not be empty")
-        try:
-            parsed = ast.literal_eval(value)
-        except (SyntaxError, ValueError):
-            parsed = value
-        if isinstance(parsed, str | tuple):
-            return parsed
-        raise ValueError("expected a string name or tuple specification")
+        """Parse the taper-window input into a name or tuple spec."""
+        return parse_taper_window(self.taper_window)
 
     def _validated_task(self) -> Task | None:
-        """Return the current STFT task after widget-side validation."""
-        dim = self._get_dim()
-        if dim is None:
+        """Return the current STFT task after widget-side validation.
+
+        The parses are preflight only, to pick the right error banner; the
+        task is built from the params model, which parses the text again.
+        """
+        if self._get_dim() is None:
             return None
-        try:
-            window_length = self._parse_window_length()
-        except Exception as exc:
-            self._show_exception("invalid_window_length", exc, self.window_length)
-            return None
-        try:
-            overlap = self._parse_overlap()
-        except Exception as exc:
-            self._show_exception("invalid_overlap", exc, self.overlap)
-            return None
-        try:
-            taper_window = self._parse_taper_window()
-        except Exception as exc:
-            self._show_exception("invalid_taper_window", exc, self.taper_window)
-            return None
-        return PatchConfiguredMethodTask(
-            method_name="stft",
-            call_style="keyword_dim",
-            dim=dim,
-            dim_value=window_length,
-            method_kwargs={
-                "overlap": overlap,
-                "taper_window": taper_window,
-                "samples": bool(self.samples),
-                "detrend": bool(self.detrend),
-            },
+        checks = (
+            ("invalid_window_length", self._parse_window_length, self.window_length),
+            ("invalid_overlap", self._parse_overlap, self.overlap),
+            ("invalid_taper_window", self._parse_taper_window, self.taper_window),
         )
+        for error_key, parse, raw in checks:
+            try:
+                parse()
+            except Exception as exc:
+                self._show_exception(error_key, exc, raw)
+                return None
+        return NODE_SPEC.build_task(self.get_params())
 
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the transform-specific banner."""
@@ -204,18 +151,9 @@ class Stft(PatchDimWidget):
 
     def get_task(self) -> Task:
         """Return the current STFT operation as a workflow task."""
-        return PatchConfiguredMethodTask(
-            method_name="stft",
-            call_style="keyword_dim",
-            dim=self._get_dim() or self.selected_dim,
-            dim_value=self._parse_window_length(),
-            method_kwargs={
-                "overlap": self._parse_overlap(),
-                "taper_window": self._parse_taper_window(),
-                "samples": bool(self.samples),
-                "detrend": bool(self.detrend),
-            },
-        )
+        # Side effect: resyncs ``selected_dim`` to an available dimension.
+        self._get_dim()
+        return NODE_SPEC.build_task(self.get_params())
 
 
 if __name__ == "__main__":  # pragma: no cover

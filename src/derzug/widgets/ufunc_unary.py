@@ -6,12 +6,14 @@ from typing import ClassVar
 
 from Orange.widgets.widget import Msg
 
-from derzug.core.patchmethodwidget import ComboOption, PatchMethodWidget
+from derzug.core.patchmethodwidget import PatchMethodWidget
+from derzug.nodes.ufunc_unary import _OPTIONS, NODE_SPEC, OPS
 
 
 class UFuncUnary(PatchMethodWidget):
     """Apply a selected unary element-wise math transform to an input patch."""
 
+    node_spec = NODE_SPEC
     name = "UFuncUnary"
     description = "Apply a unary element-wise transform to a patch"
     icon = "icons/UFunc.svg"
@@ -22,29 +24,11 @@ class UFuncUnary(PatchMethodWidget):
 
     authoritative_state = True
 
-    _OPS: ClassVar[tuple[str, ...]] = (
-        "abs",
-        "real",
-        "imag",
-        "conj",
-        "angle",
-        "exp",
-        "log",
-        "log10",
-        "log2",
-    )
+    _OPS: ClassVar[tuple[str, ...]] = OPS
 
     uses_dim = False
     call_style = "plain"
-    _OPTIONS: ClassVar[tuple[object, ...]] = (
-        ComboOption(
-            "selected_op",
-            _OPS,
-            role="method",
-            label="Operation:",
-            combo_attr="_op_combo",
-        ),
-    )
+    _OPTIONS: ClassVar[tuple[object, ...]] = _OPTIONS
 
     class Error(PatchMethodWidget.Error):
         """Errors shown by the widget."""

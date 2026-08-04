@@ -14,11 +14,15 @@ from AnyQt.QtCore import Qt
 from AnyQt.QtWidgets import QDialog
 from dascore.clients.dirspool import DirectorySpool
 from dascore.clients.filespool import FileSpool
-from derzug.utils.display import format_display
-from derzug.utils.example_parameters import (
-    ExampleParametersDialog,
-    get_example_parameter_specs,
+from derzug.nodes.spool import (
+    SpoolTask,
+    SpoolTransformTask,
+    apply_select_rows,
+    spool_rows_to_patches,
 )
+from derzug.utils.display import format_display
+from derzug.utils.example_parameters import get_example_parameter_specs
+from derzug.utils.example_parameters_dialog import ExampleParametersDialog
 from derzug.utils.qt import FileOrDirDialog
 from derzug.utils.testing import (
     TestWidgetDefaults,
@@ -28,11 +32,7 @@ from derzug.utils.testing import (
 )
 from derzug.widgets.spool import (
     Spool,
-    SpoolTask,
-    SpoolTransformTask,
-    _apply_select_rows,
     _execute_spool_snapshot,
-    _spool_rows_to_patches,
     _SpoolExecutionSnapshot,
 )
 
@@ -316,7 +316,7 @@ class TestSpool:
         """Example-specific overrides should be passed into the selected callable."""
         examples = _make_example_map()
         monkeypatch.setattr(
-            "derzug.widgets.spool._all_examples", lambda ignore=(): examples
+            "derzug.nodes.spool.all_examples", lambda ignore=(): examples
         )
 
         with widget_context(Spool) as widget:
@@ -336,7 +336,7 @@ class TestSpool:
         """Right-clicking the example selector should open the parameter dialog."""
         examples = _make_example_map()
         monkeypatch.setattr(
-            "derzug.widgets.spool._all_examples", lambda ignore=(): examples
+            "derzug.nodes.spool.all_examples", lambda ignore=(): examples
         )
         dialogs: list[ExampleParametersDialog] = []
 
@@ -362,7 +362,7 @@ class TestSpool:
         """Examples without supported parameters should still open a dialog cleanly."""
         examples = {"plain_example": _make_example_map()["plain_example"]}
         monkeypatch.setattr(
-            "derzug.widgets.spool._all_examples", lambda ignore=(): examples
+            "derzug.nodes.spool.all_examples", lambda ignore=(): examples
         )
         dialogs: list[ExampleParametersDialog] = []
 
@@ -384,7 +384,7 @@ class TestSpool:
         """Saved per-example overrides should survive Orange settings packing."""
         examples = _make_example_map()
         monkeypatch.setattr(
-            "derzug.widgets.spool._all_examples", lambda ignore=(): examples
+            "derzug.nodes.spool.all_examples", lambda ignore=(): examples
         )
 
         with widget_context(Spool) as first:
@@ -402,7 +402,7 @@ class TestSpool:
         """Only non-default example values should be persisted."""
         examples = _make_example_map()
         monkeypatch.setattr(
-            "derzug.widgets.spool._all_examples", lambda ignore=(): examples
+            "derzug.nodes.spool.all_examples", lambda ignore=(): examples
         )
 
         with widget_context(Spool) as widget:
@@ -1306,7 +1306,7 @@ class TestSpool:
             return dc.spool([patch])
 
         monkeypatch.setattr(
-            "derzug.widgets.spool._all_examples",
+            "derzug.nodes.spool.all_examples",
             lambda ignore=(): {
                 "long_example": long_example,
                 "short_example": short_example,
@@ -1447,7 +1447,7 @@ class TestSpool:
             {"key": "tag", "raw": "'?bob'"},
             {"key": "distance", "raw": "(10, 20)"},
         ]
-        _apply_select_rows(
+        apply_select_rows(
             spool_widget._source_spool, tuple(spool_widget.select_filters)
         )
 
@@ -1792,7 +1792,7 @@ class TestSpool:
                 assert isinstance(item, int)
                 return f"patch-{item}"
 
-        patches = _spool_rows_to_patches(_FakeDirectorySpool(), {0})
+        patches = spool_rows_to_patches(_FakeDirectorySpool(), {0})
 
         assert patches == ["patch-1"]
 
