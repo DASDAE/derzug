@@ -223,10 +223,10 @@ class TestAggregate:
         assert out.dims == expected.dims
         assert out.data == pytest.approx(expected.data)
 
-    def test_phase_weighted_stack_requires_selected_dim(
+    def test_phase_weighted_stack_defaults_unset_stack_dim(
         self, aggregate_widget, monkeypatch, qtbot
     ):
-        """Phase-weighted stack should fail clearly when no stack dim is selected."""
+        """An unset stack dim should default to distance instead of failing."""
         received = capture_output(aggregate_widget.Outputs.patch, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
         aggregate_widget.selected_dim = ""
@@ -235,11 +235,16 @@ class TestAggregate:
         aggregate_widget.set_patch(patch)
         wait_for_widget_idle(aggregate_widget)
 
-        assert received[-1] is None
-        assert aggregate_widget.Error.aggregate_failed.is_shown()
-        assert "requires selecting one stack dimension" in (
-            aggregate_widget.Error.aggregate_failed.formatted
+        out = received[-1]
+        expected = patch.phase_weighted_stack(
+            "distance",
+            transform_dim="time",
+            dim_reduce="empty",
         )
+        assert out is not None
+        assert out.shape == expected.shape
+        assert out.dims == expected.dims
+        assert out.data == pytest.approx(expected.data)
 
     def test_dim_change_triggers_rerun(self, aggregate_widget, monkeypatch, qtbot):
         """Changing dimension reruns and emits a fresh output."""

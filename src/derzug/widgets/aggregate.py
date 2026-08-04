@@ -15,6 +15,7 @@ from derzug.nodes.aggregate import (
     DIM_REDUCES,
     METHODS,
     NODE_SPEC,
+    default_phase_weighted_stack_dim,
     infer_phase_weighted_stack_transform_dim,
 )
 from derzug.workflow import Task
@@ -36,13 +37,6 @@ class Aggregate(ZugWidget):
 
     _METHODS: ClassVar[tuple[str, ...]] = METHODS
     _DIM_REDUCES: ClassVar[tuple[str, ...]] = DIM_REDUCES
-
-    @staticmethod
-    def _default_phase_weighted_stack_dim(dims: tuple[str, ...]) -> str:
-        """Choose a default stack dimension for phase-weighted stack."""
-        if "distance" in dims:
-            return "distance"
-        return dims[0]
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""
@@ -140,6 +134,10 @@ class Aggregate(ZugWidget):
         stack_dim = (
             self.selected_dim if self.selected_dim in self._available_dims else ""
         )
+        if not stack_dim and self._patch is not None and self._available_dims:
+            # An unset stack dim resolves to the same default the task applies,
+            # so the transform chooser must exclude that effective stack dim.
+            stack_dim = default_phase_weighted_stack_dim(tuple(self._patch.dims)) or ""
         dims = tuple(dim for dim in self._available_dims if dim != stack_dim)
         inferred = ""
         if (
@@ -191,10 +189,11 @@ class Aggregate(ZugWidget):
         if (
             value == "phase_weighted_stack"
             and self.selected_dim not in self._available_dims
+            and self._patch is not None
             and self._available_dims
         ):
-            self.selected_dim = self._default_phase_weighted_stack_dim(
-                self._available_dims
+            self.selected_dim = default_phase_weighted_stack_dim(
+                tuple(self._patch.dims)
             )
             self._dim_combo.blockSignals(True)
             self._dim_combo.setCurrentText(self.selected_dim)

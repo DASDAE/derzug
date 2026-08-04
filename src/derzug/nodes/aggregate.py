@@ -33,6 +33,18 @@ DIM_REDUCES: tuple[str, ...] = (
 )
 
 
+def default_phase_weighted_stack_dim(dims: tuple[str, ...]) -> str | None:
+    """Return the stack dimension phase-weighted stacking defaults to.
+
+    Stacking is usually across receivers, so ``distance`` wins, then whatever
+    comes first. Shared by the widget's method switch and ``AggregateTask.run``
+    so canvas and headless resolve the same dimension.
+    """
+    if not dims:
+        return None
+    return "distance" if "distance" in dims else dims[0]
+
+
 def infer_phase_weighted_stack_transform_dim(patch: dc.Patch, stack_dim: str) -> str:
     """Pick a deterministic transform axis for phase-weighted stacking."""
     candidates = tuple(dim for dim in patch.dims if dim != stack_dim)
@@ -69,21 +81,26 @@ class AggregateTask(Task):
     def run(self, patch):
         """Apply the configured aggregate reduction to one patch."""
         dim = None if self.selected_dim in ("", "All") else self.selected_dim
+        if dim is not None and dim not in patch.dims:
+            # The widget's dim chooser resets a stale dim to "All"; match it.
+            dim = None
         if self.method == "phase_weighted_stack":
             if dim is None:
-                msg = "Phase-weighted stack requires selecting one stack dimension."
+                # A headless caller may leave the stack dim unset; resolve it
+                # the same way the widget's method switch would.
+                dim = default_phase_weighted_stack_dim(tuple(patch.dims))
+            if dim is None:
+                msg = "Phase-weighted stack requires a patch with dimensions."
                 raise ValueError(msg)
+            # A transform dim that is missing or equals the resolved stack dim
+            # is re-inferred, mirroring the widget's transform chooser.
             transform_dim = (
                 self.transform_dim
-                if self.transform_dim and self.transform_dim in patch.dims
+                if self.transform_dim
+                and self.transform_dim in patch.dims
+                and self.transform_dim != dim
                 else infer_phase_weighted_stack_transform_dim(patch, dim)
             )
-            if transform_dim == dim:
-                msg = (
-                    "Phase-weighted stack transform dimension must differ from "
-                    "stack dimension."
-                )
-                raise ValueError(msg)
             return patch.phase_weighted_stack(
                 stack_dim=dim,
                 transform_dim=transform_dim,

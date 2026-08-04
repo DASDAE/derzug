@@ -32,11 +32,10 @@ class PatchDimWidget(ZugWidget, openclass=True):
 
     def _refresh_dims(self) -> None:
         """Sync dimension choices from the current patch."""
-        dims = (
-            tuple(sorted(self._patch.dims, key=str.casefold))
-            if self._patch is not None
-            else ()
-        )
+        patch_dims = tuple(self._patch.dims) if self._patch is not None else ()
+        # The combo displays dims sorted for scanning; the default is chosen
+        # from patch order so canvas and headless (resolve_patch_dim) agree.
+        dims = tuple(sorted(patch_dims, key=str.casefold))
         self._available_dims = dims
 
         self._dim_combo.blockSignals(True)
@@ -44,7 +43,7 @@ class PatchDimWidget(ZugWidget, openclass=True):
         self._dim_combo.addItems(dims)
         if dims:
             if self.selected_dim not in dims:
-                self.selected_dim = self._default_dim(dims)
+                self.selected_dim = self._default_dim(patch_dims)
             self._set_combo_value(self._dim_combo, self.selected_dim)
         else:
             self._dim_combo.setCurrentIndex(-1)
@@ -55,6 +54,12 @@ class PatchDimWidget(ZugWidget, openclass=True):
         """Choose a default dimension, preferring time when available."""
         return default_patch_dim(dims)
 
+    def _dims_in_patch_order(self) -> tuple[str, ...]:
+        """Return the available dims in patch order, matching headless resolution."""
+        patch_dims = tuple(self._patch.dims) if self._patch is not None else ()
+        ordered = tuple(dim for dim in patch_dims if dim in self._available_dims)
+        return ordered or self._available_dims
+
     def _get_dim(self) -> str | None:
         """Return the currently selected dimension when available."""
         if not self._available_dims:
@@ -62,7 +67,7 @@ class PatchDimWidget(ZugWidget, openclass=True):
         dim = (
             self.selected_dim
             if self.selected_dim in self._available_dims
-            else self._default_dim(self._available_dims)
+            else self._default_dim(self._dims_in_patch_order())
         )
         if dim != self.selected_dim:
             self.selected_dim = dim

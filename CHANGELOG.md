@@ -4,6 +4,13 @@ All notable user-facing changes to DerZug are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- Canvas and headless execution now resolve default dimensions identically. Previously a widget on the canvas could pick a different dimension than the same node run headlessly from the same saved parameters:
+  - Dimension choosers no longer derive the default from the alphabetically sorted dim list; when a patch has no `time` dimension the default is now the first patch dimension, matching `resolve_patch_dim`.
+  - The Fourier widget's inverse-transform dimension fallback now prefers a `ft_*` axis (matching `FourierTask.run`) instead of the forward-transform default, which preferred `time`.
+  - Aggregate's phase-weighted stack no longer fails headlessly when no stack dimension is set; it defaults to `distance` (else the first patch dimension), the same default the widget applies, and the widget's transform-dimension chooser now excludes that effective stack dimension.
+
 ### Changed (breaking)
 
 DerZug is pre-alpha; these renames are a clean break with no compatibility

@@ -217,6 +217,18 @@ class TestFourier:
         assert received[-1] is patch
         assert captured["dim"] == ("time", "distance")
 
+    def test_idft_dim_fallback_prefers_fourier_axis(self, fourier_widget, qtbot):
+        """The idft dim fallback must match FourierTask.run's inverse default."""
+        patch = dc.get_example_patch("example_event_1").dft("distance")
+        fourier_widget.transform = "idft"
+        fourier_widget.set_patch(patch)
+        wait_for_widget_idle(fourier_widget)
+
+        fourier_widget.selected_dim = ""
+
+        assert fourier_widget._get_dim() == "ft_distance"
+        assert fourier_widget.selected_dim == "ft_distance"
+
     def test_idft_dimension_change_triggers_rerun(
         self, fourier_widget, monkeypatch, qtbot
     ):
