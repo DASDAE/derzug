@@ -54,17 +54,6 @@ _SAVGOL_MODE_OPTIONS: tuple[str, ...] = (
 )
 
 
-def _make_page(*widgets: QWidget) -> QWidget:
-    """Wrap a list of already-created widgets in a plain QVBoxLayout page."""
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(4)
-    for w in widgets:
-        layout.addWidget(w)
-    return page
-
-
 class Filter(PatchDimWidget):
     """Apply a selected DASCore Patch filter method to an input patch."""
 
@@ -496,10 +485,6 @@ class Filter(PatchDimWidget):
     def _on_add_gaussian_row_clicked(self) -> None:
         """Append a blank Gaussian row and rerun."""
         self._gaussian_row_manager.add_blank_row()
-
-    def _remove_gaussian_row(self, row: dict[str, QWidget]) -> None:
-        """Remove one Gaussian row while keeping one editable row available."""
-        self._gaussian_row_manager.remove_row(row)
 
     def _on_gaussian_row_changed(self, *_args) -> None:
         """Persist Gaussian row edits and rerun."""

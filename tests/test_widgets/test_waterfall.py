@@ -18,6 +18,7 @@ from dascore.viz.waterfall import _get_scale as get_dascore_waterfall_scale
 from derzug.annotations_config import AnnotationConfig, save_annotation_config
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.models.selection import SelectParams
+from derzug.models.selection_state import _ranges_overlap
 from derzug.utils.testing import (
     TestPatchInputStateDefaults,
     widget_context,
@@ -3483,8 +3484,8 @@ class TestWaterfall:
         assert not np.allclose(after[1], before[1])
         x_bounds = waterfall_widget._axis_bounds(waterfall_widget._axes.x_plot)
         y_bounds = waterfall_widget._axis_bounds(waterfall_widget._axes.y_plot)
-        assert waterfall_widget._ranges_overlap(after[0], x_bounds)
-        assert waterfall_widget._ranges_overlap(after[1], y_bounds)
+        assert _ranges_overlap(tuple(after[0]), tuple(x_bounds))
+        assert _ranges_overlap(tuple(after[1]), tuple(y_bounds))
 
     def test_ricker_moveout_rezooms_after_zoomed_event_view(self, waterfall_widget):
         """A zoomed event view should reset when ricker data is outside it."""

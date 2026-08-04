@@ -115,15 +115,3 @@ class Provenance(WorkflowModel):
         if "pipeline" in data and "pipe" not in data:
             data["pipe"] = data.pop("pipeline")
         return cls.model_validate(data)
-
-
-class ProvenanceMap(WorkflowModel):
-    """A serializable provenance map."""
-
-    data: dict[str, Provenance]
-
-
-class FingerPrintTuple(WorkflowModel):
-    """Serializable tuple for provenance fingerprints."""
-
-    data: tuple[str, ...]

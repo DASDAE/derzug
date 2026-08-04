@@ -157,13 +157,6 @@ def _block_signals(*widgets):
             w.blockSignals(False)
 
 
-def _default_plot_dims(dims: tuple[str, ...]) -> tuple[str, str]:
-    """Return (y_dim, x_dim) defaults: distance x time if present, else first two."""
-    if "distance" in dims and "time" in dims:
-        return "distance", "time"
-    return dims[0], dims[1]
-
-
 # Statistics over patch data (default color levels, data-change detection) are
 # computed on an evenly strided subsample of at most this many samples so their
 # cost stays bounded for very large arrays. Patches at or below this size are
@@ -749,14 +742,6 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         self._refresh_nd_plot_controls(patch)
         self._update_annotation_slice_coords()
 
-    def _on_y_dim_changed(self, dim: str) -> None:
-        """Handle Y-axis dim combo change; auto-swap X if collision."""
-        self._on_nd_y_dim_changed(dim)
-
-    def _on_x_dim_changed(self, dim: str) -> None:
-        """Handle X-axis dim combo change; auto-swap Y if collision."""
-        self._on_nd_x_dim_changed(dim)
-
     def _on_nd_plot_state_changed(self, *, kind: str) -> None:
         """Refresh Waterfall state after shared ND controls change."""
         self._annotation_controller.active_annotation_id = None
@@ -783,10 +768,6 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
             idx = self._slice_indices.get(dim, 0)
             coords[dim] = self._patch.get_array(dim)[idx]
         self._annotation_controller.slice_coords = coords
-
-    def _apply_slice_dims(self, patch: dc.Patch) -> dc.Patch:
-        """Select a single index along each slice dimension to produce a 2D patch."""
-        return self._apply_nd_slice_dims(patch)
 
     def _update_axis_state_from_patch(self, patch: dc.Patch | None) -> None:
         """Precompute axis metadata without forcing an immediate render."""
@@ -962,17 +943,6 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     ) -> None:
         self._activate_annotation_layer()
         self._annotation_controller.create_box_annotation(start, end)
-
-    def _create_line_annotation(
-        self,
-        start: tuple[float, float],
-        end: tuple[float, float],
-    ) -> None:
-        self._activate_annotation_layer()
-        self._annotation_controller.create_line_annotation(start, end)
-
-    def _set_active_annotation(self, annotation_id: str | None) -> None:
-        self._annotation_controller.set_active_annotation(annotation_id)
 
     def _edit_annotation(self, annotation_id: str) -> bool:
         self._annotation_controller._editor_class = _AnnotationEditorDialog
@@ -2196,16 +2166,6 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         previous_sample = strided_sample(previous_data, _STAT_SAMPLE_TARGET)
         new_sample = strided_sample(new_data, _STAT_SAMPLE_TARGET)
         return not np.array_equal(previous_sample, new_sample)
-
-    @staticmethod
-    def _ranges_overlap(
-        first: tuple[float, float],
-        second: tuple[float, float],
-    ) -> bool:
-        """Return True when two 1D ranges intersect."""
-        first_low, first_high = sorted(first)
-        second_low, second_high = sorted(second)
-        return max(first_low, second_low) <= min(first_high, second_high)
 
 
 if __name__ == "__main__":  # pragma: no cover

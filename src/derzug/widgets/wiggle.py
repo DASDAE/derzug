@@ -564,14 +564,6 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
         finally:
             self._stride_spin.blockSignals(False)
 
-    def _sync_colormap_control(self) -> None:
-        """Write the current colormap setting into the visible control once."""
-        self._cmap_combo.blockSignals(True)
-        try:
-            self._cmap_combo.setCurrentText(self.colormap)
-        finally:
-            self._cmap_combo.blockSignals(False)
-
     def _sync_gain_control(self) -> None:
         """Write the current gain setting into the visible slider."""
         self._ensure_gain_slider_covers(self.gain)

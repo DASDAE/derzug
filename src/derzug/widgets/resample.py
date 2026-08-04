@@ -109,7 +109,7 @@ class Resample(PatchDimWidget):
         """Build the resampling settings page."""
         page = gui.widgetBox(None)
         self._resample_target_label = gui.widgetLabel(page, "Target:")
-        self._resample_target_edit = gui.lineEdit(
+        gui.lineEdit(
             page,
             self,
             "resample_target",

@@ -357,61 +357,6 @@ def entry_file_path(directory: str | Path, entry_id: str) -> Path:
     return Path(directory) / f"{entry_id}.json"
 
 
-def persist_entries(
-    entries: tuple[AnnotationStoreEntry, ...],
-    directory: str | Path,
-) -> tuple[AnnotationStoreEntry, ...]:
-    """Persist all entries into a backing directory and return updated entries."""
-    root = Path(directory)
-    root.mkdir(parents=True, exist_ok=True)
-    valid_paths: set[Path] = set()
-    updated: list[AnnotationStoreEntry] = []
-    for entry in entries:
-        path = entry_file_path(root, entry.id)
-        path.write_text(
-            serialize_annotation_set(entry.annotation_set), encoding="utf-8"
-        )
-        valid_paths.add(path)
-        updated.append(
-            AnnotationStoreEntry(
-                id=entry.id,
-                name=entry.name,
-                annotation_set=entry.annotation_set,
-                file_path=str(path),
-            )
-        )
-    for path in root.glob("*.json"):
-        if path not in valid_paths:
-            path.unlink()
-    return tuple(updated)
-
-
-def load_entries_from_directory(
-    directory: str | Path,
-) -> tuple[AnnotationStoreEntry, ...]:
-    """Load all JSON-backed annotation sets from one directory."""
-    root = Path(directory)
-    if not root.exists() or not root.is_dir():
-        return ()
-    entries: list[AnnotationStoreEntry] = []
-    for path in sorted(root.glob("*.json")):
-        try:
-            annotation_set = deserialize_annotation_set(
-                path.read_text(encoding="utf-8")
-            )
-        except Exception:
-            continue
-        entries.append(
-            AnnotationStoreEntry(
-                id=path.stem,
-                name=path.stem,
-                annotation_set=annotation_set,
-                file_path=str(path),
-            )
-        )
-    return tuple(entries)
-
-
 def persist_entry_name_metadata(
     entry: AnnotationStoreEntry,
     directory: str | Path,

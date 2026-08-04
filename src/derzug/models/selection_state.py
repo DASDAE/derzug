@@ -433,12 +433,6 @@ class SelectionState:
             kwargs[dim] = (_coerce_python_scalar(low), _coerce_python_scalar(high))
         return kwargs
 
-    def patch_enabled_dims(self) -> tuple[str, ...]:
-        """Return enabled patch dimensions in display order."""
-        return tuple(
-            dim for dim in self.patch.ranges if self.patch.enabled.get(dim, True)
-        )
-
     def set_patch_dim_enabled(self, dim: str, enabled: bool) -> None:
         """Enable or disable one patch dimension without losing its range."""
         if dim not in self.patch.ranges:

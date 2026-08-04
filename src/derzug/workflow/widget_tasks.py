@@ -24,17 +24,6 @@ class PatchPassThroughTask(Task):
         return patch
 
 
-class ObjectPassThroughTask(Task):
-    """Pass one arbitrary object through unchanged."""
-
-    input_variables: ClassVar[dict[str, object]] = {"value": object}
-    output_variables: ClassVar[dict[str, object]] = {"value": object}
-
-    def run(self, value):
-        """Return the input value unchanged."""
-        return value
-
-
 class PatchConfiguredMethodTask(Task):
     """Invoke one named patch method using stored arguments."""
 

@@ -54,7 +54,6 @@ class ExampleParametersDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._example_name = example_name
         self._specs = specs
         self._saved_values = saved_values or {}
         self._inputs: dict[str, QWidget] = {}
