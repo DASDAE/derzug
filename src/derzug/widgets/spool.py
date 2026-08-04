@@ -4,9 +4,7 @@ Pure Orange widget for loading DASCore example spools.
 
 from __future__ import annotations
 
-import ast
 import datetime
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
@@ -43,8 +41,7 @@ from derzug.nodes.spool import (
     SpoolParams,
     SpoolTask,
     SpoolTransformTask,
-    apply_chunk_settings,
-    apply_select_rows,
+    apply_spool_transforms,
     contents_identity_token,
     load_spool_from_settings,
     ordered_contents_df,
@@ -58,7 +55,6 @@ from derzug.settings import Setting
 from derzug.utils.display import format_display
 from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.example_parameters import (
-    build_example_call_kwargs,
     filter_example_overrides,
     get_example_parameter_specs,
 )
@@ -259,18 +255,19 @@ def _emit_task(
     visible_row_count: int | None,
 ) -> tuple[dc.BaseSpool | None, dc.Patch | None]:
     """Read selected patch data off the main thread and return (spool, patch)."""
-    if not selected_source_rows:
-        output_spool = display_spool
-        if unpack_single and visible_row_count == 1:
-            output_patch = extract_single_patch(output_spool)
-        else:
-            output_patch = None
-    else:
+    if selected_source_rows:
         output_spool = spool_rows_to_output(display_spool, selected_source_rows)
-        if unpack_single and len(selected_source_rows) == 1:
-            output_patch = extract_single_patch(output_spool)
-        else:
-            output_patch = None
+        output_row_count = len(selected_source_rows)
+    else:
+        output_spool = display_spool
+        output_row_count = visible_row_count
+    # Unpack exactly one output row, same rule as extract_single_patch in the
+    # node tasks; the row count is known here so the extract call is skipped
+    # for multi-row outputs.
+    if unpack_single and output_row_count == 1:
+        output_patch = extract_single_patch(output_spool)
+    else:
+        output_patch = None
     return output_spool, output_patch
 
 
@@ -397,24 +394,8 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
             except Exception as exc:
                 raise _SettingsSourceLoadError(str(exc)) from exc
         try:
-            display_spool = apply_select_rows(source_spool, task.select_filters)
-            display_spool = apply_chunk_settings(
-                display_spool,
-                chunk_enabled=task.chunk_enabled,
-                chunk_dim=task.chunk_dim,
-                chunk_value=task.chunk_value,
-                chunk_overlap=task.chunk_overlap,
-                chunk_keep_partial=task.chunk_keep_partial,
-                chunk_snap_coords=task.chunk_snap_coords,
-                chunk_tolerance=task.chunk_tolerance,
-                chunk_conflict=task.chunk_conflict,
-            )
-            visible_row_count = _spool_row_count(display_spool)
-            output_spool, output_patch = _emit_task(
-                display_spool,
-                snapshot.selected_source_rows,
-                task.unpack_single_patch,
-                visible_row_count,
+            display_spool, output_spool, output_patch = _transform_and_emit(
+                source_spool, task, snapshot.selected_source_rows
             )
         except Exception as exc:
             raise _SettingsTransformError(
@@ -435,24 +416,8 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
             None, None, None, None, display_generation=snapshot.display_generation
         )
     assert isinstance(task, SpoolTransformTask)
-    display_spool = apply_select_rows(source_spool, task.select_filters)
-    display_spool = apply_chunk_settings(
-        display_spool,
-        chunk_enabled=task.chunk_enabled,
-        chunk_dim=task.chunk_dim,
-        chunk_value=task.chunk_value,
-        chunk_overlap=task.chunk_overlap,
-        chunk_keep_partial=task.chunk_keep_partial,
-        chunk_snap_coords=task.chunk_snap_coords,
-        chunk_tolerance=task.chunk_tolerance,
-        chunk_conflict=task.chunk_conflict,
-    )
-    visible_row_count = _spool_row_count(display_spool)
-    output_spool, output_patch = _emit_task(
-        display_spool,
-        snapshot.selected_source_rows,
-        task.unpack_single_patch,
-        visible_row_count,
+    display_spool, output_spool, output_patch = _transform_and_emit(
+        source_spool, task, snapshot.selected_source_rows
     )
     return _SpoolExecutionResult(
         source_spool=source_spool,
@@ -462,6 +427,22 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
         settings_source_identity=snapshot.settings_source_identity,
         display_generation=snapshot.display_generation,
     )
+
+
+def _transform_and_emit(
+    source_spool: dc.BaseSpool,
+    task: SpoolTask | SpoolTransformTask,
+    selected_source_rows: frozenset[int],
+) -> tuple[dc.BaseSpool, dc.BaseSpool | None, dc.Patch | None]:
+    """Run the node's select/chunk stages, then emit the selected outputs."""
+    display_spool = apply_spool_transforms(source_spool, task)
+    output_spool, output_patch = _emit_task(
+        display_spool,
+        selected_source_rows,
+        task.unpack_single_patch,
+        _spool_row_count(display_spool),
+    )
+    return display_spool, output_spool, output_patch
 
 
 class Spool(ZugWidget):
@@ -894,39 +875,6 @@ class Spool(ZugWidget):
         self._set_source_spool(updated)
         self.run()
 
-    def _snapshot_loader(self) -> tuple[str | None, Callable | None]:
-        """Capture current source state and return (source_name, pure_callable).
-
-        All widget-state reads happen here on the main thread.  The returned
-        callable captures only immutable data so it is safe to run in a worker.
-        """
-        if self.file_input:
-            path = self.file_input
-            return path, lambda: dc.spool(path)
-
-        if self.raw_input:
-            raw = self.raw_input
-            return raw, lambda: dc.spool(raw)
-
-        if not self._examples:
-            self.Warning.no_examples()
-            return None, None
-        example_name = self.spool_input
-        if not example_name:
-            return None, None
-        fn = self._selected_example_callable(example_name)
-        kwargs = build_example_call_kwargs(
-            fn, self.example_parameters_for(example_name)
-        )
-
-        def _load() -> dc.BaseSpool:
-            result = fn(**kwargs)
-            if isinstance(result, dc.Patch):
-                return dc.spool([result])
-            return result
-
-        return example_name, _load
-
     def _supports_async_execution(self) -> bool:
         """Load and transform spool data off-thread by default."""
         return True
@@ -1334,24 +1282,6 @@ class Spool(ZugWidget):
             self.raw_edit.clear()
             self.raw_edit.blockSignals(False)
 
-    def _load_from_example(self) -> dc.BaseSpool:
-        """Load spool from the selected example key."""
-        if not self._examples:
-            self.Warning.no_examples()
-            raise ValueError("No examples available")
-        example_name = self._selected_example_name()
-        if example_name is None:
-            raise ValueError("No example selected")
-        fn = self._selected_example_callable(example_name)
-        kwargs = build_example_call_kwargs(
-            fn,
-            self.example_parameters_for(example_name),
-        )
-        result = fn(**kwargs)
-        if isinstance(result, dc.Patch):
-            return dc.spool([result])
-        return result
-
     def _selected_example_name(self) -> str | None:
         """Return the currently selected example name, if any."""
         return self.spool_input
@@ -1627,18 +1557,6 @@ class Spool(ZugWidget):
         self.chunk_dim = dim
         self._on_chunk_param_changed()
 
-    def _parse_chunk_scalar(self, text: str) -> Any:
-        """Parse text for chunk kwargs, supporting literals and ellipsis."""
-        t = text.strip()
-        if not t:
-            return None
-        if t == "...":
-            return ...
-        try:
-            return ast.literal_eval(t)
-        except Exception:
-            return t
-
     def _on_chunk_param_changed(self, *_args) -> None:
         """Apply chunk with selected parameters and emit chunked spool."""
         if self._source_spool is None:
@@ -1686,8 +1604,7 @@ class Spool(ZugWidget):
         try:
             # Narrow the spool before any downstream patch materialization so
             # chunking and row extraction work on the smallest candidate set.
-            display = self._apply_select_transform(source)
-            display = self._apply_chunk_transform(display)
+            display = apply_spool_transforms(source, self._current_transform_task())
         except Exception as exc:
             self._show_exception("general", exc)
             return
@@ -1698,38 +1615,6 @@ class Spool(ZugWidget):
     def _refresh_ui(self) -> None:
         """Refresh the visible table and transform controls."""
         self._render_spool(self._display_spool)
-
-    def _apply_chunk_transform(self, spool: dc.BaseSpool) -> dc.BaseSpool:
-        """Return the source spool or a chunked derivative based on current controls."""
-        if not bool(self.chunk_enabled):
-            return spool
-        dim = (self.chunk_dim or "").strip()
-        value = self._parse_chunk_scalar(self.chunk_value)
-        if not dim or value is None:
-            return spool
-
-        overlap = self._parse_chunk_scalar(self.chunk_overlap)
-        kwargs = {
-            dim: value,
-            "overlap": overlap,
-            "keep_partial": bool(self.chunk_keep_partial),
-            "snap_coords": bool(self.chunk_snap_coords),
-            "tolerance": float(self.chunk_tolerance),
-            "conflict": self.chunk_conflict,
-        }
-        return spool.chunk(**kwargs)
-
-    def _apply_select_transform(self, spool: dc.BaseSpool) -> dc.BaseSpool:
-        """Return the input spool or a selection-filtered derivative."""
-        kwargs = {}
-        for filter_data in self._iter_active_select_filters():
-            value = self._parse_chunk_scalar(filter_data["raw"])
-            if value is None:
-                continue
-            kwargs[filter_data["key"]] = value
-        if not kwargs:
-            return spool
-        return spool.select(**kwargs)
 
     @staticmethod
     def _blank_select_filter() -> dict[str, str]:
@@ -1818,15 +1703,6 @@ class Spool(ZugWidget):
             "key": row["combo"].currentText().strip(),
             "raw": row["edit"].text().strip(),
         }
-
-    def _iter_active_select_filters(self) -> list[dict[str, str]]:
-        """Return non-empty select filters from the current widget state."""
-        self._sync_select_filters_from_ui()
-        return [
-            item
-            for item in self.select_filters
-            if item["key"].strip() and item["raw"].strip()
-        ]
 
     def _on_add_select_row_clicked(self) -> None:
         """Append a blank select row and re-run selection."""

@@ -24,14 +24,17 @@ from AnyQt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from dascore.core.coords import get_coord
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.nodes.coords import NODE_SPEC, CoordsTask
-from derzug.utils.parsing import parse_coord_text_value
+from derzug.nodes.coords import (
+    NODE_SPEC,
+    CoordsTask,
+    CoordsValidationError,
+    resolve_set_coord,
+)
 from derzug.workflow import Task
 
 
@@ -836,248 +839,36 @@ class Coords(ZugWidget):
         )
 
     def _validated_task(self) -> CoordsTask | None:
-        """Return the current validated coordinate task, or None on invalid state."""
+        """Return the current coordinate task, or None when preflight fails.
+
+        The node factory is the only task constructor; the node's ``preflight``
+        runs the same validation ``run`` would and its structured error is
+        mapped onto the widget's banners.
+        """
         operation = self._coerce_operation()
         self._set_current_operation_ui(operation)
-        if operation == "rename_coords":
-            mapping = self._validated_mapping(
-                self.rename_rows,
-                label="rename",
-                valid_left=self._available_coords,
-                valid_right=None,
-                reject_duplicate_right=True,
-            )
-            if mapping is None:
+        task = self._task_snapshot()
+        if self._patch is not None:
+            try:
+                task.preflight(self._patch)
+            except CoordsValidationError as exc:
+                self._show_coords_validation_error(exc)
                 return None
-            rename_rows = tuple(mapping.items())
-            return CoordsTask(operation=operation, rename_rows=rename_rows)
-        if operation == "drop_coords":
-            selected = self._validated_selection(
-                self.drop_coords_selected,
-                self._available_non_dim_coords,
-                label="drop",
-            )
-            if selected is None:
-                return None
-            return CoordsTask(
-                operation=operation,
-                drop_coords_selected=tuple(selected),
-            )
-        if operation == "sort_coords":
-            selected = self._validated_selection(
-                self.sort_coords_selected,
-                self._available_coords,
-                label="sort",
-            )
-            if selected is None:
-                return None
-            return CoordsTask(
-                operation=operation,
-                sort_coords_selected=tuple(selected),
-                sort_reverse=bool(self.sort_reverse),
-            )
-        if operation == "snap_coords":
-            selected = self._validated_selection(
-                self.snap_coords_selected,
-                self._available_coords,
-                label="snap",
-            )
-            if selected is None:
-                return None
-            return CoordsTask(
-                operation=operation,
-                snap_coords_selected=tuple(selected),
-                snap_reverse=bool(self.snap_reverse),
-            )
-        if operation == "set_coords":
-            if not self.set_coords_applied_dim:
-                return CoordsTask(operation=operation)
-            coord = self._validated_set_coords_coord()
-            if coord is None:
-                return None
-            return CoordsTask(
-                operation=operation,
-                set_coords_applied_dim=str(self.set_coords_applied_dim or ""),
-                set_coords_applied_start=str(self.set_coords_applied_start or ""),
-                set_coords_applied_stop=str(self.set_coords_applied_stop or ""),
-                set_coords_applied_step=str(self.set_coords_applied_step or ""),
-            )
-        if operation == "set_dims":
-            mapping = self._validated_mapping(
-                self.set_dims_rows,
-                label="set_dims",
-                valid_left=self._available_dims,
-                valid_right=self._available_coords,
-                reject_duplicate_right=True,
-            )
-            if mapping is None:
-                return None
-            return CoordsTask(
-                operation=operation,
-                set_dims_rows=tuple(mapping.items()),
-            )
-        if operation == "flip":
-            selected = self._validated_selection(
-                self.flip_dims_selected,
-                self._available_coords,
-                label="flip",
-            )
-            if selected is None:
-                return None
-            return CoordsTask(
-                operation=operation,
-                flip_dims_selected=tuple(selected),
-                flip_data=bool(self.flip_data),
-                flip_coords=bool(self.flip_coords),
-            )
-        order = self._validated_transpose_order()
-        if order is None:
-            return None
-        return CoordsTask(
-            operation=operation,
-            transpose_order=tuple(order),
-        )
+        return task
+
+    def _show_coords_validation_error(self, exc: CoordsValidationError) -> None:
+        """Route one structured node validation failure to its banner."""
+        if exc.kind == "mapping":
+            self._show_error_message("invalid_mapping", exc.label, exc.detail)
+        elif exc.kind == "selection":
+            self._show_error_message("invalid_selection", exc.label, exc.detail)
+        else:
+            self._show_error_message("invalid_set_coords", exc.detail)
 
     def _task_snapshot(self) -> CoordsTask:
         """Return the stored coordinate-operation state without patch validation."""
         self._coerce_operation()
         return NODE_SPEC.build_task(self.get_params())
-
-    def _validated_mapping(
-        self,
-        rows: object,
-        *,
-        label: str,
-        valid_left: tuple[str, ...],
-        valid_right: tuple[str, ...] | None,
-        reject_duplicate_right: bool,
-    ) -> dict[str, str] | None:
-        """Validate mapping-table rows and return kwargs for DASCore."""
-        mapping: dict[str, str] = {}
-        used_right: set[str] = set()
-        valid_left_set = set(valid_left)
-        valid_right_set = None if valid_right is None else set(valid_right)
-
-        for left, right in self._normalize_rows(rows):
-            left = left.strip()
-            right = right.strip()
-            if not left and not right:
-                continue
-            if not left or not right:
-                self._show_error_message(
-                    "invalid_mapping",
-                    label,
-                    "both columns must be filled",
-                )
-                return None
-            if left not in valid_left_set:
-                self._show_error_message(
-                    "invalid_mapping",
-                    label,
-                    f"'{left}' is not available",
-                )
-                return None
-            if valid_right_set is not None and right not in valid_right_set:
-                self._show_error_message(
-                    "invalid_mapping",
-                    label,
-                    f"'{right}' is not available",
-                )
-                return None
-            if left in mapping:
-                self._show_error_message(
-                    "invalid_mapping",
-                    label,
-                    f"duplicate source '{left}'",
-                )
-                return None
-            if reject_duplicate_right and right in used_right:
-                self._show_error_message(
-                    "invalid_mapping",
-                    label,
-                    f"duplicate target '{right}'",
-                )
-                return None
-            mapping[left] = right
-            used_right.add(right)
-
-        if not mapping:
-            self._show_error_message(
-                "invalid_mapping",
-                label,
-                "at least one mapping is required",
-            )
-            return None
-        return mapping
-
-    def _validated_selection(
-        self,
-        selected: object,
-        valid: tuple[str, ...],
-        *,
-        label: str,
-    ) -> list[str] | None:
-        """Validate serialized coord-name selections."""
-        selected_names = [str(item) for item in (selected or [])]
-        valid_set = set(valid)
-        invalid = [name for name in selected_names if name not in valid_set]
-        if invalid:
-            self._show_error_message(
-                "invalid_selection",
-                label,
-                ", ".join(invalid),
-            )
-            return None
-        return selected_names
-
-    def _validated_transpose_order(self) -> list[str] | None:
-        """Validate the transpose dimension order against the input patch."""
-        order = list(self.transpose_order)
-        dims = list(self._available_dims)
-        if not dims:
-            return []
-        if sorted(order) != sorted(dims):
-            self._show_error_message(
-                "invalid_selection",
-                "transpose",
-                "dimension order does not match the input patch",
-            )
-            return None
-        self.transpose_order = order
-        return order
-
-    def _validated_set_coords_coord(self):
-        """Return the replacement coordinate resolved from sparse applied state."""
-        dim = self.set_coords_applied_dim
-        if dim not in self._available_dims:
-            self._show_error_message(
-                "invalid_set_coords",
-                f"'{dim}' is not an available dimension",
-            )
-            return None
-
-        coord = self._patch.coords.get_coord(dim)
-        axis_len = self._patch.shape[self._available_dims.index(dim)]
-        sparse_values = self._parse_set_coords_values(
-            self.set_coords_applied_start,
-            self.set_coords_applied_stop,
-            self.set_coords_applied_step,
-            coord,
-        )
-        if sparse_values is None:
-            return None
-
-        kwargs = {
-            "shape": axis_len,
-            "units": coord.units,
-            "dtype": coord.dtype,
-            **self._completed_set_coords_kwargs(sparse_values, coord),
-        }
-        try:
-            return get_coord(**kwargs)
-        except Exception as exc:
-            self._show_error_message("invalid_set_coords", str(exc))
-            return None
 
     def _validated_set_coords_applied_state(
         self,
@@ -1087,21 +878,16 @@ class Coords(ZugWidget):
         if dim not in self._available_dims:
             self._show_error_message("invalid_set_coords", "select a valid dimension")
             return None
-
-        coord = self._patch.coords.get_coord(dim)
-        sparse_values = self._parse_set_coords_values(
-            self.set_coords_start,
-            self.set_coords_stop,
-            self.set_coords_step,
-            coord,
-        )
-        if sparse_values is None:
-            return None
-        if not sparse_values:
-            self._show_error_message(
-                "invalid_set_coords",
-                "at least one of start, stop, and step is required",
+        try:
+            resolve_set_coord(
+                self._patch,
+                dim,
+                self.set_coords_start,
+                self.set_coords_stop,
+                self.set_coords_step,
             )
+        except CoordsValidationError as exc:
+            self._show_error_message("invalid_set_coords", exc.detail)
             return None
         return (
             dim,
@@ -1109,61 +895,6 @@ class Coords(ZugWidget):
             self.set_coords_stop.strip(),
             self.set_coords_step.strip(),
         )
-
-    def _parse_set_coords_values(
-        self,
-        start_text: str,
-        stop_text: str,
-        step_text: str,
-        coord,
-    ) -> dict[str, object] | None:
-        """Parse sparse set-coords text values for one dimension."""
-        parsed: dict[str, object] = {}
-        raw_values = {
-            "start": str(start_text).strip(),
-            "stop": str(stop_text).strip(),
-            "step": str(step_text).strip(),
-        }
-        for label, raw in raw_values.items():
-            if not raw:
-                continue
-            sample = getattr(coord, label)
-            value = self._parse_set_coords_value(raw, sample, label)
-            if value is None:
-                return None
-            parsed[label] = value
-        return parsed
-
-    @staticmethod
-    def _completed_set_coords_kwargs(
-        sparse_values: dict[str, object],
-        coord,
-    ) -> dict[str, object]:
-        """Fill single-field set-coords updates from the current coordinate."""
-        names = set(sparse_values)
-        if names == {"start"}:
-            return {"start": sparse_values["start"], "step": coord.step}
-        if names == {"stop"}:
-            return {"stop": sparse_values["stop"], "step": coord.step}
-        if names == {"step"}:
-            return {"start": coord.start, "step": sparse_values["step"]}
-        return dict(sparse_values)
-
-    def _parse_set_coords_value(
-        self,
-        text: str,
-        sample: object,
-        label: str,
-    ) -> object | None:
-        """Parse one optional set-coords draft/applied value."""
-        try:
-            return parse_coord_text_value(str(text), sample, None)
-        except Exception as exc:
-            self._show_error_message(
-                "invalid_set_coords",
-                f"could not parse {label}: {exc}",
-            )
-            return None
 
     def _on_result(self, result: dc.Patch | None) -> None:
         """Send the output patch and refresh the textual preview."""

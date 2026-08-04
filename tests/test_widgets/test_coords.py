@@ -580,7 +580,10 @@ class TestCoords:
         wait_for_output(qtbot, received)
 
         assert received[-1] is None
-        assert coords_widget.Error.operation_failed.is_shown()
+        assert coords_widget.Error.invalid_selection.is_shown()
+        assert "data flip requires dimension coordinates" in (
+            coords_widget.Error.invalid_selection.formatted
+        )
 
     def test_flip_active_summary_describes_selected_dims(self, coords_widget):
         """Preview text should summarize flip state."""
