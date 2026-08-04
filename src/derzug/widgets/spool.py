@@ -714,7 +714,6 @@ class Spool(ZugWidget):
         )
         self._select_rows = self._select_row_manager.rows
         self._refresh_select_rows()
-        self._refresh_primary_select_aliases()
         self.unpack_checkbox = gui.checkBox(
             select_box,
             self,
@@ -1417,18 +1416,6 @@ class Spool(ZugWidget):
             current.pop(example_name, None)
         self.example_parameters = current
 
-    def _load_from_file_input(self) -> dc.BaseSpool:
-        """Load spool from a file path or directory path string."""
-        if not self.file_input:
-            raise ValueError("No file input provided")
-        return dc.spool(self.file_input)
-
-    def _load_from_raw_input(self) -> dc.BaseSpool:
-        """Load spool from raw input string passed directly to DASCore."""
-        if not self.raw_input:
-            raise ValueError("No raw input provided")
-        return dc.spool(self.raw_input)
-
     @Inputs.patch
     def set_patch(self, patch: dc.Patch | None) -> None:
         """Append an incoming patch to the current spool."""
@@ -1817,13 +1804,6 @@ class Spool(ZugWidget):
         filters = self.select_filters or [self._blank_select_filter()]
         self._select_row_manager.refresh(filters)
         self.select_add_button.setEnabled(bool(self._select_options))
-        self._refresh_primary_select_aliases()
-
-    def _refresh_primary_select_aliases(self) -> None:
-        """Expose the first select row through the legacy widget attributes."""
-        first = self._select_rows[0]
-        self.select_col_combo = first["combo"]
-        self.select_val_edit = first["edit"]
 
     def _sync_select_filters_from_ui(self) -> None:
         """Persist the current UI select rows into widget settings."""
@@ -1851,10 +1831,6 @@ class Spool(ZugWidget):
     def _on_add_select_row_clicked(self) -> None:
         """Append a blank select row and re-run selection."""
         self._select_row_manager.add_blank_row()
-
-    def _remove_select_row(self, row: dict[str, QWidget]) -> None:
-        """Remove one select row, keeping at least one row available."""
-        self._select_row_manager.remove_row(row)
 
     def _render_spool(self, spool: dc.BaseSpool | None) -> None:
         """Refresh the table and control state for the displayed spool."""

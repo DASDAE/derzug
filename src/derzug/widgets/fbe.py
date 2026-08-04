@@ -173,36 +173,6 @@ class FBE(PatchDimWidget):
         """Parse one optional FBE frequency-band endpoint."""
         return parse_fbe_bound(text)
 
-    def _resolved_fbe_bounds(self, stft_patch: dc.Patch) -> tuple[Any, Any]:
-        """Return validated FBE bounds, defaulting blanks to full ft_time extent."""
-        ft_values = stft_patch.get_array("ft_time")
-        full_low = ft_values[0]
-        full_high = ft_values[-1]
-
-        try:
-            low = self._parse_fbe_bound(self.fbe_lower)
-        except Exception as exc:
-            self._show_exception("invalid_fbe_lower", exc, self.fbe_lower)
-            raise
-        try:
-            high = self._parse_fbe_bound(self.fbe_upper)
-        except Exception as exc:
-            self._show_exception("invalid_fbe_upper", exc, self.fbe_upper)
-            raise
-
-        low = full_low if low is None else low
-        high = full_high if high is None else high
-        try:
-            if low > high:
-                raise ValueError("lower must be less than or equal to upper")
-        except TypeError as exc:
-            self._show_exception("invalid_fbe_band", exc)
-            raise
-        except ValueError as exc:
-            self._show_exception("invalid_fbe_band", exc)
-            raise
-        return low, high
-
     def _validated_task(self) -> Task | None:
         """Return the current FBE task after widget-side validation."""
         patch = self._patch

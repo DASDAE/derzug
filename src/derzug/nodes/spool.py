@@ -24,8 +24,6 @@ from derzug.utils.example_parameters import build_example_call_kwargs
 from derzug.utils.spool import extract_single_patch
 from derzug.workflow.task import Task
 
-DEFAULT_EXAMPLE = "example_event_2"
-
 # Examples that aren't terribly interesting so we dont include them in the
 # the drop down menu.
 IGNORE_EXAMPLES = (

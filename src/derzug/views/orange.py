@@ -24,7 +24,6 @@ from AnyQt import _api as anyqt_api
 from AnyQt.QtCore import (
     QDir,
     QEvent,
-    QLineF,
     QObject,
     QPointF,
     QPropertyAnimation,
@@ -361,11 +360,6 @@ def _snap_arrow_endpoint_to_octilinear(moving: QPointF, fixed: QPointF) -> QPoin
         fixed.x() + (math.cos(snapped_angle) * length),
         fixed.y() + (math.sin(snapped_angle) * length),
     )
-
-
-def _snap_arrow_line_to_octilinear(start: QPointF, end: QPointF) -> QLineF:
-    """Return one snapped arrow line preserving the dragged length."""
-    return QLineF(start, _snap_arrow_endpoint_to_octilinear(end, start))
 
 
 def _axis_locked_position(item, value):
@@ -2376,24 +2370,6 @@ class ActiveSourceManager:
         self._set_active_widget(main_window, sources[0])
         return self._active_widget
 
-    def set_active_source_from_selection(self, main_window) -> bool:
-        """Set active source from the currently selected canvas node."""
-        document = main_window.current_document()
-        selected = document.selectedNodes()
-        if not selected:
-            self._show_status_message(main_window, "Select one source node first.")
-            return False
-        node = selected[0]
-        scheme = document.scheme()
-        widget = scheme.widget_for_node(node)
-        if not self._is_source_widget(widget):
-            self._show_status_message(
-                main_window, "Selected node is not a source widget."
-            )
-            return False
-        self._set_active_widget(main_window, widget)
-        return True
-
     def step(self, main_window, direction: int) -> bool:
         """Step active source selection forward/backward."""
         widget = self.ensure_active_source(main_window)
@@ -2760,16 +2736,6 @@ class DerZugWidgetsScheme(WidgetsScheme):
         return changed
 
 
-# def get_app(app=None):
-#     """Get or create the QApplication, with Ctrl+C (SIGINT) support."""
-#     app = app or QApplication.instance() or QApplication(sys.argv)
-#     signal.signal(signal.SIGINT, lambda *_: app.quit())
-#     app._sigint_timer = QTimer()
-#     app._sigint_timer.start(600)
-#     app._sigint_timer.timeout.connect(lambda: None)
-#     return app
-
-
 class DerZugMain(OMain):
     """Orange main runner customized for DerZug."""
 
@@ -2791,7 +2757,6 @@ class DerZugMain(OMain):
 
     def run(self, argv=None):
         """Run the Orange main loop for DerZug."""
-        # self.app = get_app()
         return super().run(argv or [])
 
     def setup_application(self):
@@ -3770,14 +3735,6 @@ class DerZugMainWindow(OrangeMainWindow):
         if self._hot_reload_in_progress:
             return QDialog.Accepted
         return super().ask_save_changes()
-
-    def _current_document_path(self) -> str | None:
-        """Return the current document path, if any."""
-        document = self.current_document()
-        if document is None:
-            return None
-        path = document.path()
-        return str(path) if path else None
 
     def _workflow_path_for_reload(self) -> str | None:
         """Return the workflow path to reopen after a hot reload."""

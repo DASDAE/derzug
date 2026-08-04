@@ -330,10 +330,6 @@ class PipeGraph(WorkflowFrozenModel):
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         return cls._from_dict(data)
 
-    def sorted_tasks(self) -> list[str]:
-        """Return task handles in topological order."""
-        return topological_sort(self.tasks, self.edges)
-
     def _root_nodes(self) -> list[str]:
         """Return task handles with no incoming edges."""
         downstream = {edge.to_node for edge in self.edges}

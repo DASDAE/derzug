@@ -44,9 +44,6 @@ from derzug.utils.plot_axes import map_coord_to_plot_value, map_plot_value_to_co
 from derzug.widgets.annotation_editor import AnnotationEditorDialog
 from derzug.widgets.annotation_toolbox import AnnotationToolbox
 
-_ANNOTATION_TOOLS = frozenset(
-    {"annotation_select", "point", "line", "ellipse", "hyperbola", "box", "delete"}
-)
 _HYPERBOLA_SAMPLE_COUNT = 96
 _HYPERBOLA_EPSILON = 1e-6
 _POINT_TARGET_PX = 40.0 * (2.0 / 3.0)
@@ -137,28 +134,6 @@ def _mix_rgb(
         max(0, min(255, round((1 - amount) * src + amount * dst)))
         for src, dst in zip(rgb, target, strict=True)
     )
-
-
-def _scene_stroked_local_shape(
-    item: QGraphicsItem,
-    local_path: QPainterPath,
-    *,
-    pen_width: float,
-    extra_scene_px: float = 8.0,
-) -> QPainterPath:
-    """Return one local hit path with a fixed scene-pixel tolerance."""
-    scene_width = max(float(pen_width), 1.0) + float(extra_scene_px)
-    scene_path = item.sceneTransform().map(local_path)
-    stroker = QPainterPathStroker()
-    stroker.setWidth(scene_width)
-    stroked_scene = stroker.createStroke(scene_path)
-    inverse, invertible = item.sceneTransform().inverted()
-    if invertible:
-        return inverse.map(stroked_scene)
-
-    fallback = QPainterPathStroker()
-    fallback.setWidth(scene_width)
-    return fallback.createStroke(local_path)
 
 
 def _local_hit_stroke_width(
@@ -571,10 +546,6 @@ class _AnnotationPathROI(pg.ROI):
         self._group_drag_pending = False
         self._group_drag_active = False
 
-    def normalized_center(self) -> tuple[float, float]:
-        """Return the ROI center in normalized local coordinates."""
-        return (0.5, 0.5)
-
     def local_center(self) -> QPointF:
         """Return the ROI center in local coordinates."""
         size = self.size()
@@ -583,28 +554,6 @@ class _AnnotationPathROI(pg.ROI):
     def centroid_plot_pos(self) -> QPointF:
         """Return the current ROI center in parent/plot coordinates."""
         return self.mapToParent(self.local_center())
-
-    def set_angle_about_center(
-        self, angle: float, *, update: bool = True, finish: bool = True
-    ) -> None:
-        """Rotate the ROI around its geometric center."""
-        self.setAngle(
-            angle,
-            center=self.normalized_center(),
-            update=update,
-            finish=finish,
-        )
-
-    def set_size_about_center(
-        self, size: tuple[float, float], *, update: bool = True, finish: bool = True
-    ) -> None:
-        """Resize the ROI while keeping its geometric center fixed."""
-        self.setSize(
-            size,
-            center=self.normalized_center(),
-            update=update,
-            finish=finish,
-        )
 
     def _path(self) -> QPainterPath:
         """Return the current path in local ROI coordinates."""
@@ -1288,15 +1237,6 @@ class AnnotationOverlayController:
         """Enable or disable snapping to existing annotation anchors."""
         self._snap_to_annotations = bool(enabled)
         self.toolbox.set_snap_enabled(self._snap_to_annotations)
-
-    def clear_tool_selection(self) -> None:
-        """Clear the visible toolbox selection without changing the remembered tool."""
-        self.toolbox.clear_tool()
-
-    def is_annotation_tool(self, tool: str | None = None) -> bool:
-        """Return True when the given tool name is an annotation-editing tool."""
-        current_tool = self.tool if tool is None else tool
-        return current_tool in _ANNOTATION_TOOLS
 
     def in_annotation_selection_mode(self) -> bool:
         """Return True when annotation interactions should select, not draw."""
@@ -3622,37 +3562,6 @@ class AnnotationOverlayController:
         start = center + (float(projections.min()) * axis)
         end = center + (float(projections.max()) * axis)
         return start, end
-
-    def _fit_rotated_ellipse_plot_parameters(
-        self, points: np.ndarray
-    ) -> dict[str, float | int]:
-        """Fit one rotated ellipse from sampled plot-space points."""
-        if points.shape[0] < 3:
-            raise _EllipseFitError("at least three points are required")
-        center = points.mean(axis=0)
-        centered = points - center
-        covariance = np.cov(centered, rowvar=False)
-        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-        major_axis = eigenvectors[:, int(np.argmax(eigenvalues))]
-        axis_angle = math.atan2(float(major_axis[1]), float(major_axis[0]))
-        axis_angle = _normalize_half_turn_angle(axis_angle)
-        cos_angle = math.cos(axis_angle)
-        sin_angle = math.sin(axis_angle)
-        rotated = np.column_stack(
-            (
-                (centered[:, 0] * cos_angle) + (centered[:, 1] * sin_angle),
-                (-centered[:, 0] * sin_angle) + (centered[:, 1] * cos_angle),
-            )
-        )
-        params = self._fit_ellipse_plot_parameters(rotated)
-        return {
-            "center_x": float(center[0]),
-            "center_y": float(center[1]),
-            "radius_x": float(params["radius_x"]),
-            "radius_y": float(params["radius_y"]),
-            "axis_angle": _normalize_half_turn_angle(axis_angle),
-            "samples": _HYPERBOLA_SAMPLE_COUNT,
-        }
 
     def _show_host_warning(self, name: str, *args, clear_only: bool = False) -> None:
         """Best-effort helper for host widget warnings."""

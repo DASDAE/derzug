@@ -5,7 +5,6 @@
 requires = [
     "setuptools>=69",
     "setuptools-git-versioning",
-    "scikit-build",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -259,9 +258,6 @@ filterwarnings = [
 [tool.ruff.format]
 # Use `\n` line endings for all files
 line-ending = "lf"
-
-[tool.typos.files]
-extend-exclude = ["docs/_static/logo.svg"]
 
 [tool.typos.default]
 # Ignore identifiers after a dot, plus text in [] or quotes (often API names/keys).

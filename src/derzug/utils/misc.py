@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from functools import cache
 from importlib.metadata import entry_points
 from typing import Any
@@ -22,15 +21,6 @@ def ordered_pair(first: Any, second: Any) -> tuple[Any, Any]:
         return (first, second) if first <= second else (second, first)
     except Exception:
         return first, second
-
-
-def _parse_csv_env(name: str, *, lower: bool = False) -> set[str]:
-    """Return a normalized set from a comma-separated env var."""
-    value = os.getenv(name, "")
-    values = {item.strip() for item in value.split(",") if item.strip()}
-    if lower:
-        return {item.lower() for item in values}
-    return values
 
 
 @cache

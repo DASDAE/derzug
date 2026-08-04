@@ -5,7 +5,6 @@ from __future__ import annotations
 from copy import deepcopy
 
 import dascore as dc
-import numpy as np
 from AnyQt.QtCore import QTimer
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
@@ -20,7 +19,7 @@ from derzug.nodes.select import (
     saved_patch_selection_payload,
     saved_spool_filter_rows,
 )
-from derzug.utils.spool import annotation_overlap_mask, extract_single_patch
+from derzug.utils.spool import extract_single_patch
 from derzug.widgets.selection import (
     PatchSelectionBasis,
     SelectionControlsMixin,
@@ -304,20 +303,6 @@ class Select(SelectionControlsMixin, ZugWidget):
         self.Outputs.spool.send(spool)
         self.Outputs.patch.send(patch)
         self._request_ui_refresh()
-
-    def _apply_annotation_filter_to_spool(self, spool: dc.BaseSpool) -> dc.BaseSpool:
-        """Return only spool rows whose contents overlap the current annotations."""
-        annotation_set = self._annotation_set
-        if annotation_set is None:
-            return spool
-        contents = spool.get_contents()
-        mask = annotation_overlap_mask(contents, annotation_set)
-        if bool(mask.all()):
-            return spool
-        positions = np.flatnonzero(mask.to_numpy(dtype=bool, copy=False))
-        if not positions.size:
-            return dc.spool([])
-        return spool[positions.astype(np.int64, copy=False)]
 
     def _refresh_ui(self) -> None:
         """Refresh the left-side selection controls and status text."""

@@ -1046,26 +1046,6 @@ class Coords(ZugWidget):
         self.transpose_order = order
         return order
 
-    def _apply_flip(self, selected: list[str]) -> dc.Patch:
-        """Apply the configured flip behavior to data and/or coordinates."""
-        assert self._patch is not None
-        coord_names = tuple(selected)
-        dim_names = tuple(name for name in coord_names if name in self._available_dims)
-
-        if self.flip_data and len(dim_names) != len(coord_names):
-            invalid = [name for name in coord_names if name not in self._available_dims]
-            raise ValueError(
-                "data flip requires dimension coordinates; "
-                f"non-dim coords selected: {', '.join(invalid)}"
-            )
-
-        patch = self._patch
-        if self.flip_data and dim_names:
-            patch = patch.flip(*dim_names, flip_coords=False)
-        if self.flip_coords:
-            patch = patch.update(coords=patch.coords.flip(*coord_names))
-        return patch
-
     def _validated_set_coords_coord(self):
         """Return the replacement coordinate resolved from sparse applied state."""
         dim = self.set_coords_applied_dim
