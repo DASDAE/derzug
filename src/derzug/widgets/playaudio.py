@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 from importlib import import_module
-from math import isfinite
 
 import dascore as dc
 import numpy as np
@@ -24,7 +22,20 @@ from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
 from derzug.core.zugwidget import ZugWidget
-from derzug.nodes.playaudio import NODE_SPEC
+from derzug.nodes.playaudio import (
+    MAX_TIME_SCALE,
+    MIN_TIME_SCALE,
+    NODE_SPEC,
+    PreparedAudio,
+    coerce_playable_patch,
+    coord_to_seconds,
+    default_time_scale,
+    effective_sample_rate_hz,
+    output_gain_db_from_volume_percent,
+    playback_output_rate_hz,
+    prepare_patch_audio,
+    render_playback_pcm,
+)
 from derzug.utils.display import format_display
 from derzug.utils.sampling import strided_step
 from derzug.workflow import Task
@@ -106,32 +117,10 @@ else:
             raise RuntimeError("QtMultimedia is not available")
 
 
-_AUDIBLE_MIN_HZ = 20.0
-_AUDIBLE_MAX_HZ = 20_000.0
-_DEFAULT_TARGET_HZ = 4_000.0
-_MIN_PLAYBACK_DURATION_S = 2.0
-_MIN_OUTPUT_SAMPLE_RATE_HZ = 8_000.0
-_MAX_OUTPUT_SAMPLE_RATE_HZ = 48_000.0
-_MIN_TIME_SCALE = 1e-6
-_MAX_TIME_SCALE = 1e6
-_PCM_HEADROOM = 0.95
-_PCM_NORMALIZE_PERCENTILE = 95.0
-_DEFAULT_OUTPUT_GAIN_DB = 0.0
 _DEFAULT_VOLUME_PERCENT = 100
 _MIN_VOLUME_PERCENT = 0
 _MAX_VOLUME_PERCENT = 200
 _MAX_WAVEFORM_PLOT_SAMPLES = 200_000
-_PCM_CALIBRATION_SAMPLES = 1_000_000
-_RESAMPLE_BLOCK_SIZE = 500_000
-
-
-@dataclass(frozen=True)
-class _PreparedAudio:
-    """Prepared patch playback metadata and PCM payload."""
-
-    native_rate_hz: float
-    pcm_bytes: bytes
-    sample_count: int
 
 
 class PlayAudio(ZugWidget):
@@ -169,7 +158,7 @@ class PlayAudio(ZugWidget):
     def __init__(self) -> None:
         super().__init__()
         self._patch: dc.Patch | None = None
-        self._prepared_audio: _PreparedAudio | None = None
+        self._prepared_audio: PreparedAudio | None = None
         self._validation_error: str | None = None
         self._status_text = "No patch loaded"
         self._native_rate_hz: float | None = None
@@ -189,7 +178,7 @@ class PlayAudio(ZugWidget):
         gui.widgetLabel(box, "Time scale:")
         self._time_scale_spin = QDoubleSpinBox(box)
         self._time_scale_spin.setDecimals(6)
-        self._time_scale_spin.setRange(_MIN_TIME_SCALE, _MAX_TIME_SCALE)
+        self._time_scale_spin.setRange(MIN_TIME_SCALE, MAX_TIME_SCALE)
         self._time_scale_spin.setStepType(
             QDoubleSpinBox.StepType.AdaptiveDecimalStepType
         )
@@ -276,8 +265,8 @@ class PlayAudio(ZugWidget):
             self._playback_sample_index = None
         else:
             try:
-                playable_patch = self._coerce_playable_patch(patch)
-                self._prepared_audio = self._prepare_patch_audio(
+                playable_patch = coerce_playable_patch(patch)
+                self._prepared_audio = prepare_patch_audio(
                     playable_patch,
                     output_gain_db=self._current_output_gain_db(),
                 )
@@ -359,7 +348,7 @@ class PlayAudio(ZugWidget):
         """Set the default time scale for a newly received valid patch."""
         self._syncing_time_scale = True
         try:
-            self.time_scale = self._default_time_scale(native_rate_hz, sample_count)
+            self.time_scale = default_time_scale(native_rate_hz, sample_count)
             self._time_scale_spin.setValue(self.time_scale)
         finally:
             self._syncing_time_scale = False
@@ -383,8 +372,8 @@ class PlayAudio(ZugWidget):
         self._update_volume_label()
         if self._patch is not None and self._validation_error is None:
             try:
-                playable_patch = self._coerce_playable_patch(self._patch)
-                self._prepared_audio = self._prepare_patch_audio(
+                playable_patch = coerce_playable_patch(self._patch)
+                self._prepared_audio = prepare_patch_audio(
                     playable_patch,
                     output_gain_db=self._current_output_gain_db(),
                 )
@@ -404,14 +393,7 @@ class PlayAudio(ZugWidget):
 
     def _current_output_gain_db(self) -> float:
         """Return the current slider volume mapped to decibels."""
-        return self._output_gain_db_from_volume_percent(int(self.volume_percent))
-
-    @staticmethod
-    def _output_gain_db_from_volume_percent(volume_percent: int) -> float:
-        """Map a UI volume percentage onto a linear-gain dB value."""
-        if volume_percent <= 0:
-            return -120.0
-        return float(20.0 * np.log10(float(volume_percent) / 100.0))
+        return output_gain_db_from_volume_percent(int(self.volume_percent))
 
     def _start_playback(self) -> None:
         """Start audio playback for the current prepared patch."""
@@ -421,10 +403,10 @@ class PlayAudio(ZugWidget):
             return
         self._stop_playback()
         effective_rate_hz = self._effective_sample_rate_hz()
-        sample_rate = self._playback_output_rate_hz(effective_rate_hz)
+        sample_rate = playback_output_rate_hz(effective_rate_hz)
         audio_format = self._build_audio_format(sample_rate)
         payload = QByteArray(
-            self._render_playback_pcm(
+            render_playback_pcm(
                 prepared,
                 effective_rate_hz=effective_rate_hz,
                 output_rate_hz=sample_rate,
@@ -519,7 +501,7 @@ class PlayAudio(ZugWidget):
         """Return the current effective playback rate in Hz."""
         if self._native_rate_hz is None:
             return float("nan")
-        return self._native_rate_hz * float(self.time_scale)
+        return effective_sample_rate_hz(self._native_rate_hz, float(self.time_scale))
 
     def _set_waveform_data(self, patch: dc.Patch) -> None:
         """Cache waveform data for the plot using seconds relative to the start."""
@@ -527,7 +509,7 @@ class PlayAudio(ZugWidget):
         step = strided_step(source_samples.size, _MAX_WAVEFORM_PLOT_SAMPLES)
         samples = source_samples[::step]
         time_coord = np.asarray(patch.get_array("time"))
-        time_seconds = self._coord_to_seconds(time_coord[::step])
+        time_seconds = coord_to_seconds(time_coord[::step])
         time_seconds = np.asarray(time_seconds, dtype=np.float64)
         if time_seconds.size:
             time_seconds = time_seconds - float(time_seconds[0])
@@ -600,78 +582,6 @@ class PlayAudio(ZugWidget):
         self._set_playback_marker(sample_index)
 
     @staticmethod
-    def _default_time_scale(native_rate_hz: float, sample_count: int) -> float:
-        """Choose a default scale that moves the source into audible range."""
-        if _AUDIBLE_MIN_HZ <= native_rate_hz <= _AUDIBLE_MAX_HZ:
-            scale = 1.0
-        elif native_rate_hz <= 0:
-            scale = 1.0
-        else:
-            scale = float(_DEFAULT_TARGET_HZ / native_rate_hz)
-        if native_rate_hz > 0 and sample_count > 0:
-            duration_seconds = float(sample_count) / float(native_rate_hz)
-            min_duration_scale = duration_seconds / _MIN_PLAYBACK_DURATION_S
-            if duration_seconds < _MIN_PLAYBACK_DURATION_S:
-                scale = min(scale, min_duration_scale)
-        return float(np.clip(scale, _MIN_TIME_SCALE, _MAX_TIME_SCALE))
-
-    @staticmethod
-    def _playback_output_rate_hz(effective_rate_hz: float) -> int:
-        """Clamp the audio-device output rate to a broadly supported range."""
-        if not isfinite(effective_rate_hz) or effective_rate_hz <= 0:
-            raise ValueError("effective sample rate must be positive")
-        return round(
-            float(
-                np.clip(
-                    effective_rate_hz,
-                    _MIN_OUTPUT_SAMPLE_RATE_HZ,
-                    _MAX_OUTPUT_SAMPLE_RATE_HZ,
-                )
-            )
-        )
-
-    @staticmethod
-    def _render_playback_pcm(
-        prepared: _PreparedAudio,
-        *,
-        effective_rate_hz: float,
-        output_rate_hz: int,
-    ) -> bytes:
-        """Render PCM, stretching or resampling when sink rate is clamped."""
-        if prepared.sample_count <= 0:
-            return b""
-        if not isfinite(effective_rate_hz) or effective_rate_hz <= 0:
-            raise ValueError("effective sample rate must be positive")
-        if output_rate_hz <= 0:
-            raise ValueError("output sample rate must be positive")
-        if round(effective_rate_hz) == output_rate_hz:
-            return prepared.pcm_bytes
-
-        source = np.frombuffer(prepared.pcm_bytes, dtype="<i2")
-        target_count = max(
-            1,
-            round(prepared.sample_count * float(output_rate_hz) / effective_rate_hz),
-        )
-        if target_count == prepared.sample_count:
-            return prepared.pcm_bytes
-        if prepared.sample_count == 1:
-            pcm = np.full(target_count, source[0], dtype="<i2")
-            return pcm.tobytes()
-        pcm = np.empty(target_count, dtype="<i2")
-        position_scale = (prepared.sample_count - 1) / max(target_count - 1, 1)
-        for start in range(0, target_count, _RESAMPLE_BLOCK_SIZE):
-            stop = min(start + _RESAMPLE_BLOCK_SIZE, target_count)
-            positions = np.arange(start, stop, dtype=np.float64) * position_scale
-            left = np.floor(positions).astype(np.int64)
-            right = np.minimum(left + 1, prepared.sample_count - 1)
-            fraction = positions - left
-            left_values = source[left].astype(np.float32)
-            right_values = source[right].astype(np.float32)
-            values = left_values + ((right_values - left_values) * fraction)
-            pcm[start:stop] = np.rint(values).astype("<i2")
-        return pcm.tobytes()
-
-    @staticmethod
     def _build_audio_format(sample_rate_hz: int) -> QAudioFormat:
         """Build the mono PCM format used for playback."""
         audio_format = QAudioFormat()
@@ -683,115 +593,3 @@ class PlayAudio(ZugWidget):
     def _create_audio_sink(self, audio_format: QAudioFormat) -> QAudioSink:
         """Create a Qt audio sink for the requested output format."""
         return QAudioSink(audio_format, self)
-
-    @classmethod
-    def _prepare_patch_audio(
-        cls,
-        patch: dc.Patch,
-        *,
-        output_gain_db: float = _DEFAULT_OUTPUT_GAIN_DB,
-    ) -> _PreparedAudio:
-        """Validate the patch and prepare normalized PCM audio bytes."""
-        cls._validate_patch_shape(patch)
-        native_rate_hz = cls._infer_native_rate_hz(np.asarray(patch.get_array("time")))
-        pcm_bytes, sample_count = cls._prepare_pcm_audio(
-            np.asarray(patch.data),
-            output_gain_db=output_gain_db,
-        )
-        return _PreparedAudio(
-            native_rate_hz=native_rate_hz,
-            pcm_bytes=pcm_bytes,
-            sample_count=sample_count,
-        )
-
-    @staticmethod
-    def _coerce_playable_patch(patch: dc.Patch) -> dc.Patch:
-        """Return the squeezed patch shape used for playback validation/rendering."""
-        return patch.squeeze()
-
-    @staticmethod
-    def _validate_patch_shape(patch: dc.Patch) -> None:
-        """Validate that the patch is a 1D time series."""
-        data = np.asarray(patch.data)
-        if data.ndim != 1:
-            raise ValueError(f"expected a 1D patch, got shape {data.shape}")
-        if tuple(patch.dims) != ("time",):
-            raise ValueError(f"expected patch dims ('time',), got {patch.dims}")
-
-    @staticmethod
-    def _infer_native_rate_hz(coord: np.ndarray) -> float:
-        """Infer the source sample rate from the patch time coordinate."""
-        seconds = PlayAudio._coord_to_seconds(coord)
-        if seconds.size < 2:
-            raise ValueError("time coordinate must contain at least two samples")
-        first = float(seconds[1] - seconds[0])
-        if not isfinite(first):
-            raise ValueError("time coordinate must contain finite sample spacing")
-        if first <= 0:
-            raise ValueError("time coordinate must be strictly increasing")
-        tolerance = max(abs(first) * 1e-6, 1e-12)
-        # Check bounded slices so validating a long recording does not allocate
-        # a second full-length float64 difference array.
-        for start in range(1, seconds.size, _RESAMPLE_BLOCK_SIZE):
-            stop = min(start + _RESAMPLE_BLOCK_SIZE, seconds.size)
-            diffs = seconds[start:stop] - seconds[start - 1 : stop - 1]
-            if not np.all(np.isfinite(diffs)):
-                raise ValueError("time coordinate must contain finite sample spacing")
-            if np.any(diffs <= 0):
-                raise ValueError("time coordinate must be strictly increasing")
-            if not np.allclose(diffs, first, rtol=1e-6, atol=tolerance):
-                raise ValueError("time coordinate must have uniform sample spacing")
-        rate_hz = 1.0 / first
-        if not isfinite(rate_hz) or rate_hz <= 0:
-            raise ValueError("time coordinate must define a positive sample rate")
-        return rate_hz
-
-    @staticmethod
-    def _coord_to_seconds(coord: np.ndarray) -> np.ndarray:
-        """Convert time coordinates to seconds for rate inference."""
-        arr = np.asarray(coord)
-        if np.issubdtype(arr.dtype, np.datetime64):
-            ns = arr.astype("datetime64[ns]").astype(np.int64)
-            return ns.astype(np.float64) / 1e9
-        if np.issubdtype(arr.dtype, np.timedelta64):
-            ns = arr.astype("timedelta64[ns]").astype(np.int64)
-            return ns.astype(np.float64) / 1e9
-        if np.issubdtype(arr.dtype, np.number):
-            return arr.astype(np.float64, copy=False)
-        raise ValueError("time coordinate must be numeric or datetime-like")
-
-    @staticmethod
-    def _prepare_pcm_audio(
-        data: np.ndarray,
-        *,
-        output_gain_db: float = _DEFAULT_OUTPUT_GAIN_DB,
-    ) -> tuple[bytes, int]:
-        """Normalize mono samples with robust auto-gain and convert to PCM."""
-        samples = np.array(data, dtype=np.float32, copy=True).reshape(-1)
-        if samples.size == 0:
-            raise ValueError("patch data is empty")
-        finite_mask = np.isfinite(samples)
-        if not np.any(finite_mask):
-            raise ValueError("patch data must contain at least one finite sample")
-        step = strided_step(samples.size, _PCM_CALIBRATION_SAMPLES)
-        calibration = samples[::step]
-        finite_calibration = calibration[np.isfinite(calibration)]
-        if finite_calibration.size == 0:
-            finite_calibration = samples[np.argmax(finite_mask) :][:1]
-        nonzero = np.abs(finite_calibration)
-        ref = float(np.percentile(nonzero, _PCM_NORMALIZE_PERCENTILE))
-        if ref <= 0:
-            # The strided calibration subset can miss all signal energy
-            # (e.g. sparse spikes between stride points); fall back to the
-            # full-array peak so only truly silent data skips normalization.
-            ref = float(np.max(np.abs(samples[finite_mask])))
-        if ref > 0:
-            samples *= _PCM_HEADROOM / ref
-        linear_gain = float(10 ** (float(output_gain_db) / 20.0))
-        samples[~finite_mask] = 0.0
-        samples *= linear_gain
-        np.clip(samples, -_PCM_HEADROOM, _PCM_HEADROOM, out=samples)
-        samples *= np.iinfo(np.int16).max
-        np.rint(samples, out=samples)
-        pcm = samples.astype("<i2")
-        return pcm.tobytes(), int(samples.size)

@@ -12,6 +12,9 @@ All notable user-facing changes to DerZug are documented here.
   - Aggregate's phase-weighted stack no longer fails headlessly when no stack dimension is set; it defaults to `distance` (else the first patch dimension), the same default the widget applies, and the widget's transform-dimension chooser now excludes that effective stack dimension.
 - The Coords widget now builds and validates its task exclusively through the node layer, so the task that runs on the canvas and the task exported into a saved workflow are always identical. Two behavior fixes come with it: headless callers filling only the `set_coords` draft fields (`set_coords_dim`/`start`/`stop`/`step`) now get a real coordinate update instead of a silent no-op, and data-flipping a non-dimension coordinate now reports through the "Invalid flip selection" banner instead of a generic operation failure.
 - The Spool widget's preview/output pipeline now runs the same node-layer select and chunk stages as a headless workflow. A chunk value that parses to `None` (e.g. the text `None`) now disables chunking headlessly, matching the canvas chunk controls.
+- Filter `mode` parameters are now validated `Literal`s on the params models, so an unsupported boundary mode (e.g. `SavgolFilterParams(mode="reflect")`, which SciPy rejects) fails at validation with a clear message instead of surviving until the SciPy call.
+- `SelectionState.apply_select_params` now accepts `patch=None` for display-only hosts, replacing the Select widget's hand-built state.
+- PlayAudio's signal processing (patch validation, rate inference, PCM normalization, time-scaling and resampling) moved to the Qt-free `derzug.nodes.playaudio`, and the node's `time_scale`/`volume_percent` parameters are now actually consumed there: the new `render_audition(patch, params)` returns device-ready PCM headlessly.
 
 ### Changed (breaking)
 

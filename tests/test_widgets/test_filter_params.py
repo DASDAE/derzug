@@ -7,6 +7,8 @@ import tempfile
 
 import pytest
 from derzug.nodes.filter import (
+    MODE_OPTIONS,
+    SAVGOL_MODE_OPTIONS,
     FilterParams,
     GaussianFilterParams,
     HampelFilterParams,
@@ -20,7 +22,7 @@ from derzug.nodes.filter import (
 )
 from derzug.utils.testing import widget_context
 from derzug.widgets.filter import Filter
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 
 class TestFilterParamsModel:
@@ -129,3 +131,29 @@ def test_filter_params_survive_ows_roundtrip(qtbot, tmp_path):
     assert restored.get_params() == NotchFilterParams(
         dim="time", frequency="60 Hz", q=30.0
     )
+
+
+class TestFilterModeValidation:
+    """Mode fields are Literals so a bad mode fails at validation, not SciPy."""
+
+    def test_savgol_rejects_reflect(self):
+        """Savitzky-Golay does not accept reflect; validation says so early."""
+        with pytest.raises(ValidationError):
+            SavgolFilterParams(mode="reflect")
+
+    def test_savgol_accepts_its_own_modes(self):
+        """Every advertised savgol mode validates."""
+        for mode in SAVGOL_MODE_OPTIONS:
+            assert SavgolFilterParams(mode=mode).mode == mode
+
+    def test_general_filters_accept_their_modes(self):
+        """The general mode set validates on the SciPy-backed filters."""
+        for mode in MODE_OPTIONS:
+            assert MedianFilterParams(mode=mode).mode == mode
+            assert GaussianFilterParams(mode=mode).mode == mode
+            assert SobelFilterParams(mode=mode).mode == mode
+
+    def test_median_rejects_a_typo(self):
+        """A misspelled mode fails validation instead of reaching SciPy."""
+        with pytest.raises(ValidationError):
+            MedianFilterParams(mode="reflectt")
