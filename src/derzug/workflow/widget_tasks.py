@@ -9,9 +9,6 @@ from typing import Any, ClassVar
 
 from pydantic import Field
 
-from derzug.models.selection import SelectParams
-from derzug.models.selection_state import SelectionState
-
 from .dims import resolve_patch_dim
 from .task import Task
 
@@ -109,6 +106,12 @@ class PatchSelectionTask(Task):
 
     def run(self, patch):
         """Apply serialized patch-selection state to one patch."""
+        # Imported on use, not at module scope: pulling the selection state and
+        # its coordinate helpers into every ``derzug.workflow`` import doubles
+        # the cost of loading the engine, and most workflows have no selection
+        # node. The layer is legal either way -- this is about import weight.
+        from derzug.models.selection_state import SelectionState
+
         payload = self.selection_payload
         if not payload:
             return patch
@@ -133,6 +136,10 @@ class PatchSelectionWithParamsTask(Task):
 
     def run(self, patch):
         """Return the selected patch and matching SelectParams."""
+        # Lazy for the same reason as PatchSelectionTask.run above.
+        from derzug.models.selection import SelectParams
+        from derzug.models.selection_state import SelectionState
+
         payload = self.selection_payload
         if not payload:
             return {"patch": patch, "select_params": SelectParams()}

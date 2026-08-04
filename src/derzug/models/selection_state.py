@@ -10,15 +10,12 @@ widgets, and holds the panel itself.
 from __future__ import annotations
 
 import ast
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 import numpy as np
-
 from derzug.models.selection import SelectParams
-from derzug.utils.display import format_display
 from derzug.utils.misc import ordered_pair
 from derzug.utils.parsing import parse_coord_text_value
 from derzug.utils.spool import normalize_dims_value, series_has_visible_values
