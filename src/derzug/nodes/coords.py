@@ -27,6 +27,65 @@ def normalize_mapping_rows(rows: object) -> list[list[str]]:
     return output
 
 
+class CoordsValidationError(ValueError):
+    """Raised when persisted coords parameters do not fit the incoming patch.
+
+    ``kind`` and ``label`` let the widget route the failure to the matching
+    error banner without re-implementing the validation itself.
+    """
+
+    def __init__(self, kind: str, detail: str, label: str = "") -> None:
+        super().__init__(detail)
+        self.kind = kind
+        self.label = label
+        self.detail = detail
+
+
+def resolve_set_coord(patch, dim: str, start: str, stop: str, step: str):
+    """Return the replacement coordinate built from sparse set-coords text.
+
+    Raises ``CoordsValidationError`` when the dimension is missing, a value
+    does not parse, no value is given, or the coordinate cannot be built.
+    Shared by ``CoordsTask.run`` and the widget's draft validation so both
+    accept and reject exactly the same inputs.
+    """
+    if dim not in patch.dims:
+        raise CoordsValidationError(
+            "set_coords", f"'{dim}' is not an available dimension"
+        )
+    coord = patch.coords.get_coord(dim)
+    parsed: dict[str, object] = {}
+    for label, raw in (("start", start), ("stop", stop), ("step", step)):
+        text = str(raw).strip()
+        if not text:
+            continue
+        try:
+            value = parse_coord_text_value(text, getattr(coord, label), None)
+        except Exception as exc:
+            raise CoordsValidationError(
+                "set_coords", f"could not parse {label}: {exc}"
+            ) from exc
+        parsed[label] = value
+    if not parsed:
+        raise CoordsValidationError(
+            "set_coords", "at least one of start, stop, and step is required"
+        )
+    if set(parsed) == {"start"} or set(parsed) == {"stop"}:
+        parsed["step"] = coord.step
+    elif set(parsed) == {"step"}:
+        parsed["start"] = coord.start
+    kwargs = {
+        "shape": patch.shape[patch.dims.index(dim)],
+        "units": coord.units,
+        "dtype": coord.dtype,
+        **parsed,
+    }
+    try:
+        return get_coord(**kwargs)
+    except Exception as exc:
+        raise CoordsValidationError("set_coords", str(exc)) from exc
+
+
 class CoordsTask(Task):
     """Portable coordinate-operation task for the Coords widget."""
 
@@ -60,10 +119,14 @@ class CoordsTask(Task):
     def _validate_mapping(
         rows: tuple[tuple[str, str], ...],
         *,
+        label: str,
         valid_left: tuple[str, ...],
         valid_right: tuple[str, ...] | None,
         reject_duplicate_right: bool,
     ) -> dict[str, str]:
+        def _fail(detail: str):
+            raise CoordsValidationError("mapping", detail, label=label)
+
         mapping: dict[str, str] = {}
         valid_left_set = set(valid_left)
         valid_right_set = None if valid_right is None else set(valid_right)
@@ -72,69 +135,38 @@ class CoordsTask(Task):
             if not left and not right:
                 continue
             if not left or not right:
-                raise ValueError("both columns must be filled")
+                _fail("both columns must be filled")
             if left not in valid_left_set:
-                raise ValueError(f"'{left}' is not available")
+                _fail(f"'{left}' is not available")
             if valid_right_set is not None and right not in valid_right_set:
-                raise ValueError(f"'{right}' is not available")
+                _fail(f"'{right}' is not available")
             if left in mapping:
-                raise ValueError(f"duplicate source '{left}'")
+                _fail(f"duplicate source '{left}'")
             if reject_duplicate_right and right in used_right:
-                raise ValueError(f"duplicate target '{right}'")
+                _fail(f"duplicate target '{right}'")
             mapping[left] = right
             used_right.add(right)
         if not mapping:
-            raise ValueError("at least one mapping is required")
+            _fail("at least one mapping is required")
         return mapping
 
     @staticmethod
     def _validate_selection(
-        selected: tuple[str, ...], valid: tuple[str, ...]
+        selected: tuple[str, ...], valid: tuple[str, ...], *, label: str
     ) -> list[str]:
         valid_set = set(valid)
         out = [str(item) for item in selected]
         invalid = [name for name in out if name not in valid_set]
         if invalid:
-            raise ValueError(", ".join(invalid))
+            raise CoordsValidationError("selection", ", ".join(invalid), label=label)
         return out
 
-    @staticmethod
-    def _parse_set_coord_value(text: str, sample: object) -> object:
-        return parse_coord_text_value(str(text), sample, None)
+    def _validated_call(self, patch):
+        """Validate parameters against ``patch`` and return the deferred call.
 
-    def _resolved_coord(self, patch):
-        dim = self.set_coords_applied_dim
-        if dim not in patch.dims:
-            raise ValueError(f"'{dim}' is not an available dimension")
-        coord = patch.coords.get_coord(dim)
-        parsed: dict[str, object] = {}
-        for label, raw in (
-            ("start", self.set_coords_applied_start),
-            ("stop", self.set_coords_applied_stop),
-            ("step", self.set_coords_applied_step),
-        ):
-            text = str(raw).strip()
-            if not text:
-                continue
-            parsed[label] = self._parse_set_coord_value(text, getattr(coord, label))
-        if not parsed:
-            raise ValueError("at least one of start, stop, and step is required")
-        if set(parsed) == {"start"}:
-            parsed["step"] = coord.step
-        elif set(parsed) == {"stop"}:
-            parsed["step"] = coord.step
-        elif set(parsed) == {"step"}:
-            parsed["start"] = coord.start
-        kwargs = {
-            "shape": patch.shape[patch.dims.index(dim)],
-            "units": coord.units,
-            "dtype": coord.dtype,
-            **parsed,
-        }
-        return get_coord(**kwargs)
-
-    def run(self, patch):
-        """Apply the selected coordinate operation to one patch."""
+        Validation is eager so ``preflight`` can reuse it; the returned
+        zero-argument callable performs the actual patch operation.
+        """
         operation = str(self.operation or "rename_coords")
         available_dims = tuple(patch.dims)
         available_coords = tuple(patch.coords.coord_map)
@@ -145,80 +177,104 @@ class CoordsTask(Task):
         if operation == "rename_coords":
             mapping = self._validate_mapping(
                 self.rename_rows,
+                label="rename",
                 valid_left=available_coords,
                 valid_right=None,
                 reject_duplicate_right=True,
             )
-            return patch.rename_coords(**mapping)
+            return lambda: patch.rename_coords(**mapping)
         if operation == "drop_coords":
             selected = self._validate_selection(
-                self.drop_coords_selected,
-                non_dim_coords,
+                self.drop_coords_selected, non_dim_coords, label="drop"
             )
-            return patch if not selected else patch.drop_coords(*selected)
+            return lambda: patch if not selected else patch.drop_coords(*selected)
         if operation == "sort_coords":
             selected = self._validate_selection(
-                self.sort_coords_selected,
-                available_coords,
+                self.sort_coords_selected, available_coords, label="sort"
             )
-            return (
+            return lambda: (
                 patch
                 if not selected
                 else patch.sort_coords(*selected, reverse=bool(self.sort_reverse))
             )
         if operation == "snap_coords":
             selected = self._validate_selection(
-                self.snap_coords_selected,
-                available_coords,
+                self.snap_coords_selected, available_coords, label="snap"
             )
-            return (
+            return lambda: (
                 patch
                 if not selected
                 else patch.snap_coords(*selected, reverse=bool(self.snap_reverse))
             )
         if operation == "set_coords":
             if not self.set_coords_applied_dim:
-                return patch
-            return patch.update_coords(
-                **{self.set_coords_applied_dim: self._resolved_coord(patch)}
+                return lambda: patch
+            coord = resolve_set_coord(
+                patch,
+                self.set_coords_applied_dim,
+                self.set_coords_applied_start,
+                self.set_coords_applied_stop,
+                self.set_coords_applied_step,
             )
+            return lambda: patch.update_coords(**{self.set_coords_applied_dim: coord})
         if operation == "set_dims":
             mapping = self._validate_mapping(
                 self.set_dims_rows,
+                label="set_dims",
                 valid_left=available_dims,
                 valid_right=available_coords,
                 reject_duplicate_right=True,
             )
-            return patch.set_dims(**mapping)
+            return lambda: patch.set_dims(**mapping)
         if operation == "flip":
             selected = self._validate_selection(
-                self.flip_dims_selected,
-                available_coords,
+                self.flip_dims_selected, available_coords, label="flip"
             )
             if not selected or (not self.flip_data and not self.flip_coords):
-                return patch
+                return lambda: patch
             dim_names = tuple(name for name in selected if name in available_dims)
             if self.flip_data and len(dim_names) != len(selected):
                 invalid = [name for name in selected if name not in available_dims]
-                raise ValueError(
+                raise CoordsValidationError(
+                    "selection",
                     "data flip requires dimension coordinates; "
-                    f"non-dim coords selected: {', '.join(invalid)}"
+                    f"non-dim coords selected: {', '.join(invalid)}",
+                    label="flip",
                 )
-            out = patch
-            if self.flip_data and dim_names:
-                out = out.flip(*dim_names, flip_coords=False)
-            if self.flip_coords:
-                out = out.update(coords=out.coords.flip(*tuple(selected)))
-            return out
+
+            def _flip():
+                out = patch
+                if self.flip_data and dim_names:
+                    out = out.flip(*dim_names, flip_coords=False)
+                if self.flip_coords:
+                    out = out.update(coords=out.coords.flip(*tuple(selected)))
+                return out
+
+            return _flip
         if operation == "transpose":
             order = list(self.transpose_order)
-            dims = list(available_dims)
             if not order:
-                return patch
-            if sorted(order) != sorted(dims):
-                raise ValueError("dimension order does not match the input patch")
-            return patch.transpose(*order)
+                return lambda: patch
+            if sorted(order) != sorted(available_dims):
+                raise CoordsValidationError(
+                    "selection",
+                    "dimension order does not match the input patch",
+                    label="transpose",
+                )
+            return lambda: patch.transpose(*order)
         raise ValueError(f"Unknown coords operation '{operation}'")
+
+    def preflight(self, patch) -> None:
+        """Validate persisted parameters against one patch without running.
+
+        Raises ``CoordsValidationError`` on the first problem, letting the
+        widget surface the same failures its banners used to compute itself.
+        """
+        self._validated_call(patch)
+
+    def run(self, patch):
+        """Apply the selected coordinate operation to one patch."""
+        return self._validated_call(patch)()
 
 
 class CoordsParams(BaseModel):
@@ -255,9 +311,36 @@ class CoordsParams(BaseModel):
     transpose_order: list = Field(default_factory=list)
 
 
+def _applied_set_coords_fields(params: CoordsParams) -> tuple[str, str, str, str]:
+    """Return the effective applied set-coords fields, promoting drafts.
+
+    On the canvas the draft fields are the source of truth: every patch
+    arrival re-derives the ``*_applied_*`` mirror from them. Headlessly the
+    same precedence applies — a non-empty draft wins, and the applied fields
+    only carry a hand-authored update when no draft is present.
+    """
+    draft = (
+        str(params.set_coords_dim or ""),
+        str(params.set_coords_start or ""),
+        str(params.set_coords_stop or ""),
+        str(params.set_coords_step or ""),
+    )
+    if draft[0] and any(value.strip() for value in draft[1:]):
+        return draft
+    return (
+        str(params.set_coords_applied_dim or ""),
+        str(params.set_coords_applied_start or ""),
+        str(params.set_coords_applied_stop or ""),
+        str(params.set_coords_applied_step or ""),
+    )
+
+
 def coords_task_from_params(params: CoordsParams | None = None) -> CoordsTask:
     """Build the configured coordinate-operation task."""
     params = CoordsParams() if params is None else params
+    applied_dim, applied_start, applied_stop, applied_step = _applied_set_coords_fields(
+        params
+    )
     return CoordsTask(
         operation=params.operation,
         rename_rows=tuple(
@@ -268,10 +351,10 @@ def coords_task_from_params(params: CoordsParams | None = None) -> CoordsTask:
             (str(left), str(right))
             for left, right in normalize_mapping_rows(params.set_dims_rows)
         ),
-        set_coords_applied_dim=str(params.set_coords_applied_dim or ""),
-        set_coords_applied_start=str(params.set_coords_applied_start or ""),
-        set_coords_applied_stop=str(params.set_coords_applied_stop or ""),
-        set_coords_applied_step=str(params.set_coords_applied_step or ""),
+        set_coords_applied_dim=applied_dim,
+        set_coords_applied_start=applied_start,
+        set_coords_applied_stop=applied_stop,
+        set_coords_applied_step=applied_step,
         drop_coords_selected=tuple(params.drop_coords_selected or ()),
         sort_coords_selected=tuple(params.sort_coords_selected or ()),
         sort_reverse=bool(params.sort_reverse),

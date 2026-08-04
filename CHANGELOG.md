@@ -10,6 +10,8 @@ All notable user-facing changes to DerZug are documented here.
   - Dimension choosers no longer derive the default from the alphabetically sorted dim list; when a patch has no `time` dimension the default is now the first patch dimension, matching `resolve_patch_dim`.
   - The Fourier widget's inverse-transform dimension fallback now prefers a `ft_*` axis (matching `FourierTask.run`) instead of the forward-transform default, which preferred `time`.
   - Aggregate's phase-weighted stack no longer fails headlessly when no stack dimension is set; it defaults to `distance` (else the first patch dimension), the same default the widget applies, and the widget's transform-dimension chooser now excludes that effective stack dimension.
+- The Coords widget now builds and validates its task exclusively through the node layer, so the task that runs on the canvas and the task exported into a saved workflow are always identical. Two behavior fixes come with it: headless callers filling only the `set_coords` draft fields (`set_coords_dim`/`start`/`stop`/`step`) now get a real coordinate update instead of a silent no-op, and data-flipping a non-dimension coordinate now reports through the "Invalid flip selection" banner instead of a generic operation failure.
+- The Spool widget's preview/output pipeline now runs the same node-layer select and chunk stages as a headless workflow. A chunk value that parses to `None` (e.g. the text `None`) now disables chunking headlessly, matching the canvas chunk controls.
 
 ### Changed (breaking)
 

@@ -12,7 +12,9 @@ import pytest
 from derzug.nodes.spool import (
     NODE_SPEC,
     SpoolParams,
+    apply_chunk_settings,
     contents_identity_token,
+    load_spool_from_settings,
     ordered_contents_df,
     resolved_select_filters,
     spool_task_from_params,
@@ -83,3 +85,80 @@ class TestPatchNameSelection:
         selected = ordered_contents_df(result["spool"])
         assert len(selected) == 1
         assert contents_identity_token(selected, 0) == contents_identity_token(df, 0)
+
+
+class TestLoadSpoolFromSettings:
+    """Source routing lives in one place for the widget and the node."""
+
+    def test_file_input_wins_over_other_sources(self, monkeypatch):
+        """A file path beats raw input and the example selection."""
+        calls: list[str] = []
+        monkeypatch.setattr(dc, "spool", lambda arg: calls.append(arg) or "loaded")
+
+        out = load_spool_from_settings(
+            spool_input="plain_example",
+            example_parameters={},
+            file_input=" /data/spool_dir ",
+            raw_input="raw-source",
+        )
+
+        assert out == "loaded"
+        assert calls == ["/data/spool_dir"]
+
+    def test_raw_input_used_when_no_file(self, monkeypatch):
+        """Raw input loads when no file path is set."""
+        calls: list[str] = []
+        monkeypatch.setattr(dc, "spool", lambda arg: calls.append(arg) or "loaded")
+
+        out = load_spool_from_settings(
+            spool_input=None,
+            example_parameters={},
+            file_input="",
+            raw_input="raw-source",
+        )
+
+        assert out == "loaded"
+        assert calls == ["raw-source"]
+
+    def test_example_parameter_overrides_reach_the_callable(self, monkeypatch):
+        """Saved per-example overrides are applied to the example call."""
+        captured: dict[str, object] = {}
+
+        def example(sample_rate: int = 150):
+            captured["sample_rate"] = sample_rate
+            return dc.get_example_spool("random_das")
+
+        monkeypatch.setattr(
+            "derzug.nodes.spool.all_examples", lambda ignore=(): {"ex": example}
+        )
+
+        load_spool_from_settings(
+            spool_input="ex",
+            example_parameters={"ex": {"sample_rate": 220}},
+            file_input="",
+            raw_input="",
+        )
+
+        assert captured["sample_rate"] == 220
+
+
+class TestApplyChunkSettings:
+    """Chunk-text parsing must behave like the widget's chunk controls."""
+
+    def test_none_chunk_value_disables_chunking(self):
+        """The text 'None' no-ops instead of chunking with a None value."""
+        spool = dc.get_example_spool("random_das")
+
+        out = apply_chunk_settings(
+            spool,
+            chunk_enabled=True,
+            chunk_dim="time",
+            chunk_value="None",
+            chunk_overlap="",
+            chunk_keep_partial=False,
+            chunk_snap_coords=True,
+            chunk_tolerance=1.5,
+            chunk_conflict="raise",
+        )
+
+        assert out is spool

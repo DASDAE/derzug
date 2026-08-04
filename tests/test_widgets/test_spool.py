@@ -312,22 +312,22 @@ class TestSpool:
         assert len(received) == 1
         assert received[0] is not None
 
-    def test_load_from_example_uses_saved_parameter_overrides(self, monkeypatch):
-        """Example-specific overrides should be passed into the selected callable."""
+    def test_saved_parameter_overrides_reach_the_output(self, monkeypatch, qtbot):
+        """Example-specific overrides should shape the emitted spool."""
         examples = _make_example_map()
         monkeypatch.setattr(
             "derzug.nodes.spool.all_examples", lambda ignore=(): examples
         )
 
         with widget_context(Spool) as widget:
+            received = capture_output(widget.Outputs.spool, monkeypatch)
             widget.spool_input = "configured_example"
             widget.example_parameters = {
                 "configured_example": {"sample_rate": 220, "duration": 2.0}
             }
+            _run_and_wait(widget, qtbot)
 
-            spool = widget._load_from_example()
-
-        patch = next(iter(spool))
+        patch = next(iter(received[-1]))
         time = patch.get_array("time")
         assert len(time) == 440
         assert time[1] - time[0] == pytest.approx(1 / 220)
@@ -732,24 +732,6 @@ class TestSpool:
         assert dialog.result() == QDialog.DialogCode.Accepted
         # Necessary to convert to a Path object for OS-independent equivalence
         assert Path(dialog.chosen_path()) == file_path
-
-    def test_run_uses_file_loader_when_file_input_set(self, spool_widget):
-        """_snapshot_loader() routes to the file path when file_input is set."""
-        spool_widget.file_input = "/tmp/fake"
-        spool_widget.raw_input = ""
-        spool_widget.spool_input = None
-        source_name, loader_fn = spool_widget._snapshot_loader()
-        assert source_name == "/tmp/fake"
-        assert callable(loader_fn)
-
-    def test_run_uses_raw_loader_when_raw_input_set(self, spool_widget):
-        """_snapshot_loader() routes to the raw path when raw_input is set."""
-        spool_widget.raw_input = "raw://fake"
-        spool_widget.file_input = ""
-        spool_widget.spool_input = None
-        source_name, loader_fn = spool_widget._snapshot_loader()
-        assert source_name == "raw://fake"
-        assert callable(loader_fn)
 
     def test_run_with_no_selection_emits_none(self, spool_widget, monkeypatch):
         """run() with no selected example sends None downstream."""
@@ -2237,7 +2219,8 @@ class TestSpool:
         derived = dc.spool([_patch_with_tag("derived-only")])
         spool_widget._current_spool = dc.spool([first])
         monkeypatch.setattr(
-            spool_widget, "_apply_chunk_transform", lambda spool: derived
+            "derzug.widgets.spool.apply_spool_transforms",
+            lambda spool, task: derived,
         )
         monkeypatch.setattr(spool_widget, "_render_spool", lambda spool: None)
         monkeypatch.setattr(spool_widget, "run", lambda: None)
@@ -2259,19 +2242,19 @@ class TestSpool:
         chunked = dc.spool([_patch_with_tag("chunked")])
         calls: list[tuple[str, object]] = []
 
-        def _select(spool):
+        def _select(spool, select_filters):
             calls.append(("select", spool))
             assert spool is base
             return selected
 
-        def _chunk(spool):
+        def _chunk(spool, **kwargs):
             calls.append(("chunk", spool))
             assert spool is selected
             return chunked
 
         spool_widget._source_spool = base
-        monkeypatch.setattr(spool_widget, "_apply_select_transform", _select)
-        monkeypatch.setattr(spool_widget, "_apply_chunk_transform", _chunk)
+        monkeypatch.setattr("derzug.nodes.spool.apply_select_rows", _select)
+        monkeypatch.setattr("derzug.nodes.spool.apply_chunk_settings", _chunk)
         monkeypatch.setattr(spool_widget, "_render_spool", lambda spool: None)
 
         spool_widget._recompute_display_spool()

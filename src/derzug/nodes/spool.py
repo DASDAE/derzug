@@ -222,6 +222,21 @@ def load_spool_from_settings(
     return result
 
 
+def parse_spool_scalar(text: str) -> Any | None:
+    """Parse one chunk/select text value; blank text or ``None`` yields None.
+
+    Ellipsis (``...``) and other Python literals parse via ``literal_eval``;
+    non-literal text passes through as the raw string.
+    """
+    stripped = str(text).strip()
+    if not stripped:
+        return None
+    try:
+        return ast.literal_eval(stripped)
+    except Exception:
+        return stripped
+
+
 def apply_select_rows(
     spool: dc.BaseSpool,
     select_filters: tuple[dict[str, str], ...],
@@ -230,14 +245,8 @@ def apply_select_rows(
     kwargs = {}
     for filter_data in select_filters:
         key = str(filter_data.get("key", "")).strip()
-        raw_value = str(filter_data.get("raw", "")).strip()
-        if not key or not raw_value:
-            continue
-        try:
-            value = ast.literal_eval(raw_value)
-        except Exception:
-            value = raw_value
-        if value is None:
+        value = parse_spool_scalar(filter_data.get("raw", ""))
+        if not key or value is None:
             continue
         kwargs[key] = value
     if not kwargs:
@@ -257,32 +266,48 @@ def apply_chunk_settings(
     chunk_tolerance: float,
     chunk_conflict: str,
 ) -> dc.BaseSpool:
-    """Apply persisted chunk settings to a spool."""
+    """Apply persisted chunk settings to a spool.
+
+    A chunk value that parses to None (blank or the text ``None``) disables
+    chunking, matching the widget's chunk controls.
+    """
     if not bool(chunk_enabled):
         return spool
     dim = chunk_dim.strip()
-    raw_value = chunk_value.strip()
-    if not dim or not raw_value:
+    value = parse_spool_scalar(chunk_value)
+    if not dim or value is None:
         return spool
-    try:
-        value = ast.literal_eval(raw_value)
-    except Exception:
-        value = raw_value
-    overlap = None
-    if chunk_overlap.strip():
-        try:
-            overlap = ast.literal_eval(chunk_overlap.strip())
-        except Exception:
-            overlap = chunk_overlap.strip()
     return spool.chunk(
         **{
             dim: value,
-            "overlap": overlap,
+            "overlap": parse_spool_scalar(chunk_overlap),
             "keep_partial": bool(chunk_keep_partial),
             "snap_coords": bool(chunk_snap_coords),
             "tolerance": float(chunk_tolerance),
             "conflict": chunk_conflict,
         }
+    )
+
+
+def apply_spool_transforms(
+    spool: dc.BaseSpool, task: SpoolTask | SpoolTransformTask
+) -> dc.BaseSpool:
+    """Apply one task's persisted select and chunk settings to a spool.
+
+    The single definition of the select -> chunk order, shared by both node
+    tasks and the widget's snapshot executor.
+    """
+    spool = apply_select_rows(spool, task.select_filters)
+    return apply_chunk_settings(
+        spool,
+        chunk_enabled=task.chunk_enabled,
+        chunk_dim=task.chunk_dim,
+        chunk_value=task.chunk_value,
+        chunk_overlap=task.chunk_overlap,
+        chunk_keep_partial=task.chunk_keep_partial,
+        chunk_snap_coords=task.chunk_snap_coords,
+        chunk_tolerance=task.chunk_tolerance,
+        chunk_conflict=task.chunk_conflict,
     )
 
 
@@ -350,18 +375,7 @@ class SpoolTask(Task):
         )
         if selected_row is None:
             selected_row = self.selected_source_row
-        spool = apply_select_rows(source, self.select_filters)
-        spool = apply_chunk_settings(
-            spool,
-            chunk_enabled=self.chunk_enabled,
-            chunk_dim=self.chunk_dim,
-            chunk_value=self.chunk_value,
-            chunk_overlap=self.chunk_overlap,
-            chunk_keep_partial=self.chunk_keep_partial,
-            chunk_snap_coords=self.chunk_snap_coords,
-            chunk_tolerance=self.chunk_tolerance,
-            chunk_conflict=self.chunk_conflict,
-        )
+        spool = apply_spool_transforms(source, self)
         if selected_row is not None:
             spool = spool_rows_to_output(spool, {int(selected_row)})
         patch = extract_single_patch(spool) if self.unpack_single_patch else None
@@ -391,18 +405,7 @@ class SpoolTransformTask(Task):
 
     def run(self, spool):
         """Apply select/chunk settings to an input spool."""
-        spool = apply_select_rows(spool, self.select_filters)
-        spool = apply_chunk_settings(
-            spool,
-            chunk_enabled=self.chunk_enabled,
-            chunk_dim=self.chunk_dim,
-            chunk_value=self.chunk_value,
-            chunk_overlap=self.chunk_overlap,
-            chunk_keep_partial=self.chunk_keep_partial,
-            chunk_snap_coords=self.chunk_snap_coords,
-            chunk_tolerance=self.chunk_tolerance,
-            chunk_conflict=self.chunk_conflict,
-        )
+        spool = apply_spool_transforms(spool, self)
         if self.selected_source_row is not None:
             spool = spool_rows_to_output(spool, {int(self.selected_source_row)})
         patch = extract_single_patch(spool) if self.unpack_single_patch else None
