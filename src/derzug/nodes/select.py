@@ -140,12 +140,8 @@ NODE_SPEC = NodeSpec(
     inputs=(
         PortSpec(name="patch", display_name="Patch", type=dc.Patch),
         PortSpec(name="spool", display_name="Spool", type=dc.BaseSpool),
-        PortSpec(
-            name="annotation_set", display_name="Annotations", type=AnnotationSet
-        ),
-        PortSpec(
-            name="select_params", display_name="Select Params", type=SelectParams
-        ),
+        PortSpec(name="annotation_set", display_name="Annotations", type=AnnotationSet),
+        PortSpec(name="select_params", display_name="Select Params", type=SelectParams),
     ),
     outputs=(
         PortSpec(name="patch", display_name="Patch", type=dc.Patch),

@@ -14,7 +14,7 @@ from derzug.models.annotations import (
     SpanGeometry,
 )
 from derzug.nodes.spec import NodeSpec, PortSpec
-from derzug.utils.annotation_metadata import LABEL_SLOTS, optional_text
+from derzug.utils.annotation_metadata import optional_text
 from derzug.workflow.task import Task
 
 GEOM_DOT = 0
@@ -167,6 +167,33 @@ class TableToAnnotationTask(Task):
         return AnnotationSet(dims=dims, annotations=tuple(annotations))
 
 
+def unconvertible_row_count(data: pd.DataFrame, task: TableToAnnotationTask) -> int:
+    """Return how many rows ``task`` will silently skip converting.
+
+    The widget needs this to warn the user, and it has to agree with what
+    :meth:`TableToAnnotationTask.run` actually does — so it runs the same
+    conversion against the same row form rather than reimplementing it.
+    """
+    dims = parse_dims(task.dims_text)
+    column_positions = {
+        str(column): position for position, column in enumerate(data.columns)
+    }
+    skipped = 0
+    for row in data.itertuples(index=False, name=None):
+        try:
+            make_table_geometry(
+                row=row,
+                column_positions=column_positions,
+                dims=dims,
+                geometry_type=task.geometry_type,
+                line_axis_dim=task.line_axis_dim,
+                col_map=task.col_map,
+            )
+        except (KeyError, TypeError, ValueError):
+            skipped += 1
+    return skipped
+
+
 class Table2AnnotationParams(BaseModel):
     """Parameters for the Table to Annotations widget."""
 
@@ -206,9 +233,7 @@ NODE_SPEC = NodeSpec(
     widget_qualified_name="derzug.widgets.table2annotation.Table2Annotation",
     inputs=(PortSpec(name="data", display_name="Data", type=pd.DataFrame),),
     outputs=(
-        PortSpec(
-            name="annotation_set", display_name="Annotations", type=AnnotationSet
-        ),
+        PortSpec(name="annotation_set", display_name="Annotations", type=AnnotationSet),
     ),
     params_model=Table2AnnotationParams,
     task_factory=table2annotation_task_from_params,

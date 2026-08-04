@@ -145,6 +145,20 @@ class TestRunOutput:
         result = received[-1]
         assert len(result.annotations) == 1
 
+    def test_fully_valid_table_reports_nothing_skipped(self, widget, monkeypatch):
+        """A table with no bad rows must not warn.
+
+        The skip count used to be computed by a widget-local helper calling the
+        conversion with a stale signature, so every row raised ``TypeError``
+        and a perfectly good table reported all of its rows as skipped.
+        """
+        received = capture_output(widget.Outputs.annotation_set, monkeypatch)
+        _configure_point_widget(widget)
+        widget.set_data(_point_df())
+        wait_for_widget_idle(widget, timeout=5.0)
+        assert not widget.Warning.rows_skipped.is_shown()
+        assert len(received[-1].annotations) == 2
+
     def test_clearing_input_sends_none(self, widget, monkeypatch):
         """Sending None after data clears the output."""
         received = capture_output(widget.Outputs.annotation_set, monkeypatch)

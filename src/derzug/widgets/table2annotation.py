@@ -24,11 +24,8 @@ from derzug.nodes.table2annotation import (
     NO_COLUMN,
     NODE_SPEC,
     TableToAnnotationTask,
-    make_table_geometry,
     parse_dims,
-    table_label,
-    table_notes,
-    table_tags,
+    unconvertible_row_count,
 )
 from derzug.utils.annotation_metadata import LABEL_SLOTS
 from derzug.workflow import Task
@@ -260,15 +257,11 @@ class Table2Annotation(ZugWidget):
         if self.geometry_type == GEOM_LINE and not self.line_axis_dim:
             self.Error.line_axis_missing()
             return None
-        skipped = 0
-        for _, row in df.iterrows():
-            try:
-                self._make_geometry(row, dims)
-            except (KeyError, TypeError, ValueError):
-                skipped += 1
+        task = self.get_task()
+        skipped = unconvertible_row_count(df, task)
         if skipped:
             self.Warning.rows_skipped(skipped)
-        return self.get_task(), df
+        return task, df
 
     def _on_result(self, result: AnnotationSet | None) -> None:
         """Emit the result and update the status label."""
@@ -278,30 +271,6 @@ class Table2Annotation(ZugWidget):
         else:
             n = len(result.annotations)
             self._status_label.setText(f"{n:,} annotation{'s' if n != 1 else ''}")
-
-    # ── Geometry helpers ──────────────────────────────────────────
-
-    def _make_geometry(self, row: pd.Series, dims: tuple[str, ...]):
-        """Return a PointGeometry or SpanGeometry for one DataFrame row."""
-        return make_table_geometry(
-            row=row,
-            dims=dims,
-            geometry_type=self.geometry_type,
-            line_axis_dim=self.line_axis_dim,
-            col_map=self.col_map,
-        )
-
-    def _get_notes(self, row: pd.Series) -> str | None:
-        """Return Annotation.notes from the configured column, or None."""
-        return table_notes(row, self.notes_col)
-
-    def _get_label(self, row: pd.Series) -> str | None:
-        """Return Annotation.label from fixed setting or per-row column."""
-        return table_label(row, self.label_mode, self.label_col, self.fixed_label)
-
-    def _get_tags(self, row: pd.Series) -> tuple[str, ...]:
-        """Return Annotation.tags split from a comma-separated column value."""
-        return table_tags(row, self.tags_col)
 
     # ── Active dim logic ──────────────────────────────────────────
 

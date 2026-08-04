@@ -64,21 +64,15 @@ def annotation2dataframe_task_from_params(
 
 NODE_SPEC = NodeSpec(
     name="Annotations to DataFrame",
-    widget_qualified_name=(
-        "derzug.widgets.annotation2dataframe.Annotation2DataFrame"
-    ),
+    widget_qualified_name=("derzug.widgets.annotation2dataframe.Annotation2DataFrame"),
     inputs=(
-        PortSpec(
-            name="annotation_set", display_name="Annotations", type=AnnotationSet
-        ),
+        PortSpec(name="annotation_set", display_name="Annotations", type=AnnotationSet),
     ),
     outputs=(PortSpec(name="data", display_name="Data", type=pd.DataFrame),),
     params_model=Annotation2DataFrameParams,
     task_factory=annotation2dataframe_task_from_params,
     category="Table",
-    description=(
-        "Extract point annotations from an AnnotationSet into a DataFrame."
-    ),
+    description=("Extract point annotations from an AnnotationSet into a DataFrame."),
     keywords=("annotation", "table", "dataframe", "convert", "point"),
     icon="icons/Annotation2DataFrame.svg",
     priority=26,

@@ -9,6 +9,8 @@ the parameter dialog.
 from __future__ import annotations
 
 import ast
+import datetime
+from pathlib import Path
 from typing import Any, ClassVar
 
 import dascore as dc
@@ -105,6 +107,93 @@ def spool_rows_to_patches(
 ) -> list[dc.Patch]:
     """Return selected patch payloads without iterating unrelated rows."""
     return [spool[index] for index in spool_indices_for_rows(spool, selected_rows)]
+
+
+def serialize_identity_value(value: Any) -> str:
+    """Return one spool-contents value as a stable identity string."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (str | int | float | bool | Path)):
+        return str(value)
+    if isinstance(value, datetime.timedelta):
+        return str(int(value.total_seconds() * 1e9))
+    arr = np.asarray(value)
+    if arr.ndim == 0:
+        item = arr.item()
+        return serialize_identity_value(item)
+    return repr(value)
+
+
+def contents_identity_token(df: pd.DataFrame, row: int) -> str:
+    """Return a stable row token from spool contents without loading patches."""
+    if row < 0 or row >= len(df):
+        raise IndexError(row)
+    if "path" in df.columns:
+        value = df.iloc[row]["path"]
+        text = serialize_identity_value(value).strip()
+        if text:
+            return f"path:{Path(text).as_posix()}"
+    parts = []
+    for column in df.columns:
+        parts.append(f"{column}={serialize_identity_value(df.iloc[row][column])}")
+    return "row:" + "|".join(parts)
+
+
+def ordered_contents_df(spool: dc.BaseSpool) -> pd.DataFrame:
+    """Return spool contents in the deterministic display order."""
+    return ordered_contents_df_with_source_rows(spool).drop(columns="_source_row")
+
+
+def source_row_for_patch_name(spool: dc.BaseSpool, patch_name: str) -> int | None:
+    """Return the display row whose identity token matches ``patch_name``.
+
+    Row indices are not stable across reloads -- a directory gaining a file
+    reorders everything after it -- so a persisted selection also records a
+    content-derived token and prefers it when the two disagree.
+    """
+    token = str(patch_name or "").strip()
+    if not token:
+        return None
+    try:
+        df = ordered_contents_df(spool)
+    except Exception:
+        return None
+    for index in range(len(df)):
+        try:
+            candidate = contents_identity_token(df, index)
+        except Exception:
+            continue
+        if candidate == token:
+            return index
+    return None
+
+
+def resolved_select_filters(
+    select_filters: object, select_col: object, select_val: object
+) -> list[dict[str, str]]:
+    """Return persisted select rows, folding in legacy single-select settings.
+
+    ``select_col``/``select_val`` are the pre-row-list shape; a workflow saved
+    then still has to filter the same way when it runs.
+    """
+    filters = [
+        {
+            "key": str(item.get("key", "")).strip(),
+            "raw": str(item.get("raw", "")).strip(),
+        }
+        for item in (select_filters or [])
+        if isinstance(item, dict)
+    ]
+    if not filters and (select_col or select_val):
+        filters = [
+            {
+                "key": str(select_col or "").strip(),
+                "raw": str(select_val or "").strip(),
+            }
+        ]
+    return filters
 
 
 def load_spool_from_settings(
@@ -244,17 +333,26 @@ class SpoolTask(Task):
     chunk_conflict: str = "raise"
     select_filters: tuple[dict[str, str], ...] = ()
     selected_source_row: int | None = None
+    selected_source_patch_name: str = ""
     unpack_single_patch: bool = True
 
     def run(self):
         """Load and post-process the configured spool source."""
-        spool = load_spool_from_settings(
+        source = load_spool_from_settings(
             spool_input=self.spool_input,
             example_parameters=self.example_parameters,
             file_input=self.file_input,
             raw_input=self.raw_input,
         )
-        spool = apply_select_rows(spool, self.select_filters)
+        # Resolve the saved selection against the source before transforming,
+        # the same order the widget uses: the row token identifies a patch in
+        # the loaded source, and the resulting index addresses the display.
+        selected_row = source_row_for_patch_name(
+            source, self.selected_source_patch_name
+        )
+        if selected_row is None:
+            selected_row = self.selected_source_row
+        spool = apply_select_rows(source, self.select_filters)
         spool = apply_chunk_settings(
             spool,
             chunk_enabled=self.chunk_enabled,
@@ -266,8 +364,8 @@ class SpoolTask(Task):
             chunk_tolerance=self.chunk_tolerance,
             chunk_conflict=self.chunk_conflict,
         )
-        if self.selected_source_row is not None:
-            spool = spool_rows_to_output(spool, {int(self.selected_source_row)})
+        if selected_row is not None:
+            spool = spool_rows_to_output(spool, {int(selected_row)})
         patch = extract_single_patch(spool) if self.unpack_single_patch else None
         return {"spool": spool, "patch": patch}
 
@@ -330,8 +428,13 @@ def spool_task_from_params(params: SpoolParams | None = None) -> SpoolTask:
         chunk_snap_coords=bool(params.chunk_snap_coords),
         chunk_tolerance=float(params.chunk_tolerance),
         chunk_conflict=str(params.chunk_conflict or "raise"),
-        select_filters=tuple(params.select_filters or ()),
+        select_filters=tuple(
+            resolved_select_filters(
+                params.select_filters, params.select_col, params.select_val
+            )
+        ),
         selected_source_row=None if row is None else int(row),
+        selected_source_patch_name=str(params.selected_source_patch_name or ""),
         unpack_single_patch=bool(params.unpack_single_patch),
     )
 
@@ -351,9 +454,7 @@ NODE_SPEC = NodeSpec(
     name="Spool",
     widget_qualified_name="derzug.widgets.spool.Spool",
     inputs=(
-        PortSpec(
-            name="patch", display_name="Patch", type=dc.Patch, context_only=True
-        ),
+        PortSpec(name="patch", display_name="Patch", type=dc.Patch, context_only=True),
         PortSpec(
             name="spool",
             display_name="Spool",

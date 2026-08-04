@@ -73,9 +73,7 @@ NODE_SPEC = NodeSpec(
     ),
     outputs=(
         PortSpec(name="patch", display_name="Patch", type=dc.Patch),
-        PortSpec(
-            name="select_params", display_name="Select Params", type=SelectParams
-        ),
+        PortSpec(name="select_params", display_name="Select Params", type=SelectParams),
         PortSpec(
             name="annotation_set",
             display_name="Annotations",

@@ -45,8 +45,11 @@ from derzug.nodes.spool import (
     SpoolTransformTask,
     apply_chunk_settings,
     apply_select_rows,
+    contents_identity_token,
     load_spool_from_settings,
-    ordered_contents_df_with_source_rows,
+    ordered_contents_df,
+    resolved_select_filters,
+    source_row_for_patch_name,
     spool_rows_to_output,
     spool_task_from_params,
     spool_transform_task_from_params,
@@ -459,38 +462,6 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
         settings_source_identity=snapshot.settings_source_identity,
         display_generation=snapshot.display_generation,
     )
-
-
-def _serialize_identity_value(value: Any) -> str:
-    """Return one spool-contents value as a stable identity string."""
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    if isinstance(value, (str | int | float | bool | Path)):
-        return str(value)
-    if isinstance(value, datetime.timedelta):
-        return str(int(value.total_seconds() * 1e9))
-    arr = np.asarray(value)
-    if arr.ndim == 0:
-        item = arr.item()
-        return _serialize_identity_value(item)
-    return repr(value)
-
-
-def _contents_identity_token(df: pd.DataFrame, row: int) -> str:
-    """Return a stable row token from spool contents without loading patches."""
-    if row < 0 or row >= len(df):
-        raise IndexError(row)
-    if "path" in df.columns:
-        value = df.iloc[row]["path"]
-        text = _serialize_identity_value(value).strip()
-        if text:
-            return f"path:{Path(text).as_posix()}"
-    parts = []
-    for column in df.columns:
-        parts.append(f"{column}={_serialize_identity_value(df.iloc[row][column])}")
-    return "row:" + "|".join(parts)
 
 
 class Spool(ZugWidget):
@@ -1780,21 +1751,9 @@ class Spool(ZugWidget):
 
     def _migrate_select_filters(self) -> None:
         """Migrate legacy single-select settings into the row-based filter list."""
-        filters = [
-            {
-                "key": str(item.get("key", "")).strip(),
-                "raw": str(item.get("raw", "")).strip(),
-            }
-            for item in (self.select_filters or [])
-            if isinstance(item, dict)
-        ]
-        if not filters and (self.select_col or self.select_val):
-            filters = [
-                {
-                    "key": str(self.select_col or "").strip(),
-                    "raw": str(self.select_val or "").strip(),
-                }
-            ]
+        filters = resolved_select_filters(
+            self.select_filters, self.select_col, self.select_val
+        )
         self.select_filters = filters or [self._blank_select_filter()]
 
     def _create_select_row(
@@ -2194,33 +2153,17 @@ class Spool(ZugWidget):
         except Exception:
             return ""
         try:
-            return _contents_identity_token(df, source_row)
+            return contents_identity_token(df, source_row)
         except Exception:
             return ""
 
     def _source_row_for_patch_name(self, patch_name: str) -> int | None:
         """Return the current source-spool row for a persisted row token."""
-        token = str(patch_name or "").strip()
-        if self._source_spool is None or not token:
+        if self._source_spool is None:
             return None
-        try:
-            df = self._ordered_contents_df(self._source_spool)
-        except Exception:
-            return None
-        for index in range(len(df)):
-            try:
-                candidate = _contents_identity_token(df, index)
-            except Exception:
-                continue
-            if candidate == token:
-                return index
-        return None
+        return source_row_for_patch_name(self._source_spool, patch_name)
 
-    @staticmethod
-    def _ordered_contents_df(spool: dc.BaseSpool):
-        """Return spool contents in the widget's deterministic default order."""
-        ordered = ordered_contents_df_with_source_rows(spool)
-        return ordered.drop(columns="_source_row")
+    _ordered_contents_df = staticmethod(ordered_contents_df)
 
     def _initialize_active_source_selection(self) -> None:
         """Best-effort active-source registration for the first source widget."""

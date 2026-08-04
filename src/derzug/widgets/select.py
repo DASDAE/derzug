@@ -522,7 +522,14 @@ class Select(SelectionControlsMixin, ZugWidget):
         return self._selection_task()
 
     def _selection_task(self) -> SelectTask:
-        """Return the current canonical selection task."""
+        """Return the current canonical selection task.
+
+        Built directly rather than through ``node_spec.build_task``: while an
+        input is bound, the authority is the live ``SelectionState``, which the
+        user may have edited since the last settings sync. With no input bound
+        the two paths agree, which is what ``test_node_spec_consistency``
+        checks.
+        """
         patch_payload = self._current_patch_selection_payload()
         spool_filters = self._current_spool_filter_state()
         return SelectTask(

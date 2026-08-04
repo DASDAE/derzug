@@ -63,9 +63,7 @@ NODE_SPEC = NodeSpec(
         ),
     ),
     outputs=(
-        PortSpec(
-            name="annotation_set", display_name="Annotations", type=AnnotationSet
-        ),
+        PortSpec(name="annotation_set", display_name="Annotations", type=AnnotationSet),
     ),
     params_model=AnnotationsParams,
     task_factory=annotations_task_from_params,
