@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import derzug.constants as constants
 import numpy as np
 from derzug.utils.misc import (
+    load_entrypoints,
     load_example_workflow_entrypoints,
     load_widget_entrypoints,
     ordered_pair,
@@ -28,7 +29,7 @@ class TestLoadWidgetEntrypoints:
 
     def test_external_widget_providers_are_loaded(self, monkeypatch):
         """External providers registered in derzug.widgets are not filtered out."""
-        load_widget_entrypoints.cache_clear()
+        load_entrypoints.cache_clear()
 
         local = SimpleNamespace(
             name="Spool",
@@ -50,7 +51,7 @@ class TestLoadWidgetEntrypoints:
         try:
             result = list(load_widget_entrypoints())
         finally:
-            load_widget_entrypoints.cache_clear()
+            load_entrypoints.cache_clear()
         values = {ep.value for ep in result}
 
         assert "slanrod.zug.discovery:widget_discovery" in values

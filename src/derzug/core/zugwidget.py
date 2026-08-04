@@ -34,8 +34,10 @@ from derzug.core.services import get_app_shell_service
 from derzug.core.widget_execution import WorkflowExecutionMixin
 from derzug.core.widget_messages import WidgetMessageMixin
 from derzug.core.widget_runtime import WidgetExecutionRequest, WidgetExecutionRuntime
+from derzug.nodes.spec import NodeSpec, model_json_schema
 from derzug.settings import Setting
 from derzug.workflow import Pipe, Task
+from derzug.workflow.compiler import DEFAULT_GET_TASK_MARKER
 
 
 class _WidgetKeyboardShortcutsDialog(QDialog):
@@ -93,6 +95,19 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     text edits.
     """
 
+    #: The Qt-free :class:`~derzug.nodes.spec.NodeSpec` this widget renders.
+    #: When set, ``params_model``, ``view_model``, and ``is_source`` are taken
+    #: from the spec unless the widget overrides them itself. ``None`` for
+    #: widgets not yet migrated to the node layer.
+    node_spec: ClassVar[NodeSpec | None] = None
+
+    #: Attributes a ``node_spec`` supplies when the widget doesn't declare them.
+    _SPEC_DERIVED_ATTRS: ClassVar[tuple[str, ...]] = (
+        "params_model",
+        "view_model",
+        "is_source",
+    )
+
     #: Pydantic model (or discriminated union) describing this widget's
     #: parameters, the authoritative typed schema for ``get_params`` /
     #: ``apply_params``. ``None`` until the widget is migrated to a params model.
@@ -121,6 +136,16 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
         QComboBox,
     )
     is_source = False
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        """Derive node identity from ``node_spec`` for widgets that declare one."""
+        super().__init_subclass__(**kwargs)
+        spec = cls.__dict__.get("node_spec")
+        if spec is None:
+            return
+        for attr in cls._SPEC_DERIVED_ATTRS:
+            if attr not in cls.__dict__:
+                setattr(cls, attr, getattr(spec, attr))
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle shared shortcuts before deferring to Orange's default handling."""
@@ -836,14 +861,7 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
             view, self.view_model, self._view_field_map(), "view_model", run=run
         )
 
-    @staticmethod
-    def _model_json_schema(model) -> dict[str, object] | None:
-        """JSON schema for a params/view model, or ``None``.
-
-        Uses ``TypeAdapter`` so plain models and discriminated unions (e.g.
-        Filter's) are handled the same way.
-        """
-        return None if model is None else TypeAdapter(model).json_schema()
+    _model_json_schema = staticmethod(model_json_schema)
 
     @classmethod
     def params_schema(cls) -> dict[str, object] | None:
@@ -1040,3 +1058,10 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     def get_task(self) -> Task | Pipe:
         """Return the current workflow representation for this widget."""
         raise TypeError(f"{type(self).__name__} does not implement get_task()")
+
+    # The compiler identifies widgets that never implemented ``get_task`` by
+    # this marker rather than by importing ``ZugWidget`` to compare functions,
+    # which would drag Qt into ``derzug.workflow``. The marker points at the
+    # function itself so an override built with ``functools.wraps`` — which
+    # copies ``__dict__`` — is not mistaken for the fallback.
+    setattr(get_task, DEFAULT_GET_TASK_MARKER, get_task)

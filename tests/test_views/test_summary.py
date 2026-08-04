@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import dascore as dc
-from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
-from derzug.views.summary import (
+from derzug.core.summary import (
     _format_detail_html,
     summarize_annotation_set,
     summarize_patch,
     summarize_spool,
 )
+from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 
 
 class _ReprValue:

@@ -6,6 +6,7 @@ import dascore as dc
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.workflow import Pipe, Task
+from derzug.workflow.dims import default_patch_dim
 
 
 class PatchDimWidget(ZugWidget, openclass=True):
@@ -52,7 +53,7 @@ class PatchDimWidget(ZugWidget, openclass=True):
 
     def _default_dim(self, dims: tuple[str, ...]) -> str:
         """Choose a default dimension, preferring time when available."""
-        return "time" if "time" in dims else dims[0]
+        return default_patch_dim(dims)
 
     def _get_dim(self) -> str | None:
         """Return the currently selected dimension when available."""

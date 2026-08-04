@@ -6,12 +6,14 @@ from typing import ClassVar
 
 from Orange.widgets.widget import Msg
 
-from derzug.core.patchmethodwidget import ComboOption, PatchMethodWidget, SpinOption
+from derzug.core.patchmethodwidget import PatchMethodWidget
+from derzug.nodes.taper import _OPTIONS, NODE_SPEC
 
 
 class Taper(PatchMethodWidget):
     """Apply a taper window to a patch along a selected dimension."""
 
+    node_spec = NODE_SPEC
     name = "Taper"
     description = "Apply a taper window to a patch along a selected dimension"
     icon = "icons/Taper.svg"
@@ -25,26 +27,7 @@ class Taper(PatchMethodWidget):
     method_name = "taper"
     call_style = "keyword_dim"
     error_key = "taper_failed"
-    _OPTIONS: ClassVar[tuple[object, ...]] = (
-        SpinOption(
-            "p",
-            minimum=0.0,
-            maximum=0.4,
-            step=0.01,
-            decimals=3,
-            role="dim_value",
-            label="Taper fraction (p):",
-            spin_attr="_p_spin",
-            default=0.05,
-        ),
-        ComboOption(
-            "window_type",
-            ("hann", "hamming", "blackman", "nuttall"),
-            role="kwarg",
-            label="Window type:",
-            combo_attr="_window_combo",
-        ),
-    )
+    _OPTIONS: ClassVar[tuple[object, ...]] = _OPTIONS
 
     class Error(PatchMethodWidget.Error):
         """Errors shown by the widget."""

@@ -91,6 +91,12 @@ Annotations = "derzug.widgets.annotations"
 Table2Annotation = "derzug.widgets.table2annotation"
 Annotation2DataFrame = "derzug.widgets.annotation2dataframe"
 
+# Qt-free node specs. Each value names a module exposing NODE_SPEC (or
+# NODE_SPECS); see derzug.nodes.registry.
+[project.entry-points."derzug.nodes"]
+Filter = "derzug.nodes.filter"
+Taper = "derzug.nodes.taper"
+
 [project.entry-points."dascore.patch_namespace"]
 zug = "derzug.dascore.namespace:ZugPatchNameSpace"
 

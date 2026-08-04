@@ -44,6 +44,7 @@ from derzug.conductor.schema import (
     PortInfo,
     WidgetTypeInfo,
 )
+from derzug.nodes.registry import spec_for_widget_qname
 from derzug.widgets.composite import ensure_node_id
 from derzug.workflow.compiler import compile_workflow
 
@@ -270,9 +271,18 @@ class CanvasController:
     @staticmethod
     def _widget_type_info(description: Any) -> WidgetTypeInfo:
         """Build one WidgetTypeInfo, with param/view schemas when discoverable."""
-        cls = _widget_class(getattr(description, "qualified_name", "") or "")
-        params_schema = cls.params_schema() if hasattr(cls, "params_schema") else None
-        view_schema = cls.view_schema() if hasattr(cls, "view_schema") else None
+        qualified_name = getattr(description, "qualified_name", "") or ""
+        # A migrated node answers this without importing its Qt widget module.
+        spec = spec_for_widget_qname(qualified_name)
+        if spec is not None:
+            params_schema = spec.params_schema()
+            view_schema = spec.view_schema()
+        else:
+            cls = _widget_class(qualified_name)
+            params_schema = (
+                cls.params_schema() if hasattr(cls, "params_schema") else None
+            )
+            view_schema = cls.view_schema() if hasattr(cls, "view_schema") else None
         return WidgetTypeInfo(
             name=description.name,
             qualified_name=description.qualified_name,

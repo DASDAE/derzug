@@ -5,24 +5,30 @@ dropdowns and/or numeric spin boxes, optionally a dimension chooser) feeding a
 single configured DASCore patch method. ``PatchMethodWidget`` captures that
 boilerplate so a concrete widget only declares its metadata, settings, and an
 ``_OPTIONS`` spec of :class:`ComboOption` / :class:`SpinOption`.
+
+The option specs themselves and the task they build are Qt-free and live in
+:mod:`derzug.nodes._options`; this module is only their Qt rendering.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import create_model
 
 from derzug.core.patchdimwidget import PatchDimWidget
+from derzug.nodes._options import (
+    ComboOption,
+    SpinOption,
+    build_params_model,
+    options_task_factory,
+)
 from derzug.settings import Setting
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
 
 
 def _setting_default(cls: type, name: str, fallback: object) -> object:
@@ -32,89 +38,6 @@ def _setting_default(cls: type, name: str, fallback: object) -> object:
         if isinstance(value, Setting):
             return value.default
     return fallback
-
-
-@dataclass(frozen=True)
-class ComboOption:
-    """One fixed-choice dropdown backing a configured patch-method argument.
-
-    Parameters
-    ----------
-    setting
-        Name of the ``Setting`` attribute this dropdown reads and writes.
-    choices
-        Allowed values; the first is the fallback when a persisted value is
-        no longer valid.
-    role
-        How the selected value feeds the task: ``"arg"`` (positional method
-        argument), ``"kwarg"`` (keyword argument), or ``"method"`` (the value
-        is itself the method name to call).
-    label
-        UI label shown above the dropdown.
-    combo_attr
-        Optional attribute name to bind the ``QComboBox`` to (e.g.
-        ``"_type_combo"``), for callers/tests that reference it directly.
-    kwarg_name
-        Method keyword name for ``role="kwarg"`` (defaults to ``setting``).
-    """
-
-    setting: str
-    choices: tuple[str, ...]
-    role: str = "arg"
-    label: str = ""
-    combo_attr: str = ""
-    kwarg_name: str = ""
-
-    @property
-    def default(self) -> str:
-        """Return the fallback value (the first choice)."""
-        return self.choices[0]
-
-
-@dataclass(frozen=True)
-class SpinOption:
-    """One numeric spin control backing a configured patch-method argument.
-
-    ``role`` mirrors :class:`ComboOption` but adds ``"dim_value"``, which feeds
-    the ``keyword_dim`` call style (the value passed under the selected
-    dimension). ``decimals=0`` selects an integer spin box.
-    """
-
-    setting: str
-    minimum: float = 0.0
-    maximum: float = 1.0
-    step: float = 0.01
-    decimals: int = 3
-    role: str = "kwarg"
-    label: str = ""
-    spin_attr: str = ""
-    kwarg_name: str = ""
-    default: float = 0.0
-
-    @property
-    def is_int(self) -> bool:
-        """Return True when this option renders as an integer spin box."""
-        return self.decimals == 0
-
-    def coerce(self, value: object) -> float | int:
-        """Return ``value`` clamped to the configured range and numeric type."""
-        number = int(value) if self.is_int else float(value)
-        clamped = max(self.minimum, min(self.maximum, number))
-        return int(clamped) if self.is_int else clamped
-
-
-def _build_params_model(cls: type) -> type:
-    """Derive a pydantic params model from a widget's ``_OPTIONS`` + dim chooser."""
-    fields: dict[str, tuple[object, object]] = {}
-    if cls.uses_dim:
-        fields["dim"] = (str, _setting_default(cls, "selected_dim", ""))
-    for option in cls._OPTIONS:
-        if isinstance(option, ComboOption):
-            fields[option.setting] = (Literal[tuple(option.choices)], option.default)
-        else:
-            field_type = int if option.is_int else float
-            fields[option.setting] = (field_type, field_type(option.default))
-    return create_model(f"{cls.__name__}Params", **fields)
 
 
 class PatchMethodWidget(PatchDimWidget, openclass=True):
@@ -219,10 +142,28 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
             self._refresh_dims()
 
     def __init_subclass__(cls, **kwargs) -> None:
-        """Auto-derive a params model for each concrete option-based widget."""
+        """Auto-derive a params model for each concrete option-based widget.
+
+        Widgets that declare a ``node_spec`` already got theirs from the spec;
+        this only covers the ones not yet migrated to the node layer.
+        """
         super().__init_subclass__(**kwargs)
-        if cls.__dict__.get("_OPTIONS"):
-            cls.params_model = _build_params_model(cls)
+        if not cls.__dict__.get("_OPTIONS"):
+            return
+        if "node_spec" not in cls.__dict__ and cls.node_spec is not None:
+            raise TypeError(
+                f"{cls.__name__} overrides _OPTIONS but inherits node_spec "
+                f"{cls.node_spec.name!r}; declare its own node_spec, or set "
+                "node_spec = None to fall back to a generated params model"
+            )
+        if cls.node_spec is not None:
+            return
+        cls.params_model = build_params_model(
+            f"{cls.__name__}Params",
+            cls._OPTIONS,
+            uses_dim=cls.uses_dim,
+            dim_default=_setting_default(cls, "selected_dim", ""),
+        )
 
     def _settings_control_map(self) -> dict[str, object]:
         """Map each option setting (and the dim chooser) to its control."""
@@ -280,35 +221,27 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
         """Route worker failures to the widget's execution-error banner."""
         self._show_exception(self.error_key, exc)
 
-    def get_task(self) -> Task:
-        """Assemble the configured patch-method task from current controls."""
-        method_name = self.method_name
-        method_args: list[object] = []
-        method_kwargs: dict[str, object] = {}
-        dim_value: object | None = None
+    def _coerce_options(self) -> None:
+        """Pull every option's persisted value back into range, syncing controls."""
         for option in self._OPTIONS:
             if isinstance(option, ComboOption):
-                value = self._coerce_combo(option)
+                self._coerce_combo(option)
             else:
-                value = self._coerce_spin(option)
-            if option.role == "method":
-                method_name = value
-            elif option.role == "kwarg":
-                method_kwargs[option.kwarg_name or option.setting] = value
-            elif option.role == "dim_value":
-                dim_value = value
-            else:
-                method_args.append(value)
+                self._coerce_spin(option)
 
-        extra: dict[str, object] = {}
+    def get_task(self) -> Task:
+        """Assemble the configured patch-method task from current controls."""
+        self._coerce_options()
         if self.uses_dim:
-            extra["dim"] = self._get_dim() or self.selected_dim
-        if dim_value is not None:
-            extra["dim_value"] = dim_value
-        return PatchConfiguredMethodTask(
-            method_name=method_name,
+            # Side effect: resyncs ``selected_dim`` to an available dimension.
+            self._get_dim()
+        params = self.get_params()
+        if self.node_spec is not None and self.node_spec.task_factory is not None:
+            return self.node_spec.build_task(params)
+        return options_task_factory(
+            params,
+            method_name=self.method_name,
             call_style=self.call_style,
-            method_args=tuple(method_args),
-            method_kwargs=method_kwargs,
-            **extra,
+            uses_dim=self.uses_dim,
+            options=self._OPTIONS,
         )

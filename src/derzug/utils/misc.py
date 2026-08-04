@@ -34,19 +34,27 @@ def _parse_csv_env(name: str, *, lower: bool = False) -> set[str]:
 
 
 @cache
+def load_entrypoints(group: str):
+    """
+    Load one entry-point group, DerZug's own entries first.
+
+    The entry point group is the whole contract.  Do not also filter by
+    distribution name, or external providers such as SlanRod's `derzug.widgets`
+    entry point disappear from discovery.
+    """
+    return tuple(
+        sorted(
+            entry_points(group=group),
+            key=lambda ep: 0 if ep.dist.name.lower() == constants.PKG_NAME else 1,
+        )
+    )
+
+
 def load_widget_entrypoints():
     """
     Load DerZug widget entry points, including external providers.
     """
-    return tuple(
-        sorted(
-            # The entry point group is the DerZug widget contract.  Do not also
-            # filter by distribution name, or external providers such as
-            # SlanRod's `derzug.widgets` entry point disappear from discovery.
-            entry_points(group=constants.WIDGETS_ENTRY),
-            key=lambda ep: 0 if ep.dist.name.lower() == constants.PKG_NAME else 1,
-        )
-    )
+    return load_entrypoints(constants.WIDGETS_ENTRY)
 
 
 @cache

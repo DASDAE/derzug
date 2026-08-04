@@ -9,6 +9,7 @@ from typing import Any, ClassVar
 
 from pydantic import Field
 
+from .dims import resolve_patch_dim
 from .task import Task
 
 
@@ -52,10 +53,18 @@ class PatchConfiguredMethodTask(Task):
         fn = getattr(patch, self.method_name)
         args = list(self.method_args)
         kwargs = dict(self.method_kwargs)
-        if self.call_style == "positional_dim":
-            args.insert(0, self.dim)
-        elif self.call_style == "keyword_dim":
-            kwargs[self.dim] = self.dim_value
+        if self.call_style in ("positional_dim", "keyword_dim"):
+            # A headless caller may leave ``dim`` unset; resolve it the same
+            # way the widget's dimension chooser would.
+            dim = resolve_patch_dim(self.dim, tuple(patch.dims))
+            if dim is None:
+                raise ValueError(
+                    f"{self.method_name!r} needs a dimension but the patch has none"
+                )
+            if self.call_style == "positional_dim":
+                args.insert(0, dim)
+            else:
+                kwargs[dim] = self.dim_value
         elif self.call_style != "plain":
             raise ValueError(f"unsupported call style {self.call_style!r}")
         return fn(*args, **kwargs)
@@ -97,7 +106,11 @@ class PatchSelectionTask(Task):
 
     def run(self, patch):
         """Apply serialized patch-selection state to one patch."""
-        from derzug.widgets.selection import SelectionState
+        # Imported on use, not at module scope: pulling the selection state and
+        # its coordinate helpers into every ``derzug.workflow`` import doubles
+        # the cost of loading the engine, and most workflows have no selection
+        # node. The layer is legal either way -- this is about import weight.
+        from derzug.models.selection_state import SelectionState
 
         payload = self.selection_payload
         if not payload:
@@ -123,8 +136,9 @@ class PatchSelectionWithParamsTask(Task):
 
     def run(self, patch):
         """Return the selected patch and matching SelectParams."""
+        # Lazy for the same reason as PatchSelectionTask.run above.
         from derzug.models.selection import SelectParams
-        from derzug.widgets.selection import SelectionState
+        from derzug.models.selection_state import SelectionState
 
         payload = self.selection_payload
         if not payload:
@@ -194,7 +208,7 @@ class CallableTaskAdapter(Task):
 
     def _spec(self):
         """Return normalized callable metadata for this adapter."""
-        from derzug.utils.code2widget import _spec_from_callable
+        from derzug.utils.callable_spec import _spec_from_callable
 
         return _spec_from_callable(
             self._callable(),
@@ -225,7 +239,10 @@ class CallableTaskAdapter(Task):
 
     def run(self, **kwargs):
         """Execute the configured callable through the shared widget adapter path."""
-        from derzug.utils.code2widget import INPUTS_NOT_READY, _invoke_spec_function
+        from derzug.utils.callable_spec import (
+            INPUTS_NOT_READY,
+            _invoke_spec_function,
+        )
 
         spec = self._spec()
         values = _invoke_spec_function(spec, self._callable(), kwargs)
