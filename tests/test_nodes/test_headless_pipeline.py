@@ -88,6 +88,45 @@ class TestHeadlessExecution:
         )
         assert result.returncode == 0, result.stderr
 
+    def test_selection_tasks_apply_a_selection_headless(self):
+        """Select's and Waterfall's tasks narrow a patch with no display.
+
+        These two used to import ``SelectionState`` from a Qt widget module, so
+        any saved pipe containing a Select or Waterfall node could not run
+        server-side at all.
+        """
+        result = run_isolated(
+            """
+            import dascore as dc
+            from derzug.workflow.widget_tasks import (
+                PatchSelectionTask,
+                PatchSelectionWithParamsTask,
+            )
+
+            patch = dc.get_example_patch("example_event_2")
+            payload = {
+                "basis": "samples",
+                "rows": [
+                    {
+                        "dim": "time",
+                        "low": {"kind": "int", "value": 0},
+                        "high": {"kind": "int", "value": 99},
+                        "enabled": True,
+                    }
+                ],
+            }
+
+            narrowed = PatchSelectionTask(selection_payload=payload).run(patch)
+            assert narrowed.shape[1] == 99, narrowed.shape
+            assert narrowed.shape[1] < patch.shape[1]
+
+            out = PatchSelectionWithParamsTask(selection_payload=payload).run(patch)
+            assert out["patch"].shape == narrowed.shape
+            assert out["select_params"] is not None
+            """
+        )
+        assert result.returncode == 0, result.stderr
+
     def test_serialized_pipe_round_trips_without_qt(self):
         """Node task code paths deserialize in a fresh, Qt-free interpreter."""
         result = run_isolated(

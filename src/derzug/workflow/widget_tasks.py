@@ -9,6 +9,9 @@ from typing import Any, ClassVar
 
 from pydantic import Field
 
+from derzug.models.selection import SelectParams
+from derzug.models.selection_state import SelectionState
+
 from .dims import resolve_patch_dim
 from .task import Task
 
@@ -106,14 +109,6 @@ class PatchSelectionTask(Task):
 
     def run(self, patch):
         """Apply serialized patch-selection state to one patch."""
-        # KNOWN LAYERING VIOLATION: this task cannot run headlessly, because
-        # SelectionState still lives in a Qt widget module. Fixed by moving the
-        # Qt-free state classes to derzug.models and this task to
-        # derzug.nodes.selection; see the "Selection split" step in
-        # docs/dev/nodes.md. Waived, not hidden — tach reports it without this.
-        # tach-ignore
-        from derzug.widgets.selection import SelectionState
-
         payload = self.selection_payload
         if not payload:
             return patch
@@ -138,12 +133,6 @@ class PatchSelectionWithParamsTask(Task):
 
     def run(self, patch):
         """Return the selected patch and matching SelectParams."""
-        from derzug.models.selection import SelectParams
-
-        # KNOWN LAYERING VIOLATION: see PatchSelectionTask.run above.
-        # tach-ignore
-        from derzug.widgets.selection import SelectionState
-
         payload = self.selection_payload
         if not payload:
             return {"patch": patch, "select_params": SelectParams()}

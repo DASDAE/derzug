@@ -44,14 +44,20 @@ interpreter and assert nothing Qt-shaped reached `sys.modules`. Fresh
 interpreter because the suite's own `QApplication` would make an in-process
 check meaningless.
 
-### Known waiver
+There are currently no `# tach-ignore` waivers, and adding one needs a comment
+saying why and what would remove it.
 
-`PatchSelectionTask.run()` and `PatchSelectionWithParamsTask.run()` in
-`derzug/workflow/widget_tasks.py` still import `SelectionState` from a Qt widget
-module, marked `# tach-ignore` with a comment. Those two tasks cannot run
-headlessly today. The fix is the **selection split**: move the Qt-free state
-classes out of `derzug/widgets/selection.py` into `derzug/models/`, and the two
-tasks into `derzug/nodes/selection.py` with module-level imports.
+### Splitting a widget module
+
+`derzug/widgets/selection.py` is the worked example. Its dimension ranges, row
+filters, and coordinate/sample conversions are pure Python and numpy, but they
+sat beside the Qt panel that edits them — so `PatchSelectionTask` reached up
+into a widget module at run time and neither Select nor Waterfall could execute
+headlessly. The state moved to `derzug/models/selection_state.py`; the widget
+module kept the panel and re-exports every name, so no call site changed.
+
+That is the shape to copy: the Qt-free half moves down, the Qt half stays and
+re-exports, and callers are none the wiser.
 
 ## What a node module owns
 
