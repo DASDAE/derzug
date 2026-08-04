@@ -2,40 +2,31 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import dascore as dc
 from AnyQt.QtWidgets import QComboBox, QStackedWidget
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.utils.parsing import parse_patch_text_value, parse_text_value
+from derzug.nodes.resample import (
+    DECIMATE_FILTER_TYPES,
+    INTERP_KINDS,
+    MODE_NAMES,
+    NODE_SPEC,
+    parse_decimate_factor,
+    parse_resample_target,
+)
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
-
-
-class ResampleParams(BaseModel):
-    """Parameters for the Resample widget."""
-
-    mode: Literal["decimate", "resample"] = "decimate"
-    selected_dim: str = ""
-    decimate_factor: str = "2"
-    decimate_filter_type: Literal["iir", "fir", "none"] = "iir"
-    resample_target: str = "10 ms"
-    resample_samples: bool = False
-    resample_interp_kind: Literal[
-        "linear", "nearest", "zero", "slinear", "quadratic", "cubic"
-    ] = "linear"
 
 
 class Resample(PatchDimWidget):
     """Decimate or resample an input patch along a chosen dimension."""
 
+    node_spec = NODE_SPEC
     name = "Resample"
-    params_model = ResampleParams
     authoritative_state = True
     description = "Decimate or resample a patch along a dimension"
     icon = "icons/Resample.svg"
@@ -44,16 +35,9 @@ class Resample(PatchDimWidget):
     priority = 24
     want_main_area = False
 
-    _MODE_NAMES: ClassVar[tuple[str, ...]] = ("decimate", "resample")
-    _DECIMATE_FILTER_TYPES: ClassVar[tuple[str, ...]] = ("iir", "fir", "none")
-    _INTERP_KINDS: ClassVar[tuple[str, ...]] = (
-        "linear",
-        "nearest",
-        "zero",
-        "slinear",
-        "quadratic",
-        "cubic",
-    )
+    _MODE_NAMES: ClassVar[tuple[str, ...]] = MODE_NAMES
+    _DECIMATE_FILTER_TYPES: ClassVar[tuple[str, ...]] = DECIMATE_FILTER_TYPES
+    _INTERP_KINDS: ClassVar[tuple[str, ...]] = INTERP_KINDS
 
     class Error(PatchDimWidget.Error):
         """Errors shown by the widget."""
@@ -188,64 +172,39 @@ class Resample(PatchDimWidget):
 
     def _parse_decimate_factor(self) -> int:
         """Parse and validate the decimation factor."""
-        parsed = parse_text_value(self.decimate_factor)
-        if not isinstance(parsed, int):
-            raise ValueError("factor must be an integer")
-        if parsed <= 0:
-            raise ValueError("factor must be positive")
-        return parsed
+        return parse_decimate_factor(self.decimate_factor)
 
     def _parse_resample_target(self):
         """Parse and validate the resample target according to sample mode."""
-        if bool(self.resample_samples):
-            parsed = parse_text_value(self.resample_target)
-            if not isinstance(parsed, int):
-                raise ValueError("sample target must be an integer")
-            if parsed <= 0:
-                raise ValueError("sample target must be positive")
-            return parsed
-        return parse_patch_text_value(self.resample_target, required=True)
+        return parse_resample_target(
+            self.resample_target, samples=bool(self.resample_samples)
+        )
 
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the resample-specific banner."""
         self._show_exception("resample_failed", exc)
 
     def _validated_task(self) -> Task | None:
-        """Return the current operation task after widget-side validation."""
-        dim = self._get_dim()
-        if dim is None:
+        """Return the current operation task after widget-side validation.
+
+        The parses are preflight only, to pick the right error banner; the
+        task is built from the params model, which parses the text again.
+        """
+        if self._get_dim() is None:
             return None
         if self.mode == "resample":
             try:
-                target = self._parse_resample_target()
+                self._parse_resample_target()
             except Exception as exc:
                 self._show_exception("invalid_target", exc, self.resample_target)
                 return None
-            return PatchConfiguredMethodTask(
-                method_name="resample",
-                call_style="keyword_dim",
-                dim=dim,
-                dim_value=target,
-                method_kwargs={
-                    "samples": bool(self.resample_samples),
-                    "interp_kind": self.resample_interp_kind,
-                },
-            )
-        try:
-            factor = self._parse_decimate_factor()
-        except Exception as exc:
-            self._show_exception("invalid_factor", exc, self.decimate_factor)
-            return None
-        filter_type = (
-            None if self.decimate_filter_type == "none" else self.decimate_filter_type
-        )
-        return PatchConfiguredMethodTask(
-            method_name="decimate",
-            call_style="keyword_dim",
-            dim=dim,
-            dim_value=factor,
-            method_kwargs={"filter_type": filter_type},
-        )
+        else:
+            try:
+                self._parse_decimate_factor()
+            except Exception as exc:
+                self._show_exception("invalid_factor", exc, self.decimate_factor)
+                return None
+        return NODE_SPEC.build_task(self.get_params())
 
     def _settings_control_map(self) -> dict[str, object]:
         """Map settings to their controls for unified apply_settings sync."""
@@ -267,28 +226,9 @@ class Resample(PatchDimWidget):
 
     def get_task(self) -> Task:
         """Return the current decimate/resample operation as a workflow task."""
-        dim = self._get_dim() or self.selected_dim
-        if self.mode == "resample":
-            return PatchConfiguredMethodTask(
-                method_name="resample",
-                call_style="keyword_dim",
-                dim=dim,
-                dim_value=self._parse_resample_target(),
-                method_kwargs={
-                    "samples": bool(self.resample_samples),
-                    "interp_kind": self.resample_interp_kind,
-                },
-            )
-        filter_type = (
-            None if self.decimate_filter_type == "none" else self.decimate_filter_type
-        )
-        return PatchConfiguredMethodTask(
-            method_name="decimate",
-            call_style="keyword_dim",
-            dim=dim,
-            dim_value=self._parse_decimate_factor(),
-            method_kwargs={"filter_type": filter_type},
-        )
+        # Side effect: resyncs ``selected_dim`` to an available dimension.
+        self._get_dim()
+        return NODE_SPEC.build_task(self.get_params())
 
 
 if __name__ == "__main__":  # pragma: no cover

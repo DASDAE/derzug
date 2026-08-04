@@ -76,7 +76,7 @@ class PatchRollingTask(Task):
     input_variables: ClassVar[dict[str, object]] = {"patch": object}
     output_variables: ClassVar[dict[str, object]] = {"patch": object}
 
-    dim: str
+    dim: str = ""
     window: Any
     step: Any | None = None
     center: bool = False
@@ -85,73 +85,20 @@ class PatchRollingTask(Task):
 
     def run(self, patch):
         """Apply the configured rolling aggregation to one patch."""
+        # A headless caller may leave ``dim`` unset; resolve it the same way
+        # the widget's dimension chooser would.
+        dim = resolve_patch_dim(self.dim, tuple(patch.dims))
+        if dim is None:
+            raise ValueError("rolling needs a dimension but the patch has none")
         rolling = patch.rolling(
             step=self.step,
             center=bool(self.center),
-            **{self.dim: self.window},
+            **{dim: self.window},
         )
         out = getattr(rolling, self.aggregation)()
         if self.dropna:
-            out = out.dropna(self.dim)
+            out = out.dropna(dim)
         return out
-
-
-class PatchSelectionTask(Task):
-    """Apply persisted patch-selection state to one patch."""
-
-    input_variables: ClassVar[dict[str, object]] = {"patch": object}
-    output_variables: ClassVar[dict[str, object]] = {"patch": object}
-
-    selection_payload: dict[str, Any] | None = None
-
-    def run(self, patch):
-        """Apply serialized patch-selection state to one patch."""
-        # Imported on use, not at module scope: pulling the selection state and
-        # its coordinate helpers into every ``derzug.workflow`` import doubles
-        # the cost of loading the engine, and most workflows have no selection
-        # node. The layer is legal either way -- this is about import weight.
-        from derzug.models.selection_state import SelectionState
-
-        payload = self.selection_payload
-        if not payload:
-            return patch
-        state = SelectionState()
-        primed = state.prime_patch_state_from_settings(payload)
-        if not primed:
-            return patch
-        state.set_patch_source(patch)
-        return state.apply_to_patch(patch)
-
-
-class PatchSelectionWithParamsTask(Task):
-    """Apply patch-selection state and also expose public select parameters."""
-
-    input_variables: ClassVar[dict[str, object]] = {"patch": object}
-    output_variables: ClassVar[dict[str, object]] = {
-        "patch": object,
-        "select_params": object,
-    }
-
-    selection_payload: dict[str, Any] | None = None
-
-    def run(self, patch):
-        """Return the selected patch and matching SelectParams."""
-        # Lazy for the same reason as PatchSelectionTask.run above.
-        from derzug.models.selection import SelectParams
-        from derzug.models.selection_state import SelectionState
-
-        payload = self.selection_payload
-        if not payload:
-            return {"patch": patch, "select_params": SelectParams()}
-        state = SelectionState()
-        primed = state.prime_patch_state_from_settings(payload)
-        if not primed:
-            return {"patch": patch, "select_params": SelectParams()}
-        state.set_patch_source(patch)
-        return {
-            "patch": state.apply_to_patch(patch),
-            "select_params": state.to_select_params(),
-        }
 
 
 class MultiPassThroughTask(Task):

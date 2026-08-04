@@ -9,6 +9,7 @@ import derzug.constants as constants
 import numpy as np
 import pytest
 from AnyQt.QtWidgets import QApplication
+from derzug.nodes.registry import load_node_specs
 from derzug.utils.testing import wait_for_widget_idle, widget_context
 from derzug.views import orange as orange_view
 from derzug.views.orange import ActiveSourceManager
@@ -23,13 +24,19 @@ from derzug.widgets.wiggle import Wiggle
 from derzug.workflow import Pipe, Task
 from derzug.workflow.compiler import widget_signal_name_map
 
-# Inputs here are intentionally widget-local context/state channels, not part
-# of the exported workflow task contract used by `compile_workflow()`.
-_NON_WORKFLOW_INPUTS = {
-    "Annotations": {"annotation_set"},
-    "Spool": {"patch", "spool"},
-    "Waterfall": {"annotation_set"},
-}
+
+def _non_workflow_inputs() -> dict[str, set[str]]:
+    """Return each node's widget-local context inputs, per its node spec.
+
+    These are intentionally widget-local context/state channels, not part of
+    the exported workflow task contract used by `compile_workflow()`. The node
+    layer already records which ports those are, so read it rather than
+    restating it here and letting the two drift.
+    """
+    return {
+        spec.name: {port.name for port in spec.inputs if port.context_only}
+        for spec in load_node_specs()
+    }
 
 
 def _is_core_derzug_widget(desc) -> bool:
@@ -175,6 +182,7 @@ def test_all_derzug_registry_widgets_expose_workflow_objects(derzug_app, qapp):
     assert descriptions, "Expected at least one DerZug widget in the live registry."
 
     failures: list[str] = []
+    non_workflow_inputs = _non_workflow_inputs()
 
     for node in list(scheme.nodes):
         scheme.remove_node(node)
@@ -193,7 +201,7 @@ def test_all_derzug_registry_widgets_expose_workflow_objects(derzug_app, qapp):
             task_outputs = set(workflow_obj.resolved_scalar_output_variables())
             widget_inputs = set(widget_signal_name_map(widget, "Inputs").values())
             widget_outputs = set(widget_signal_name_map(widget, "Outputs").values())
-            allowed_extra_inputs = _NON_WORKFLOW_INPUTS.get(desc.name, set())
+            allowed_extra_inputs = non_workflow_inputs.get(desc.name, set())
             undocumented_extra_inputs = sorted(
                 (widget_inputs - task_inputs) - allowed_extra_inputs
             )

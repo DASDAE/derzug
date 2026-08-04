@@ -8,13 +8,10 @@ import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
-from functools import lru_cache
 from html import escape
 from threading import Lock
-from typing import ClassVar
 
 import dascore as dc
-import numpy as np
 from AnyQt.QtCore import Qt, QTimer
 from AnyQt.QtGui import QFont, QShowEvent
 from AnyQt.QtWidgets import (
@@ -30,27 +27,18 @@ from Orange.widgets.data.utils.pythoneditor.editor import PythonEditor
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 from orangewidget.utils.signals import PartialSummary
-from pydantic import BaseModel
 
 from derzug.core.widget_runtime import WidgetExecutionRequest
 from derzug.core.zugwidget import ZugWidget
-from derzug.utils.code2widget import INPUTS_NOT_READY, task_from_callable
+from derzug.nodes.code import (
+    NODE_SPEC,
+    CodeTransformTask,
+)
+from derzug.utils.code2widget import INPUTS_NOT_READY
 from derzug.workflow import Task
-
-DEFAULT_SCRIPT = """def transform(patch):
-    \"\"\"Return the value to emit from this widget.\"\"\"
-    return patch
-"""
 
 logger = logging.getLogger(__name__)
 _CODE_STREAM_LOCK = Lock()
-_COMPILE_CACHE_SIZE = 64
-
-
-@lru_cache(maxsize=_COMPILE_CACHE_SIZE)
-def _compile_script(script_text: str):
-    """Compile and cache immutable user script bytecode by source text."""
-    return compile(script_text, "<derzug-code>", "exec")
 
 
 class _LoggedTaskExecutionError(Exception):
@@ -68,36 +56,6 @@ class _CodeExecutionResult:
 
     stream_text: str
     value: object
-
-
-class CodeTransformTask(Task):
-    """Task that compiles widget script text and invokes `transform`."""
-
-    script_text: str
-    input_variables: ClassVar[dict[str, object]] = {"patch": object}
-    output_variables: ClassVar[dict[str, object]] = {"result": object}
-
-    def run(self, patch):
-        """Compile the saved script and execute its `transform` callable."""
-        namespace: dict[str, object] = {
-            "__builtins__": __builtins__,
-            "__name__": "__main__",
-            "dc": dc,
-            "np": np,
-        }
-        code = _compile_script(self.script_text)
-        exec(code, namespace, namespace)
-        transform = namespace.get("transform")
-        if not callable(transform):
-            raise ValueError("script must define a callable `transform(patch)`")
-        task_type = task_from_callable(transform)
-        if Code._has_unsupported_required_inputs(task_type):
-            raise ValueError(
-                "script transform has unsupported required inputs; only "
-                "`patch` may be required"
-            )
-        task = task_type()
-        return task.run(patch=patch)
 
 
 class _FallbackPythonEditor(QPlainTextEdit):
@@ -126,17 +84,11 @@ def _create_editor(parent: QWidget) -> QPlainTextEdit:
         return _FallbackPythonEditor(parent)
 
 
-class CodeParams(BaseModel):
-    """Parameters for the Code widget."""
-
-    script_text: str = DEFAULT_SCRIPT
-
-
 class Code(ZugWidget):
     """Run custom Python code against an input patch."""
 
+    node_spec = NODE_SPEC
     name = "Code"
-    params_model = CodeParams
     authoritative_state = True
     description = "Run custom Python code on a patch"
     icon = "icons/PythonScript.svg"
@@ -312,16 +264,7 @@ class Code(ZugWidget):
 
     def get_task(self) -> Task:
         """Return the current editor script as a task."""
-        return CodeTransformTask(script_text=self.script_text)
-
-    @staticmethod
-    def _has_unsupported_required_inputs(task_type: type[Task]) -> bool:
-        """Return True when required inputs other than patch are declared."""
-        for name in task_type.required_scalar_inputs():
-            if name == "patch":
-                continue
-            return True
-        return False
+        return NODE_SPEC.build_task(self.get_params())
 
     def _execute_logged_task(self) -> tuple[str, object]:
         """Execute the canonical task and return captured streams plus result."""

@@ -69,7 +69,7 @@ path = "derzug.utils.code2widget"
 layer = "interface"
 
 [[modules]]
-path = "derzug.utils.example_parameters"
+path = "derzug.utils.example_parameters_dialog"
 layer = "interface"
 
 [[modules]]
@@ -136,6 +136,10 @@ layer = "foundation"
 
 [[modules]]
 path = "derzug.utils.dynamic_rows"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.example_parameters"
 layer = "foundation"
 
 [[modules]]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
 
 from AnyQt.QtCore import QAbstractTableModel, QModelIndex, Qt
 from AnyQt.QtGui import QKeySequence, QShortcut
@@ -20,10 +19,10 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import AnnotationSet
+from derzug.nodes.annotations import NODE_SPEC
 from derzug.utils.annotations import (
     AnnotationStoreSummary,
     build_state,
@@ -49,25 +48,6 @@ _TABLE_COLUMNS = (
     ("polygon_count", "Polygons"),
     ("size_text", "Size"),
 )
-
-
-class AnnotationsTask(Task):
-    """Return the selected annotation set from persisted store state."""
-
-    output_variables: ClassVar[dict[str, object]] = {"annotation_set": object}
-
-    store_directory: str = ""
-    stored_entries: tuple[dict, ...] = ()
-    selected_entry_id: str = ""
-
-    def run(self):
-        """Load persisted entries and return the selected annotation set."""
-        directory = self.store_directory.strip()
-        entries = load_store(
-            directory=directory,
-            state_entries=list(self.stored_entries),
-        )
-        return selected_annotation_set(entries, self.selected_entry_id.strip() or None)
 
 
 class _AnnotationsTableModel(QAbstractTableModel):
@@ -161,19 +141,11 @@ class _AnnotationsTableModel(QAbstractTableModel):
         return renamed
 
 
-class AnnotationsParams(BaseModel):
-    """Parameters for the Annotations store widget."""
-
-    store_directory: str = ""
-    stored_entries: list = Field(default_factory=list)
-    selected_entry_id: str = ""
-
-
 class Annotations(ZugWidget):
     """Store multiple annotation sets in memory or on disk."""
 
+    node_spec = NODE_SPEC
     name = "Annotations"
-    params_model = AnnotationsParams
     authoritative_state = True
     description = "Store and persist annotation sets"
     icon = "icons/Annotations.svg"
@@ -462,8 +434,4 @@ class Annotations(ZugWidget):
 
     def get_task(self) -> Task:
         """Return the current bound-source workflow semantics."""
-        return AnnotationsTask(
-            store_directory=str(self.store_directory or ""),
-            stored_entries=tuple(self.stored_entries or ()),
-            selected_entry_id=str(self.selected_entry_id or ""),
-        )
+        return NODE_SPEC.build_task(self.get_params())

@@ -83,6 +83,25 @@ class TestNoTransitiveQt:
         )
         assert result.returncode == 0, result.stderr
 
+    def test_importing_every_node_submodule_stays_qt_free(self):
+        """Importing all of ``derzug.nodes`` pulls in no Qt module.
+
+        Discovery only reaches modules with an entry point; this reaches the
+        rest, so an unregistered node module cannot quietly import Qt.
+        """
+        result = run_isolated(
+            """
+            import importlib
+            import pkgutil
+
+            import derzug.nodes
+
+            for info in pkgutil.iter_modules(derzug.nodes.__path__):
+                importlib.import_module(f"derzug.nodes.{info.name}")
+            """
+        )
+        assert result.returncode == 0, result.stderr
+
     def test_importing_every_workflow_submodule_stays_qt_free(self):
         """Importing all of ``derzug.workflow`` pulls in no Qt module."""
         result = run_isolated(

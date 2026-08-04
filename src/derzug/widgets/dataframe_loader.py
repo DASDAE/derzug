@@ -5,7 +5,6 @@ Widget for loading a pandas DataFrame from a file on disk.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -25,126 +24,26 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Output
 from Orange.widgets.utils.tableview import TableView
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
-from derzug.utils.optional_imports import optional_import
+from derzug.nodes.dataframe_loader import (
+    AUTO_FORMAT,
+    FORMAT_NAMES,
+    FORMATS,
+    NODE_SPEC,
+    detect_format,
+    list_duckdb_tables,
+)
 from derzug.workflow import Task
-
-# Display name → (reader callable, accepted extensions)
-_FORMATS: dict[str, tuple[object, tuple[str, ...]]] = {
-    "CSV": (pd.read_csv, (".csv", ".tsv", ".txt")),
-    "DuckDB": (None, (".duckdb",)),
-    "Excel": (pd.read_excel, (".xlsx", ".xls", ".xlsm", ".xlsb", ".ods")),
-    "Feather": (pd.read_feather, (".feather",)),
-    "HDF5": (pd.read_hdf, (".h5", ".hdf5", ".hdf")),
-    "JSON": (pd.read_json, (".json",)),
-    "ORC": (pd.read_orc, (".orc",)),
-    "Parquet": (pd.read_parquet, (".parquet", ".pq")),
-    "Pickle": (pd.read_pickle, (".pkl", ".pickle")),
-    "SPSS": (pd.read_spss, (".sav", ".zsav")),
-    "Stata": (pd.read_stata, (".dta",)),
-}
-
-_AUTO = "Auto"
-_FORMAT_NAMES = [_AUTO, *sorted(_FORMATS)]
-
-# Extension → format name, for auto-detection
-_EXT_TO_FORMAT: dict[str, str] = {
-    ext: name for name, (_, exts) in _FORMATS.items() for ext in exts
-}
 
 # File picker filter string
 _ALL_EXTENSIONS = " ".join(
-    f"*{ext}" for _, (_, exts) in _FORMATS.items() for ext in exts
+    f"*{ext}" for _, (_, exts) in FORMATS.items() for ext in exts
 )
 _FILE_FILTER = f"Tabular files ({_ALL_EXTENSIONS});;All files (*)"
 
 # Cap the preview at this many rows to keep the table responsive
 _MAX_PREVIEW_ROWS = 10_000
-
-
-def _detect_format(path: str) -> str | None:
-    """Return the format name matching the file extension, or None."""
-    return _EXT_TO_FORMAT.get(Path(path).suffix.lower())
-
-
-def _quote_sql_identifier(name: str) -> str:
-    """Return one SQL identifier quoted for direct interpolation."""
-    return f'"{name.replace(chr(34), chr(34) * 2)}"'
-
-
-def _list_duckdb_tables(path: str) -> list[str]:
-    """Return sorted user table names from one DuckDB database file."""
-    duckdb = optional_import("duckdb")
-
-    with duckdb.connect(path, read_only=True) as con:
-        rows = con.execute(
-            """
-            SELECT DISTINCT table_name
-            FROM information_schema.tables
-            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-              AND table_type = 'BASE TABLE'
-            ORDER BY table_name
-            """
-        ).fetchall()
-    return [str(name) for (name,) in rows]
-
-
-def _resolve_duckdb_table(path: str, table_name: str) -> str:
-    """Return a valid DuckDB table name, defaulting to the first sorted table."""
-    tables = _list_duckdb_tables(path)
-    if not tables:
-        raise ValueError("DuckDB file contains no user tables.")
-    chosen = table_name.strip()
-    if chosen in tables:
-        return chosen
-    return tables[0]
-
-
-def _read_duckdb_table(path: str, table_name: str) -> tuple[pd.DataFrame, str]:
-    """Read one DuckDB table into a pandas DataFrame and return the resolved name."""
-    duckdb = optional_import("duckdb")
-
-    resolved = _resolve_duckdb_table(path, table_name)
-    query = f"SELECT * FROM {_quote_sql_identifier(resolved)}"
-    with duckdb.connect(path, read_only=True) as con:
-        df = con.execute(query).fetch_df()
-    return df, resolved
-
-
-class DataFrameLoaderTask(Task):
-    """Portable DataFrame loader used for compiled bound-source execution."""
-
-    output_variables: ClassVar[dict[str, object]] = {"data": object}
-
-    file_path: str = ""
-    format_name: str = _AUTO
-    table_name: str = ""
-
-    def run(self):
-        """Load the configured DataFrame and return it."""
-        path = self.file_path.strip()
-        if not path:
-            return None
-        format_name = self.format_name or _AUTO
-        if format_name == _AUTO:
-            detected = _detect_format(path)
-            if detected is None:
-                suffix = Path(path).suffix or "(no extension)"
-                raise ValueError(
-                    "Cannot auto-detect format for "
-                    f"'{suffix}'. Select a format explicitly."
-                )
-            format_name = detected
-        if format_name == "DuckDB":
-            df, _ = _read_duckdb_table(path, self.table_name)
-            return df
-        reader, _ = _FORMATS[format_name]
-        df = reader(path)
-        if not isinstance(df, pd.DataFrame):
-            raise TypeError(f"Reader returned {type(df).__name__}, expected DataFrame.")
-        return df
 
 
 class _DataFrameModel(QAbstractTableModel):
@@ -217,19 +116,11 @@ def _cell_alignment(value) -> Qt.AlignmentFlag:
     return Qt.AlignLeft | Qt.AlignVCenter
 
 
-class DataFrameLoaderParams(BaseModel):
-    """Parameters for the DataFrame Loader widget."""
-
-    file_path: str = ""
-    format_name: str = "Auto"
-    table_name: str = ""
-
-
 class DataFrameLoader(ZugWidget):
     """Orange widget for loading a pandas DataFrame from a file on disk."""
 
+    node_spec = NODE_SPEC
     name = "DataFrame Loader"
-    params_model = DataFrameLoaderParams
     authoritative_state = True
     want_control_area = False
     description = (
@@ -318,8 +209,8 @@ class DataFrameLoader(ZugWidget):
         format_row_layout.setSpacing(4)
         format_row_layout.addWidget(QLabel("Format:", format_row))
         self.format_combo = QComboBox(format_row)
-        self.format_combo.addItems(_FORMAT_NAMES)
-        if self.format_name in _FORMAT_NAMES:
+        self.format_combo.addItems(FORMAT_NAMES)
+        if self.format_name in FORMAT_NAMES:
             self.format_combo.setCurrentText(self.format_name)
         format_row_layout.addWidget(self.format_combo, 1)
         box.layout().addWidget(format_row)
@@ -426,18 +317,14 @@ class DataFrameLoader(ZugWidget):
 
     def get_task(self) -> Task:
         """Return the current bound-source workflow semantics."""
-        return DataFrameLoaderTask(
-            file_path=str(self.file_path or ""),
-            format_name=str(self.format_name or _AUTO),
-            table_name=str(self.table_name or ""),
-        )
+        return NODE_SPEC.build_task(self.get_params())
 
     def _effective_format(self) -> str | None:
         """Return the explicitly selected or auto-detected format name."""
-        format_name = str(self.format_name or _AUTO)
-        if format_name != _AUTO:
+        format_name = str(self.format_name or AUTO_FORMAT)
+        if format_name != AUTO_FORMAT:
             return format_name
-        return _detect_format(self.file_path or "")
+        return detect_format(self.file_path or "")
 
     def _refresh_table_selector(self) -> None:
         """Update the DuckDB table selector visibility and available choices."""
@@ -449,7 +336,7 @@ class DataFrameLoader(ZugWidget):
             self.table_combo.blockSignals(False)
             return
 
-        tables = _list_duckdb_tables(self.file_path)
+        tables = list_duckdb_tables(self.file_path)
         if not tables:
             raise ValueError("DuckDB file contains no user tables.")
         selected = self.table_name if self.table_name in tables else tables[0]
@@ -476,7 +363,9 @@ class DataFrameLoader(ZugWidget):
         if df is None:
             self._info_label.setText("")
             return
-        detected = _detect_format(self.file_path) if self.format_name == _AUTO else None
+        detected = (
+            detect_format(self.file_path) if self.format_name == AUTO_FORMAT else None
+        )
         fmt_tag = f" \u2014 {detected} detected" if detected else ""
         self._info_label.setText(
             f"{len(df):,} rows \u00d7 {len(df.columns):,} columns{fmt_tag}"

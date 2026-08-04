@@ -9,7 +9,7 @@ import datetime
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, ClassVar
+from typing import Any
 
 import dascore as dc
 import numpy as np
@@ -34,18 +34,32 @@ from dascore.utils.patch import get_patch_names
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
+from derzug.nodes import spool as node_spool
+from derzug.nodes.spool import (
+    IGNORE_EXAMPLES,
+    NODE_SPEC,
+    SpoolParams,
+    SpoolTask,
+    SpoolTransformTask,
+    apply_chunk_settings,
+    apply_select_rows,
+    load_spool_from_settings,
+    ordered_contents_df_with_source_rows,
+    spool_rows_to_output,
+    spool_task_from_params,
+    spool_transform_task_from_params,
+)
 from derzug.settings import Setting
 from derzug.utils.display import format_display
 from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.example_parameters import (
-    ExampleParametersDialog,
     build_example_call_kwargs,
     filter_example_overrides,
     get_example_parameter_specs,
 )
+from derzug.utils.example_parameters_dialog import ExampleParametersDialog
 from derzug.utils.qt import FileOrDirDialog
 from derzug.utils.spool import (
     extract_single_patch,
@@ -73,17 +87,7 @@ _DISPLAY_COLUMNS = (
     "distance_max",
     "distance_step",
 )
-_DEFAULT_EXAMPLE = "example_event_2"
 _RECENT_DIRECTORY_LIMIT = 10
-
-# Examples that aren't terribly interesting so we dont include them in the
-# the drop down menu.
-_IGNORE_EXAMPLES = (
-    "diverse_das",
-    "random_directory_das",
-    "patch_with_null",
-    "wacky_dim_coords_patch",
-)
 
 
 def _collapsible_section(parent: QWidget, title: str, expanded: bool = True) -> QWidget:
@@ -105,13 +109,6 @@ def _collapsible_section(parent: QWidget, title: str, expanded: bool = True) -> 
     group.toggled.connect(body.setVisible)
     parent.layout().addWidget(group)
     return body
-
-
-def _all_examples(ignore=()) -> dict[str, object]:
-    """Return a single dict of all registered example callables, spools first."""
-    examples = {**dc.examples.EXAMPLE_SPOOLS, **dc.examples.EXAMPLE_PATCHES}
-    out = {i: v for i, v in examples.items() if i not in ignore}
-    return out
 
 
 def _format_table_header(name: str) -> str:
@@ -266,7 +263,7 @@ def _emit_task(
         else:
             output_patch = None
     else:
-        output_spool = _spool_rows_to_output(display_spool, selected_source_rows)
+        output_spool = spool_rows_to_output(display_spool, selected_source_rows)
         if unpack_single and len(selected_source_rows) == 1:
             output_patch = extract_single_patch(output_spool)
         else:
@@ -351,98 +348,6 @@ def _settings_source_identity_from_task(task: SpoolTask) -> tuple[object, ...]:
     )
 
 
-def _load_spool_from_settings(
-    *,
-    spool_input: str | None,
-    example_parameters: dict[str, object] | None,
-    file_input: str,
-    raw_input: str,
-) -> dc.BaseSpool:
-    """Load a spool using the widget's persisted source settings."""
-    if file_input.strip():
-        return dc.spool(file_input.strip())
-    if raw_input.strip():
-        return dc.spool(raw_input.strip())
-    if not spool_input:
-        raise ValueError("No spool source configured")
-    registry = _all_examples(ignore=_IGNORE_EXAMPLES)
-    fn = registry[spool_input]
-    saved = example_parameters or {}
-    overrides = saved.get(spool_input, {}) if isinstance(saved, dict) else {}
-    kwargs = build_example_call_kwargs(
-        fn,
-        overrides if isinstance(overrides, dict) else {},
-    )
-    result = fn(**kwargs)
-    if isinstance(result, dc.Patch):
-        return dc.spool([result])
-    return result
-
-
-def _apply_select_rows(
-    spool: dc.BaseSpool,
-    select_filters: tuple[dict[str, str], ...],
-) -> dc.BaseSpool:
-    """Apply persisted select rows to a spool."""
-    kwargs = {}
-    for filter_data in select_filters:
-        key = str(filter_data.get("key", "")).strip()
-        raw_value = str(filter_data.get("raw", "")).strip()
-        if not key or not raw_value:
-            continue
-        try:
-            value = ast.literal_eval(raw_value)
-        except Exception:
-            value = raw_value
-        if value is None:
-            continue
-        kwargs[key] = value
-    if not kwargs:
-        return spool
-    return spool.select(**kwargs)
-
-
-def _apply_chunk_settings(
-    spool: dc.BaseSpool,
-    *,
-    chunk_enabled: bool,
-    chunk_dim: str,
-    chunk_value: str,
-    chunk_overlap: str,
-    chunk_keep_partial: bool,
-    chunk_snap_coords: bool,
-    chunk_tolerance: float,
-    chunk_conflict: str,
-) -> dc.BaseSpool:
-    """Apply persisted chunk settings to a spool."""
-    if not bool(chunk_enabled):
-        return spool
-    dim = chunk_dim.strip()
-    raw_value = chunk_value.strip()
-    if not dim or not raw_value:
-        return spool
-    try:
-        value = ast.literal_eval(raw_value)
-    except Exception:
-        value = raw_value
-    overlap = None
-    if chunk_overlap.strip():
-        try:
-            overlap = ast.literal_eval(chunk_overlap.strip())
-        except Exception:
-            overlap = chunk_overlap.strip()
-    return spool.chunk(
-        **{
-            dim: value,
-            "overlap": overlap,
-            "keep_partial": bool(chunk_keep_partial),
-            "snap_coords": bool(chunk_snap_coords),
-            "tolerance": float(chunk_tolerance),
-            "conflict": chunk_conflict,
-        }
-    )
-
-
 def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutionResult:
     """Execute one spool snapshot off-thread and return preview plus outputs."""
     task = snapshot.task
@@ -479,7 +384,7 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
         source_spool = snapshot.source_spool
         if source_spool is None:
             try:
-                source_spool = _load_spool_from_settings(
+                source_spool = load_spool_from_settings(
                     spool_input=task.spool_input,
                     example_parameters=task.example_parameters,
                     file_input=task.file_input,
@@ -489,8 +394,8 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
             except Exception as exc:
                 raise _SettingsSourceLoadError(str(exc)) from exc
         try:
-            display_spool = _apply_select_rows(source_spool, task.select_filters)
-            display_spool = _apply_chunk_settings(
+            display_spool = apply_select_rows(source_spool, task.select_filters)
+            display_spool = apply_chunk_settings(
                 display_spool,
                 chunk_enabled=task.chunk_enabled,
                 chunk_dim=task.chunk_dim,
@@ -527,8 +432,8 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
             None, None, None, None, display_generation=snapshot.display_generation
         )
     assert isinstance(task, SpoolTransformTask)
-    display_spool = _apply_select_rows(source_spool, task.select_filters)
-    display_spool = _apply_chunk_settings(
+    display_spool = apply_select_rows(source_spool, task.select_filters)
+    display_spool = apply_chunk_settings(
         display_spool,
         chunk_enabled=task.chunk_enabled,
         chunk_dim=task.chunk_dim,
@@ -554,163 +459,6 @@ def _execute_spool_snapshot(snapshot: _SpoolExecutionSnapshot) -> _SpoolExecutio
         settings_source_identity=snapshot.settings_source_identity,
         display_generation=snapshot.display_generation,
     )
-
-
-class SpoolTask(Task):
-    """Portable loader task mirroring the widget's bound-source semantics."""
-
-    output_variables: ClassVar[dict[str, object]] = {
-        "spool": object,
-        "patch": object,
-    }
-
-    spool_input: str | None = None
-    example_parameters: dict[str, object] = Field(default_factory=dict)
-    file_input: str = ""
-    raw_input: str = ""
-    chunk_enabled: bool = True
-    chunk_dim: str = ""
-    chunk_value: str = ""
-    chunk_overlap: str = ""
-    chunk_keep_partial: bool = False
-    chunk_snap_coords: bool = True
-    chunk_tolerance: float = 1.5
-    chunk_conflict: str = "raise"
-    select_filters: tuple[dict[str, str], ...] = ()
-    selected_source_row: int | None = None
-    unpack_single_patch: bool = True
-
-    def run(self):
-        """Load and post-process the configured spool source."""
-        spool = _load_spool_from_settings(
-            spool_input=self.spool_input,
-            example_parameters=self.example_parameters,
-            file_input=self.file_input,
-            raw_input=self.raw_input,
-        )
-        spool = _apply_select_rows(spool, self.select_filters)
-        spool = _apply_chunk_settings(
-            spool,
-            chunk_enabled=self.chunk_enabled,
-            chunk_dim=self.chunk_dim,
-            chunk_value=self.chunk_value,
-            chunk_overlap=self.chunk_overlap,
-            chunk_keep_partial=self.chunk_keep_partial,
-            chunk_snap_coords=self.chunk_snap_coords,
-            chunk_tolerance=self.chunk_tolerance,
-            chunk_conflict=self.chunk_conflict,
-        )
-        if self.selected_source_row is not None:
-            spool = Spool._spool_rows_to_output(spool, {int(self.selected_source_row)})
-        patch = extract_single_patch(spool) if self.unpack_single_patch else None
-        return {"spool": spool, "patch": patch}
-
-
-class SpoolTransformTask(Task):
-    """Apply persisted Spool select/chunk/output settings to an input spool."""
-
-    input_variables: ClassVar[dict[str, object]] = {"spool": object}
-    output_variables: ClassVar[dict[str, object]] = {
-        "spool": object,
-        "patch": object,
-    }
-
-    chunk_enabled: bool = True
-    chunk_dim: str = ""
-    chunk_value: str = ""
-    chunk_overlap: str = ""
-    chunk_keep_partial: bool = False
-    chunk_snap_coords: bool = True
-    chunk_tolerance: float = 1.5
-    chunk_conflict: str = "raise"
-    select_filters: tuple[dict[str, str], ...] = ()
-    selected_source_row: int | None = None
-    unpack_single_patch: bool = True
-
-    def run(self, spool):
-        """Apply select/chunk settings to an input spool."""
-        spool = _apply_select_rows(spool, self.select_filters)
-        spool = _apply_chunk_settings(
-            spool,
-            chunk_enabled=self.chunk_enabled,
-            chunk_dim=self.chunk_dim,
-            chunk_value=self.chunk_value,
-            chunk_overlap=self.chunk_overlap,
-            chunk_keep_partial=self.chunk_keep_partial,
-            chunk_snap_coords=self.chunk_snap_coords,
-            chunk_tolerance=self.chunk_tolerance,
-            chunk_conflict=self.chunk_conflict,
-        )
-        if self.selected_source_row is not None:
-            spool = Spool._spool_rows_to_output(spool, {int(self.selected_source_row)})
-        patch = extract_single_patch(spool) if self.unpack_single_patch else None
-        return {"spool": spool, "patch": patch}
-
-
-def _ordered_contents_df_with_source_rows(spool: dc.BaseSpool) -> pd.DataFrame:
-    """Return spool contents in display order with source-row mapping preserved."""
-    df = spool.get_contents()
-    if df.empty:
-        ordered = df.copy()
-        ordered["_source_row"] = pd.Series(dtype=np.int64)
-        return ordered
-    ordered = df.copy()
-    ordered["_source_row"] = np.arange(len(ordered), dtype=np.int64)
-    if not isinstance(spool, DirectorySpool):
-        return ordered
-    sort_cols = [
-        column
-        for column in ("path", "tag", "station", "network", "time_min", "time_max")
-        if column in ordered.columns
-    ]
-    sort_cols.append("_source_row")
-    return ordered.sort_values(
-        by=sort_cols,
-        kind="mergesort",
-        na_position="last",
-    ).reset_index(drop=True)
-
-
-def _spool_indices_for_rows(
-    spool: dc.BaseSpool,
-    selected_rows: set[int] | frozenset[int],
-) -> list[int]:
-    """Map visible row indices onto spool indices without loading patch payloads."""
-    if not selected_rows:
-        return []
-    if not hasattr(spool, "get_contents"):
-        return sorted(int(row) for row in selected_rows)
-    ordered_df = _ordered_contents_df_with_source_rows(spool)
-    indices = []
-    for row in sorted(selected_rows):
-        if row < 0 or row >= len(ordered_df):
-            raise IndexError(row)
-        indices.append(int(ordered_df.iloc[row]["_source_row"]))
-    return indices
-
-
-def _spool_rows_to_output(
-    spool: dc.BaseSpool,
-    selected_rows: set[int] | frozenset[int],
-) -> dc.BaseSpool:
-    """Return a lazily indexed spool for the selected display rows."""
-    indices = _spool_indices_for_rows(spool, selected_rows)
-    if not indices:
-        return spool
-    if hasattr(spool, "get_contents"):
-        return spool[np.asarray(indices, dtype=np.int64)]
-    if len(indices) == 1:
-        index = int(indices[0])
-        return dc.spool(spool[index : index + 1])
-    return dc.spool([spool[int(index)] for index in indices])
-
-
-def _spool_rows_to_patches(
-    spool: dc.BaseSpool,
-    selected_rows: set[int] | frozenset[int],
-) -> list[dc.Patch]:
-    """Return selected patch payloads without iterating unrelated rows."""
-    return [spool[index] for index in _spool_indices_for_rows(spool, selected_rows)]
 
 
 def _serialize_identity_value(value: Any) -> str:
@@ -745,34 +493,11 @@ def _contents_identity_token(df: pd.DataFrame, row: int) -> str:
     return "row:" + "|".join(parts)
 
 
-class SpoolParams(BaseModel):
-    """Parameters for the Spool source widget (source + chunk + select config)."""
-
-    spool_input: Any = None
-    example_parameters: dict = Field(default_factory=dict)
-    file_input: str = ""
-    raw_input: str = ""
-    chunk_dim: str = ""
-    chunk_enabled: bool = True
-    chunk_value: str = ""
-    chunk_overlap: str = ""
-    chunk_keep_partial: bool = False
-    chunk_snap_coords: bool = True
-    chunk_tolerance: float = 1.5
-    chunk_conflict: str = "raise"
-    select_filters: list = Field(default_factory=list)
-    select_col: str = ""
-    select_val: str = ""
-    selected_source_row: Any = None
-    selected_source_patch_name: str = ""
-    unpack_single_patch: bool = True
-
-
 class Spool(ZugWidget):
     """Orange widget for loading DASCore example spools."""
 
+    node_spec = NODE_SPEC
     name = "Spool"
-    params_model = SpoolParams
     authoritative_state = True
     description = "Interact with DASCore Spools"
     icon = "icons/Spool.svg"
@@ -830,7 +555,7 @@ class Spool(ZugWidget):
         super().__init__()
         self._base_caption = self.name
         self._examples: list[str] = sorted(
-            _all_examples(ignore=_IGNORE_EXAMPLES), key=str.casefold
+            node_spool.all_examples(ignore=IGNORE_EXAMPLES), key=str.casefold
         )
         self._source_spool: dc.BaseSpool | None = None
         self._display_spool: dc.BaseSpool | None = None
@@ -1320,41 +1045,19 @@ class Spool(ZugWidget):
             return self.raw_input
         return self.spool_input
 
+    def _live_params(self) -> SpoolParams:
+        """Return persisted params with the live table selection folded in."""
+        return self.get_params().model_copy(
+            update={"selected_source_row": self._resolved_selected_source_row()}
+        )
+
     def _current_source_task(self) -> SpoolTask:
         """Return the current bound-source workflow task."""
-        return SpoolTask(
-            spool_input=self.spool_input,
-            example_parameters=dict(self.example_parameters or {}),
-            file_input=str(self.file_input or ""),
-            raw_input=str(self.raw_input or ""),
-            chunk_enabled=bool(self.chunk_enabled),
-            chunk_dim=str(self.chunk_dim or ""),
-            chunk_value=str(self.chunk_value or ""),
-            chunk_overlap=str(self.chunk_overlap or ""),
-            chunk_keep_partial=bool(self.chunk_keep_partial),
-            chunk_snap_coords=bool(self.chunk_snap_coords),
-            chunk_tolerance=float(self.chunk_tolerance),
-            chunk_conflict=str(self.chunk_conflict or "raise"),
-            select_filters=tuple(self.select_filters or ()),
-            selected_source_row=self._resolved_selected_source_row(),
-            unpack_single_patch=bool(self.unpack_single_patch),
-        )
+        return spool_task_from_params(self._live_params())
 
     def _current_transform_task(self) -> SpoolTransformTask:
         """Return the current transform-only task for input-backed spool state."""
-        return SpoolTransformTask(
-            chunk_enabled=bool(self.chunk_enabled),
-            chunk_dim=str(self.chunk_dim or ""),
-            chunk_value=str(self.chunk_value or ""),
-            chunk_overlap=str(self.chunk_overlap or ""),
-            chunk_keep_partial=bool(self.chunk_keep_partial),
-            chunk_snap_coords=bool(self.chunk_snap_coords),
-            chunk_tolerance=float(self.chunk_tolerance),
-            chunk_conflict=str(self.chunk_conflict or "raise"),
-            select_filters=tuple(self.select_filters or ()),
-            selected_source_row=self._resolved_selected_source_row(),
-            unpack_single_patch=bool(self.unpack_single_patch),
-        )
+        return spool_transform_task_from_params(self._live_params())
 
     def _on_result(self, result) -> None:
         """Apply one completed spool execution result."""
@@ -1685,7 +1388,7 @@ class Spool(ZugWidget):
 
     def _example_registry(self) -> dict[str, object]:
         """Return the current example registry used by the widget."""
-        return _all_examples()
+        return node_spool.all_examples()
 
     def _selected_example_callable(self, example_name: str):
         """Return the callable registered for one example name."""
@@ -2269,7 +1972,7 @@ class Spool(ZugWidget):
         selected_rows: set[int],
     ) -> dc.BaseSpool:
         """Return a spool containing only the requested source rows."""
-        return _spool_rows_to_output(spool, selected_rows)
+        return spool_rows_to_output(spool, selected_rows)
 
     def _emit_current_output(self) -> None:
         """Emit the current output spool and optional unpacked patch."""
@@ -2516,7 +2219,7 @@ class Spool(ZugWidget):
     @staticmethod
     def _ordered_contents_df(spool: dc.BaseSpool):
         """Return spool contents in the widget's deterministic default order."""
-        ordered = _ordered_contents_df_with_source_rows(spool)
+        ordered = ordered_contents_df_with_source_rows(spool)
         return ordered.drop(columns="_source_row")
 
     def _initialize_active_source_selection(self) -> None:

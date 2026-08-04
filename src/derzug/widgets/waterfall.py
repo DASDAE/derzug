@@ -33,11 +33,12 @@ from dascore.viz.waterfall import _get_scale as get_dascore_waterfall_scale
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel, Field
 
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.models.selection import SelectParams
+from derzug.nodes.selection import selection_payload_from_settings
+from derzug.nodes.waterfall import NODE_SPEC
 from derzug.utils.display import format_nd_coord_value
 from derzug.utils.plot_axes import (
     CursorField,
@@ -63,7 +64,6 @@ from derzug.widgets.selection import (
     SelectionState,
 )
 from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchSelectionWithParamsTask
 
 _ANNOTATION_ICON_DIR = Path(__file__).resolve().parent / "icons" / "annotations"
 
@@ -299,31 +299,6 @@ class _WaterfallViewBox(pg.ViewBox):
                     self.state["mouseMode"] = restore_mode
 
 
-class WaterfallParams(BaseModel):
-    """Output-affecting parameters for Waterfall: selection and annotations.
-
-    Presentation state (colormap, colour limits, view range, plot dims) is the
-    view model, not params — Waterfall emits selection and annotations as
-    downstream outputs, but its colouring never leaves the widget.
-    """
-
-    saved_selection_basis: str = ""
-    saved_selection_ranges: list = Field(default_factory=list)
-    saved_selection_has_roi: bool | None = None
-    saved_annotation_set: Any = None
-
-
-class WaterfallView(BaseModel):
-    """Presentation-only state for Waterfall (never leaves the widget)."""
-
-    colormap: str = "CET-D1"
-    color_limits: Any = None
-    reset_on_new: bool = True
-    saved_view_range: Any = None
-    saved_plot_y_dim: str = ""
-    saved_plot_x_dim: str = ""
-
-
 class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     """
     Display a 2D DAS patch as an interactive pyqtgraph waterfall image.
@@ -334,8 +309,7 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     """
 
     name = "Waterfall"
-    params_model = WaterfallParams
-    view_model = WaterfallView
+    node_spec = NODE_SPEC
     authoritative_state = True
     description = "Interactive pyqtgraph waterfall view for DAS patches"
     icon = "icons/Waterfall.svg"
@@ -399,9 +373,7 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     def get_task(self) -> Task:
         """Return the compiled patch-only semantics for the current widget state."""
         self._sync_settings_from_controls()
-        return PatchSelectionWithParamsTask(
-            selection_payload=self._load_saved_selection_state()
-        )
+        return NODE_SPEC.build_task(self.get_params())
 
     def _apply_settings_to_controls(self) -> None:
         """Hydrate visible controls from persisted widget settings."""
@@ -2032,15 +2004,9 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
 
     def _load_saved_selection_state(self) -> dict[str, Any] | None:
         """Return serialized selection settings staged from stored widget settings."""
-        basis_name = str(self.saved_selection_basis or "").strip()
-        rows = (
-            self.saved_selection_ranges
-            if isinstance(self.saved_selection_ranges, list)
-            else []
+        return selection_payload_from_settings(
+            self.saved_selection_basis, self.saved_selection_ranges
         )
-        if not basis_name or not rows:
-            return None
-        return {"basis": basis_name, "rows": rows}
 
     def _saved_select_params(self) -> SelectParams | None:
         """Return saved selection settings as public SelectParams."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import dascore as dc
 from AnyQt.QtCore import Qt
@@ -19,36 +19,28 @@ from AnyQt.QtWidgets import (
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
-from pydantic import BaseModel, Field
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.workflow import Task
-from derzug.workflow.widget_tasks import PatchConfiguredMethodTask
-
-_TRANSFORMS: tuple[str, ...] = ("dft", "idft")
-_REAL_OPTIONS: tuple[tuple[str, str | bool | None], ...] = (
-    ("Auto", None),
-    ("Real", True),
-    ("Complex", False),
+from derzug.nodes.fourier import (
+    NODE_SPEC,
+    REAL_OPTION_MAP,
+    REAL_OPTIONS,
+    TRANSFORMS,
+    default_dft_dim,
+    default_idft_dim,
 )
-_REAL_OPTION_MAP = dict(_REAL_OPTIONS)
+from derzug.workflow import Task
 
-
-class FourierParams(BaseModel):
-    """Parameters for the Fourier widget."""
-
-    transform: Literal["dft", "idft"] = "dft"
-    selected_dim: str = ""
-    selected_dims: list[str] = Field(default_factory=list)
-    real_mode: Literal["Auto", "Real", "Complex"] = "Auto"
-    pad: bool = True
+_TRANSFORMS = TRANSFORMS
+_REAL_OPTIONS = REAL_OPTIONS
+_REAL_OPTION_MAP = REAL_OPTION_MAP
 
 
 class Fourier(PatchDimWidget):
     """Apply DASCore Fourier transforms to an input patch."""
 
+    node_spec = NODE_SPEC
     name = "Fourier"
-    params_model = FourierParams
     authoritative_state = True
     description = "Apply DASCore Fourier transforms to a patch"
     icon = "icons/Fourier.svg"
@@ -142,12 +134,7 @@ class Fourier(PatchDimWidget):
 
     def _default_dim(self, dims: tuple[str, ...]) -> str:
         """Choose a default dimension, preferring common time-domain axes."""
-        if "time" in dims:
-            return "time"
-        ft_dims = [dim for dim in dims if dim.startswith("ft_")]
-        if ft_dims:
-            return ft_dims[0]
-        return dims[0]
+        return default_dft_dim(dims)
 
     def _on_transform_changed(self, value: str) -> None:
         """Persist selected transform and rerun."""
@@ -212,12 +199,7 @@ class Fourier(PatchDimWidget):
         self._dim_combo.addItems(dims)
         if dims:
             if self.selected_dim not in dims:
-                ft_dims = [dim for dim in dims if dim.startswith("ft_")]
-                self.selected_dim = (
-                    self._default_dim(tuple(ft_dims))
-                    if ft_dims
-                    else self._default_dim(dims)
-                )
+                self.selected_dim = default_idft_dim(dims)
             self._dim_combo.setCurrentText(self.selected_dim)
         self._dim_combo.setEnabled(bool(dims))
         self._dim_combo.blockSignals(False)
@@ -262,23 +244,14 @@ class Fourier(PatchDimWidget):
     def get_task(self) -> Task:
         """Return the current Fourier operation as a workflow task."""
         transform = self._coerce_transform()
+        # Both calls resync their persisted setting to an available dimension.
         if transform == "dft":
-            dims = self._get_dims() or tuple(self.selected_dims)
-            real_mode = self.real_mode if self.real_mode in _REAL_OPTION_MAP else "Auto"
-            return PatchConfiguredMethodTask(
-                method_name="dft",
-                method_args=(dims,),
-                method_kwargs={
-                    "real": _REAL_OPTION_MAP[real_mode],
-                    "pad": bool(self.pad),
-                },
-            )
-        return PatchConfiguredMethodTask(
-            method_name="idft",
-            call_style="positional_dim",
-            dim=self._get_dim()
-            or (self.selected_dims[0] if self.selected_dims else None),
-        )
+            self._get_dims()
+        else:
+            self._get_dim()
+        if self.real_mode not in _REAL_OPTION_MAP:
+            self.real_mode = "Auto"
+        return NODE_SPEC.build_task(self.get_params())
 
 
 if __name__ == "__main__":  # pragma: no cover

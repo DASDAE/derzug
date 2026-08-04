@@ -6,12 +6,14 @@ from typing import ClassVar
 
 from Orange.widgets.widget import Msg
 
-from derzug.core.patchmethodwidget import ComboOption, PatchMethodWidget
+from derzug.core.patchmethodwidget import PatchMethodWidget
+from derzug.nodes.detrend import _OPTIONS, NODE_SPEC
 
 
 class Detrend(PatchMethodWidget):
     """Apply DASCore detrending to an input patch."""
 
+    node_spec = NODE_SPEC
     name = "Detrend"
     description = "Apply DASCore detrending to a patch"
     icon = "icons/Detrend.svg"
@@ -25,15 +27,7 @@ class Detrend(PatchMethodWidget):
     method_name = "detrend"
     call_style = "positional_dim"
     error_key = "detrend_failed"
-    _OPTIONS: ClassVar[tuple[ComboOption, ...]] = (
-        ComboOption(
-            "detrend_type",
-            ("linear", "constant"),
-            role="arg",
-            label="Type:",
-            combo_attr="_type_combo",
-        ),
-    )
+    _OPTIONS: ClassVar[tuple[object, ...]] = _OPTIONS
 
     class Error(PatchMethodWidget.Error):
         """Errors shown by the widget."""
