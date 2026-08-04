@@ -37,6 +37,7 @@ from Orange.widgets.widget import Msg
 from derzug.core.zugwidget import ZugWidget
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.models.selection import SelectParams
+from derzug.models.selection_state import _absolute_value_matches_coord_type
 from derzug.nodes.selection import selection_payload_from_settings
 from derzug.nodes.waterfall import NODE_SPEC
 from derzug.utils.display import format_nd_coord_value
@@ -1749,9 +1750,9 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
                 continue
             coord = np.asarray(patch.get_array(dim))
             low, high = previous_range
-            if not self._absolute_value_matches_coord_type(low, coord):
+            if not _absolute_value_matches_coord_type(low, coord):
                 continue
-            if not self._absolute_value_matches_coord_type(high, coord):
+            if not _absolute_value_matches_coord_type(high, coord):
                 continue
             self._selection_state.update_patch_range(dim, low, high)
 
@@ -1844,21 +1845,6 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
         self.saved_view_range = (
             None if view_range is None else [list(view_range[0]), list(view_range[1])]
         )
-
-    @staticmethod
-    def _absolute_value_matches_coord_type(
-        value: object, coord_values: np.ndarray
-    ) -> bool:
-        """Return True when an absolute selection value matches coord dtype."""
-        coord_dtype = np.asarray(coord_values).dtype
-        value_dtype = np.asarray(value).dtype
-        if np.issubdtype(coord_dtype, np.datetime64):
-            return np.issubdtype(value_dtype, np.datetime64)
-        if np.issubdtype(coord_dtype, np.timedelta64):
-            return np.issubdtype(value_dtype, np.timedelta64)
-        if np.issubdtype(coord_dtype, np.number):
-            return np.issubdtype(value_dtype, np.number)
-        return True
 
     def _current_roi_plot_bounds(
         self,

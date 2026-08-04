@@ -7,6 +7,7 @@ import pytest
 from AnyQt.QtWidgets import QComboBox
 from derzug.core.patchdimwidget import PatchDimWidget
 from derzug.utils.testing import widget_context
+from derzug.workflow.dims import resolve_patch_dim
 from Orange.widgets.utils.signals import Output
 
 
@@ -50,6 +51,19 @@ def test_get_dim_repairs_invalid_selected_dim(patchdim_widget):
     assert patchdim_widget._get_dim() == "time"
     assert patchdim_widget.selected_dim == "time"
     assert patchdim_widget._dim_combo.currentText() == "time"
+
+
+def test_default_dim_uses_patch_order_without_time(patchdim_widget):
+    """Without a time dim the default must match headless resolve_patch_dim."""
+
+    class _PatchStub:
+        dims = ("distance", "channel")
+
+    patchdim_widget.selected_dim = ""
+    patchdim_widget._set_patch_input(_PatchStub())
+
+    assert patchdim_widget._get_dim() == resolve_patch_dim(None, _PatchStub.dims)
+    assert patchdim_widget.selected_dim == "distance"
 
 
 def test_dim_combo_options_sorted_alphabetically(patchdim_widget):

@@ -133,8 +133,12 @@ class Fourier(PatchDimWidget):
         self.run()
 
     def _default_dim(self, dims: tuple[str, ...]) -> str:
-        """Choose a default dimension, preferring common time-domain axes."""
-        return default_dft_dim(dims)
+        """Default for the inherited dim combo, which serves the idft page.
+
+        Matches ``FourierTask.run``'s inverse-transform fallback so canvas and
+        headless resolve the same dimension.
+        """
+        return default_idft_dim(dims)
 
     def _on_transform_changed(self, value: str) -> None:
         """Persist selected transform and rerun."""
@@ -180,7 +184,7 @@ class Fourier(PatchDimWidget):
 
         valid_selected_dims = [dim for dim in self.selected_dims if dim in dims]
         if dims and not valid_selected_dims:
-            valid_selected_dims = [self._default_dim(dims)]
+            valid_selected_dims = [default_dft_dim(dims)]
         self.selected_dims = valid_selected_dims
 
         self._dim_list.blockSignals(True)
@@ -210,7 +214,7 @@ class Fourier(PatchDimWidget):
             return None
         dims = tuple(dim for dim in self.selected_dims if dim in self._available_dims)
         if not dims:
-            dims = (self._default_dim(self._available_dims),)
+            dims = (default_dft_dim(self._available_dims),)
             self.selected_dims = list(dims)
             self._refresh_dims()
         return dims
