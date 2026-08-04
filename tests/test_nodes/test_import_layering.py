@@ -1,8 +1,18 @@
-"""The layering guard: ``derzug.nodes`` and ``derzug.workflow`` stay Qt-free.
+"""The one layering check `tach` cannot make: transitively imported Qt.
 
-Each check runs in a fresh interpreter. The root ``tests/conftest.py`` boots a
-``QApplication`` for the suite, so an in-process ``sys.modules`` assertion would
-be meaningless here.
+`tach check` (see ``tach.toml``) owns the layering rule itself — it reads the
+first-party import graph statically, so it catches lazy imports buried in
+function bodies and direction violations between two Qt-free layers, neither of
+which a runtime probe can see.
+
+What it cannot see is a *third-party* package that pulls Qt in behind its own
+import. Nothing in ``tach.toml`` can express "the node layer must not end up
+with PyQt6 in ``sys.modules``", because to tach that import belongs to some
+other distribution entirely. So one runtime assertion stays: import the node
+layer in a fresh interpreter and look at what actually loaded.
+
+Fresh interpreter because the root ``tests/conftest.py`` boots a
+``QApplication`` for the whole suite; an in-process check would always pass.
 """
 
 from __future__ import annotations
@@ -20,6 +30,7 @@ QT_ROOTS = (
     "PySide6",
     "orangecanvas",
     "orangewidget",
+    "pyqtgraph",
 )
 
 _ASSERT_NO_QT = f"""
@@ -45,11 +56,15 @@ def run_isolated(body: str) -> subprocess.CompletedProcess:
     )
 
 
-class TestNodeLayerIsQtFree:
-    """Importing and using the node layer must never pull Qt in."""
+class TestNoTransitiveQt:
+    """Loading and running the node layer must not pull Qt in by any route."""
 
-    def test_registry_and_all_specs_import_qt_free(self):
-        """Loading every discoverable node spec imports no Qt module."""
+    def test_building_every_node_stays_qt_free(self):
+        """Discover every spec, generate its schemas, and build its task.
+
+        Deliberately exercises the layer rather than merely importing it: a
+        dependency that imports Qt only on first use would otherwise pass.
+        """
         result = run_isolated(
             """
             from derzug.nodes.registry import load_node_specs
@@ -59,17 +74,6 @@ class TestNodeLayerIsQtFree:
             for spec in specs:
                 spec.params_schema()
                 spec.view_schema()
-            """
-        )
-        assert result.returncode == 0, result.stderr
-
-    def test_default_tasks_build_qt_free(self):
-        """Every spec's default task builds without importing Qt."""
-        result = run_isolated(
-            """
-            from derzug.nodes.registry import load_node_specs
-
-            for spec in load_node_specs():
                 if spec.task_factory is None:
                     continue
                 task = spec.build_task()
@@ -79,8 +83,8 @@ class TestNodeLayerIsQtFree:
         )
         assert result.returncode == 0, result.stderr
 
-    def test_every_workflow_submodule_imports_qt_free(self):
-        """Importing all of ``derzug.workflow`` imports no Qt module."""
+    def test_importing_every_workflow_submodule_stays_qt_free(self):
+        """Importing all of ``derzug.workflow`` pulls in no Qt module."""
         result = run_isolated(
             """
             import importlib
@@ -95,7 +99,7 @@ class TestNodeLayerIsQtFree:
         assert result.returncode == 0, result.stderr
 
     def test_guard_detects_a_real_leak(self):
-        """The guard itself fails when something does import Qt."""
+        """The probe itself fails when something does import Qt."""
         result = run_isolated("import AnyQt.QtCore  # noqa: F401")
         assert result.returncode != 0
         assert "Qt leaked into the core layer" in result.stdout + result.stderr

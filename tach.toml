@@ -1,0 +1,159 @@
+# Import layering, enforced by `tach check`.
+#
+# DerZug is heading toward a client/server split, so the node library and the
+# workflow engine must stay runnable with no display attached. Layers are
+# listed highest first; a module may import from its own layer and any layer
+# below it, never above. See docs/dev/nodes.md.
+#
+#   interface  ->  Qt lives here and nowhere else
+#   nodes      ->  what each node is: ports, params, task factory
+#   engine     ->  the workflow engine
+#   foundation ->  data models and Qt-free helpers
+#
+# `derzug.utils` is deliberately split module by module rather than placed
+# whole: it holds both Qt-free parsing helpers the node layer needs and Qt
+# widget helpers it must never reach.
+
+source_roots = ["src"]
+layers = ["interface", "nodes", "engine", "foundation"]
+exclude = [
+    "benchmarks",
+    "build",
+    "docs",
+    "scripts",
+    "tests",
+    "worktrees",
+    "**/__pycache__",
+]
+
+# -- interface: everything allowed to touch Qt --------------------------------
+
+[[modules]]
+path = "derzug.cli"
+layer = "interface"
+
+[[modules]]
+path = "derzug.conductor"
+layer = "interface"
+
+[[modules]]
+path = "derzug.core"
+layer = "interface"
+
+[[modules]]
+path = "derzug.views"
+layer = "interface"
+
+[[modules]]
+path = "derzug.widgets"
+layer = "interface"
+
+[[modules]]
+path = "derzug.dascore"
+layer = "interface"
+
+[[modules]]
+path = "derzug.settings"
+layer = "interface"
+
+[[modules]]
+path = "derzug.annotations_config"
+layer = "interface"
+
+[[modules]]
+path = "derzug._anyqt_patch"
+layer = "interface"
+
+[[modules]]
+path = "derzug.utils.code2widget"
+layer = "interface"
+
+[[modules]]
+path = "derzug.utils.example_parameters"
+layer = "interface"
+
+[[modules]]
+path = "derzug.utils.plot_axes"
+layer = "interface"
+
+[[modules]]
+path = "derzug.utils.qt"
+layer = "interface"
+
+[[modules]]
+path = "derzug.utils.qt_runtime"
+layer = "interface"
+
+[[modules]]
+path = "derzug.utils.testing"
+layer = "interface"
+
+# -- nodes: the Qt-free node library ------------------------------------------
+
+[[modules]]
+path = "derzug.nodes"
+layer = "nodes"
+
+# -- engine: the workflow engine ----------------------------------------------
+
+[[modules]]
+path = "derzug.workflow"
+layer = "engine"
+
+[[modules]]
+path = "derzug.utils.callable_spec"
+layer = "engine"
+
+# -- foundation: data models and Qt-free helpers ------------------------------
+
+[[modules]]
+path = "derzug.models"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.constants"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.version"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.annotation_metadata"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.annotations"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.benchmarking"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.display"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.dynamic_rows"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.misc"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.optional_imports"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.parsing"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.sampling"
+layer = "foundation"
+
+[[modules]]
+path = "derzug.utils.spool"
+layer = "foundation"

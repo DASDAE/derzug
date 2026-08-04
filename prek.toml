@@ -46,3 +46,13 @@ rev = "v1.6.27"
 hooks = [
   { id = "actionlint" },
 ]
+
+# Import layering (tach.toml). Runs on the whole project, not per file, so it
+# also catches a violation introduced by deleting an import elsewhere.
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "tach", name = "tach (import layering)", entry = "tach check", language = "python", additional_dependencies = [
+    "tach>=0.35,<1",
+  ], pass_filenames = false, files = "^(src/.*\\.py|tach\\.toml)$" },
+]

@@ -15,9 +15,43 @@ models  ->  workflow  ->  nodes  ->  { core, widgets, views, conductor }
 `derzug.workflow` is the execution engine (tasks, graphs, the streaming
 executor). `derzug.nodes` is the node library built on top of it. Everything to
 the right of `nodes` may import everything to its left; nothing to the left may
-import anything to its right. `tests/test_nodes/test_import_layering.py`
-enforces this in fresh subprocesses — the suite's own `QApplication` would make
-an in-process check meaningless.
+import anything to its right.
+
+### How it is enforced
+
+[`tach`](https://docs.gauge.sh) owns the rule, configured in `tach.toml` and run
+as a `prek` hook (so CI's lint job covers it):
+
+```bash
+prek run --all-files tach     # or `tach check` with tach installed
+```
+
+It reads the first-party import graph statically, which buys two things a
+runtime probe cannot have: it catches a lazy `import` buried in a function body
+that no test happens to execute, and it catches a wrong-direction import between
+two Qt-free layers — `derzug.workflow` reaching into `derzug.nodes`, say — where
+no Qt would ever show up to give the game away.
+
+`derzug.utils` is listed module by module rather than as a whole, because it
+genuinely spans layers: `utils.parsing` is a Qt-free helper the node layer
+needs, while `utils.testing` is Qt.
+
+One check stays at runtime, in
+`tests/test_nodes/test_import_layering.py`: a *third-party* package that pulls
+Qt in behind its own import is invisible to tach, since that import belongs to
+another distribution. Those tests import and exercise the node layer in a fresh
+interpreter and assert nothing Qt-shaped reached `sys.modules`. Fresh
+interpreter because the suite's own `QApplication` would make an in-process
+check meaningless.
+
+### Known waiver
+
+`PatchSelectionTask.run()` and `PatchSelectionWithParamsTask.run()` in
+`derzug/workflow/widget_tasks.py` still import `SelectionState` from a Qt widget
+module, marked `# tach-ignore` with a comment. Those two tasks cannot run
+headlessly today. The fix is the **selection split**: move the Qt-free state
+classes out of `derzug/widgets/selection.py` into `derzug/models/`, and the two
+tasks into `derzug/nodes/selection.py` with module-level imports.
 
 ## What a node module owns
 
