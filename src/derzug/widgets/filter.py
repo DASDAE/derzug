@@ -26,7 +26,9 @@ from derzug.nodes.filter import (
     _FILTER_MODELS,
     _FILTER_NAMES,
     _PARAM_FIELDS,
+    MODE_OPTIONS,
     NODE_SPEC,
+    SAVGOL_MODE_OPTIONS,
     FilterParams,
     FilterTask,
     filter_settings_from_params,
@@ -37,21 +39,8 @@ from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.parsing import parse_patch_text_value
 from derzug.workflow import Task
 
-_MODE_OPTIONS: tuple[str, ...] = (
-    "reflect",
-    "constant",
-    "nearest",
-    "wrap",
-    "mirror",
-    "interp",
-)
-_SAVGOL_MODE_OPTIONS: tuple[str, ...] = (
-    "mirror",
-    "constant",
-    "nearest",
-    "wrap",
-    "interp",
-)
+_MODE_OPTIONS = MODE_OPTIONS
+_SAVGOL_MODE_OPTIONS = SAVGOL_MODE_OPTIONS
 
 
 class Filter(PatchDimWidget):

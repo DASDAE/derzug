@@ -237,29 +237,9 @@ class Select(SelectionControlsMixin, ZugWidget):
         if params is None or not params.kwargs:
             return None
         state = SelectionState()
-        if patch is not None:
-            state.apply_select_params(params, patch)
-            return state
-
-        basis = PatchSelectionBasis.ABSOLUTE
-        if params.relative:
-            basis = PatchSelectionBasis.RELATIVE
-        elif params.samples:
-            basis = PatchSelectionBasis.SAMPLES
-        ranges: dict[str, tuple[object, object]] = {}
-        for dim, value_range in params.kwargs.items():
-            try:
-                low, high = value_range
-            except (TypeError, ValueError):
-                continue
-            ranges[dim] = (low, high)
-        if not ranges:
+        state.apply_select_params(params, patch)
+        if patch is None and not state.patch.ranges:
             return None
-        state.mode = SelectionMode.PATCH
-        state.patch.basis = basis
-        state.patch.extents = dict(ranges)
-        state.patch.ranges = ranges
-        state.patch.enabled = {dim: True for dim in ranges}
         return state
 
     def _spool_display_patch(self) -> dc.Patch | None:

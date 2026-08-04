@@ -8,6 +8,12 @@ import dascore as dc
 import numpy as np
 import pytest
 from AnyQt.QtCore import QIODevice
+from derzug.nodes.playaudio import (
+    coord_to_seconds,
+    default_time_scale,
+    infer_native_rate_hz,
+    prepare_pcm_audio,
+)
 from derzug.utils.testing import TestWidgetDefaults, widget_context
 from derzug.widgets.playaudio import PlayAudio
 
@@ -217,9 +223,7 @@ class TestPlayAudio:
         native_rate_hz = 1_000.0
         sample_count = 5_000
 
-        assert PlayAudio._default_time_scale(
-            native_rate_hz, sample_count
-        ) == pytest.approx(1.0)
+        assert default_time_scale(native_rate_hz, sample_count) == pytest.approx(1.0)
 
     def test_short_recording_defaults_to_at_least_two_seconds(self, playaudio_widget):
         """Short clips should slow down by default until playback lasts two seconds."""
@@ -238,18 +242,18 @@ class TestPlayAudio:
     def test_low_rate_chooses_target_audible_default(self):
         """Very slow recordings should scale up toward the target playback band."""
         coord = np.arange(10, dtype=np.float64)
-        rate = PlayAudio._infer_native_rate_hz(coord)
+        rate = infer_native_rate_hz(coord)
 
         assert rate == pytest.approx(1.0)
-        assert PlayAudio._default_time_scale(rate, coord.size) == pytest.approx(4000.0)
+        assert default_time_scale(rate, coord.size) == pytest.approx(4000.0)
 
     def test_high_rate_chooses_target_audible_default(self):
         """Very fast recordings should scale down toward the target playback band."""
         coord = np.arange(10, dtype=np.float64) * 1e-6
-        rate = PlayAudio._infer_native_rate_hz(coord)
+        rate = infer_native_rate_hz(coord)
 
         assert rate == pytest.approx(1_000_000.0)
-        assert PlayAudio._default_time_scale(rate, coord.size) == pytest.approx(5e-6)
+        assert default_time_scale(rate, coord.size) == pytest.approx(5e-6)
 
     def test_rate_validation_checks_long_coordinates_in_bounded_blocks(
         self, monkeypatch
@@ -262,11 +266,11 @@ class TestPlayAudio:
 
         monkeypatch.setattr(np, "diff", fail_diff)
 
-        assert PlayAudio._infer_native_rate_hz(coord) == pytest.approx(1000.0)
+        assert infer_native_rate_hz(coord) == pytest.approx(1000.0)
 
     def test_prepare_pcm_audio_zeroes_non_finite_and_normalizes(self):
         """PCM prep should zero invalid samples and normalize finite values."""
-        pcm_bytes, sample_count = PlayAudio._prepare_pcm_audio(
+        pcm_bytes, sample_count = prepare_pcm_audio(
             np.array([0.0, np.nan, np.inf, -2.0, 2.0], dtype=np.float64)
         )
         pcm = np.frombuffer(pcm_bytes, dtype="<i2")
@@ -282,7 +286,7 @@ class TestPlayAudio:
         """A few spikes should not keep the whole clip artificially quiet."""
         data = np.concatenate([np.ones(100, dtype=np.float64), np.array([100.0])])
 
-        pcm_bytes, sample_count = PlayAudio._prepare_pcm_audio(data)
+        pcm_bytes, sample_count = prepare_pcm_audio(data)
         pcm = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float64)
         normalized = pcm / np.iinfo(np.int16).max
 
@@ -299,7 +303,7 @@ class TestPlayAudio:
             ]
         )
 
-        pcm_bytes, sample_count = PlayAudio._prepare_pcm_audio(data)
+        pcm_bytes, sample_count = prepare_pcm_audio(data)
         pcm = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float64)
         normalized = pcm / np.iinfo(np.int16).max
 
@@ -316,7 +320,7 @@ class TestPlayAudio:
             ]
         )
 
-        pcm_bytes, _ = PlayAudio._prepare_pcm_audio(data, output_gain_db=6.0)
+        pcm_bytes, _ = prepare_pcm_audio(data, output_gain_db=6.0)
         pcm = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float64)
         normalized = pcm / np.iinfo(np.int16).max
 
@@ -324,14 +328,14 @@ class TestPlayAudio:
 
     def test_prepare_pcm_audio_normalizes_spikes_missed_by_calibration(self):
         """Signal energy between calibration stride points must still normalize."""
-        from derzug.widgets.playaudio import _PCM_CALIBRATION_SAMPLES
+        from derzug.nodes.playaudio import PCM_CALIBRATION_SAMPLES
 
         # Large enough that calibration strides, with the only energy placed
         # off-stride so the calibration subset is all zeros.
-        data = np.zeros(2 * _PCM_CALIBRATION_SAMPLES + 2, dtype=np.float64)
+        data = np.zeros(2 * PCM_CALIBRATION_SAMPLES + 2, dtype=np.float64)
         data[1] = 1.0
 
-        pcm_bytes, sample_count = PlayAudio._prepare_pcm_audio(data)
+        pcm_bytes, sample_count = prepare_pcm_audio(data)
         pcm = np.frombuffer(pcm_bytes, dtype="<i2")
 
         assert sample_count == data.size
@@ -342,7 +346,7 @@ class TestPlayAudio:
     def test_prepare_pcm_audio_rejects_all_non_finite(self):
         """Patches without any finite samples should be rejected."""
         with pytest.raises(ValueError, match="finite sample"):
-            PlayAudio._prepare_pcm_audio(np.array([np.nan, np.inf]))
+            prepare_pcm_audio(np.array([np.nan, np.inf]))
 
     def test_user_time_scale_updates_effective_rate(self, playaudio_widget):
         """Changing the control should update the computed playback rate."""
@@ -460,7 +464,7 @@ class TestPlayAudio:
         playaudio_widget._update_playback_marker()
 
         marker_x, marker_y = playaudio_widget._waveform_marker.getData()
-        time_seconds = PlayAudio._coord_to_seconds(np.asarray(patch.get_array("time")))
+        time_seconds = coord_to_seconds(np.asarray(patch.get_array("time")))
         time_seconds = np.asarray(time_seconds, dtype=np.float64) - float(
             time_seconds[0]
         )

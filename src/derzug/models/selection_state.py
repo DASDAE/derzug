@@ -576,13 +576,32 @@ class SelectionState:
             samples=flags["samples"],
         )
 
-    def apply_select_params(self, params: SelectParams, patch) -> None:
-        """Seed patch-mode selection state from public patch.select parameters."""
+    def apply_select_params(self, params: SelectParams, patch=None) -> None:
+        """Seed patch-mode selection state from public patch.select parameters.
+
+        With a patch the ranges are clamped against its dimensions; without
+        one (a display-only host) each parameter range doubles as its own
+        extent so the state can still be shown.
+        """
         basis = PatchSelectionBasis.ABSOLUTE
         if params.relative:
             basis = PatchSelectionBasis.RELATIVE
         elif params.samples:
             basis = PatchSelectionBasis.SAMPLES
+        if patch is None:
+            ranges: dict[str, tuple[Any, Any]] = {}
+            for dim, value_range in params.kwargs.items():
+                try:
+                    low, high = value_range
+                except (TypeError, ValueError):
+                    continue
+                ranges[dim] = (low, high)
+            self.mode = SelectionMode.PATCH
+            self.patch.basis = basis
+            self.patch.extents = dict(ranges)
+            self.patch.ranges = ranges
+            self.patch.enabled = {dim: True for dim in ranges}
+            return
         self.set_patch_source(patch)
         self.set_patch_basis(basis)
         for dim, value_range in params.kwargs.items():

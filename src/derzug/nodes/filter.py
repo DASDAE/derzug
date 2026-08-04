@@ -14,7 +14,7 @@ elsewhere, which is what it actually means per type.
 
 from __future__ import annotations
 
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, get_args
 
 import dascore as dc
 from pydantic import BaseModel, Field, TypeAdapter
@@ -35,6 +35,14 @@ _FILTER_NAMES: tuple[str, ...] = (
     "sobel_filter",
     "wiener_filter",
 )
+
+#: Boundary modes the general SciPy-backed filters accept. Savitzky-Golay
+#: rejects ``reflect``, so it gets its own narrower set; typing the params
+#: fields with these keeps a headless ``mode`` typo from surviving until SciPy.
+FilterMode = Literal["reflect", "constant", "nearest", "wrap", "mirror", "interp"]
+SavgolFilterMode = Literal["mirror", "constant", "nearest", "wrap", "interp"]
+MODE_OPTIONS: tuple[str, ...] = get_args(FilterMode)
+SAVGOL_MODE_OPTIONS: tuple[str, ...] = get_args(SavgolFilterMode)
 
 
 # -- Parameter models ---------------------------------------------------------
@@ -72,7 +80,7 @@ class MedianFilterParams(_SharedFilter):
     kind: Literal["median_filter"] = "median_filter"
     window: str = "0.01"  # stored as filter_window
     samples: bool = False
-    mode: str = "reflect"
+    mode: FilterMode = "reflect"
     cval: float = 0.0
 
 
@@ -93,7 +101,7 @@ class SavgolFilterParams(_SharedFilter):
     window: str = "0.01"  # stored as filter_window
     polyorder: int = 3
     samples: bool = False
-    mode: str = "interp"  # savgol modes differ from the other filters
+    mode: SavgolFilterMode = "interp"  # savgol rejects reflect
     cval: float = 0.0
 
 
@@ -122,7 +130,7 @@ class GaussianFilterParams(_SharedFilter):
         default_factory=lambda: [GaussianWindow(window="")]
     )
     samples: bool = False
-    mode: str = "reflect"
+    mode: FilterMode = "reflect"
     cval: float = 0.0
     truncate: float = 4.0
 
@@ -131,7 +139,7 @@ class SobelFilterParams(_SharedFilter):
     """Sobel edge filter."""
 
     kind: Literal["sobel_filter"] = "sobel_filter"
-    mode: str = "reflect"
+    mode: FilterMode = "reflect"
     cval: float = 0.0
 
 
