@@ -1,0 +1,43 @@
+# Delete a PR's caches once it closes.
+#
+# The environment caches are ~700-850 MB each and a full matrix run writes six
+# of them, so a handful of PRs is enough to blow through the repository's 10 GB
+# cache allowance. GitHub then evicts least-recently-used entries -- including
+# the main-branch environments that every PR restores from, which turns the
+# next run into a full ~7 minute conda solve on Windows. Caches written during
+# a pull request are scoped to refs/pull/<n>/merge and are unreachable from any
+# other branch once the PR is done, so they are pure dead weight.
+name: CleanupCaches
+
+# pull_request_target so the job runs with a writable token for pull requests
+# from forks too -- those caches are otherwise unreachable *and* undeletable.
+# Nothing here checks out or executes the pull request's code, which is what
+# makes the elevated token safe.
+on:
+  pull_request_target:
+    types: [closed]
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: delete caches scoped to this pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          CACHE_REF: refs/pull/${{ github.event.pull_request.number }}/merge
+        # `gh cache delete --all --ref` would be tidier but is a recent
+        # addition; the list/loop works on any gh the runner image ships. A
+        # failed delete must not abort the rest, hence the `|| echo`.
+        run: |
+          ids=$(gh cache list --ref "$CACHE_REF" --limit 100 --json id --jq '.[].id')
+          if [ -z "$ids" ]; then
+            echo "No caches for ${CACHE_REF}."
+            exit 0
+          fi
+          for id in $ids; do
+            echo "Deleting cache ${id}"
+            gh cache delete "$id" || echo "::warning::Could not delete cache ${id}"
+          done

@@ -66,6 +66,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache-number: ${{ env.CACHE_NUMBER }}
+          prepare-test-data: "true"
 
 #
 #      - name: Setup tmate session
