@@ -11,7 +11,6 @@ from importlib import import_module
 __all__ = (
     "CompiledWorkflow",
     "compile_workflow",
-    "FileSystemSource",
     "Pipe",
     "PipeBuilder",
     "Provenance",
@@ -25,7 +24,6 @@ __all__ = (
 _EXPORTS = {
     "CompiledWorkflow": (".compiler", "CompiledWorkflow"),
     "compile_workflow": (".compiler", "compile_workflow"),
-    "FileSystemSource": (".source", "FileSystemSource"),
     "Pipe": (".pipe", "Pipe"),
     "PipeBuilder": (".graph", "PipeBuilder"),
     "Provenance": (".provenance", "Provenance"),
