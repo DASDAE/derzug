@@ -14,18 +14,10 @@ class Taper(PatchMethodWidget):
     """Apply a taper window to a patch along a selected dimension."""
 
     node_spec = NODE_SPEC
-    name = "Taper"
-    description = "Apply a taper window to a patch along a selected dimension"
-    icon = "icons/Taper.svg"
-    category = "Processing"
-    keywords = ("taper", "window", "hann", "pre-fft", "cosine")
-    priority = 21.4
     want_main_area = False
 
     authoritative_state = True
 
-    method_name = "taper"
-    call_style = "keyword_dim"
     error_key = "taper_failed"
     _OPTIONS: ClassVar[tuple[object, ...]] = _OPTIONS
 

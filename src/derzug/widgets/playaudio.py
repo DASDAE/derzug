@@ -127,13 +127,7 @@ class PlayAudio(ZugWidget):
     """Play 1D DAS patches as audio with a configurable time scale."""
 
     node_spec = NODE_SPEC
-    name = "PlayAudio"
     authoritative_state = True
-    description = "Play a 1D time patch as audio"
-    icon = "icons/PlayAudio.svg"
-    category = "Visualize"
-    keywords = ("audio", "sound", "time", "patch")
-    priority = 23
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""

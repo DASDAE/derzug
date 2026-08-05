@@ -22,13 +22,7 @@ class UFuncBinary(ZugWidget):
     """Apply a selected binary NumPy ufunc to two generic inputs."""
 
     node_spec = NODE_SPEC
-    name = "UFuncBinary"
     authoritative_state = True
-    description = "Apply selected NumPy ufunc to x and y inputs"
-    icon = "icons/UFunc.svg"
-    category = "Processing"
-    keywords = ("ufunc", "numpy", "binary", "operator", "math")
-    priority = 23
 
     # This is a non-graphical widget; we dont need main area.
     want_main_area = False

@@ -51,22 +51,7 @@ class Coords(ZugWidget):
     """Apply coordinate-structure operations to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Coords"
     authoritative_state = True
-    description = "Apply coordinate operations to a patch"
-    icon = "icons/Coords.svg"
-    category = "Processing"
-    keywords = (
-        "coords",
-        "coordinates",
-        "flip",
-        "rename",
-        "transpose",
-        "sort",
-        "snap",
-        "set_coords",
-    )
-    priority = 24.5
 
     _OPERATIONS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("rename_coords", "Rename"),

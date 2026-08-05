@@ -145,13 +145,7 @@ class Annotations(ZugWidget):
     """Store multiple annotation sets in memory or on disk."""
 
     node_spec = NODE_SPEC
-    name = "Annotations"
     authoritative_state = True
-    description = "Store and persist annotation sets"
-    icon = "icons/Annotations.svg"
-    category = "IO"
-    keywords = ("annotations", "store", "persist", "table")
-    priority = 27
     is_source = True
 
     class Error(ZugWidget.Error):

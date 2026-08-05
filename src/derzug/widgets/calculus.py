@@ -19,13 +19,7 @@ class Calculus(PatchDimWidget):
     """Apply differentiation and integration transforms to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Calculus"
     authoritative_state = True
-    description = "Apply differentiation and integration transforms to a patch"
-    icon = "icons/Calculus.svg"
-    category = "Transform"
-    keywords = ("transform", "differentiate", "integrate", "derivative", "integral")
-    priority = 21.3
     want_main_area = False
 
     _TRANSFORMS: ClassVar[tuple[str, ...]] = TRANSFORMS

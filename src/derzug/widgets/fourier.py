@@ -40,13 +40,7 @@ class Fourier(PatchDimWidget):
     """Apply DASCore Fourier transforms to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Fourier"
     authoritative_state = True
-    description = "Apply DASCore Fourier transforms to a patch"
-    icon = "icons/Fourier.svg"
-    category = "Transform"
-    keywords = ("transform", "fourier", "fft", "dft", "idft")
-    priority = 21.1
     want_main_area = False
 
     _TRANSFORMS: ClassVar[tuple[str, ...]] = _TRANSFORMS

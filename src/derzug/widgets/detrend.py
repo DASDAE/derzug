@@ -14,18 +14,10 @@ class Detrend(PatchMethodWidget):
     """Apply DASCore detrending to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Detrend"
-    description = "Apply DASCore detrending to a patch"
-    icon = "icons/Detrend.svg"
-    category = "Processing"
-    keywords = ("detrend", "trend", "linear", "constant")
-    priority = 21
     want_main_area = False
 
     authoritative_state = True
 
-    method_name = "detrend"
-    call_style = "positional_dim"
     error_key = "detrend_failed"
     _OPTIONS: ClassVar[tuple[object, ...]] = _OPTIONS
 

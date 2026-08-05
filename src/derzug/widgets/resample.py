@@ -26,13 +26,7 @@ class Resample(PatchDimWidget):
     """Decimate or resample an input patch along a chosen dimension."""
 
     node_spec = NODE_SPEC
-    name = "Resample"
     authoritative_state = True
-    description = "Decimate or resample a patch along a dimension"
-    icon = "icons/Resample.svg"
-    category = "Processing"
-    keywords = ("resample", "decimate", "downsample", "upsample", "interpolate")
-    priority = 24
     want_main_area = False
 
     _MODE_NAMES: ClassVar[tuple[str, ...]] = MODE_NAMES

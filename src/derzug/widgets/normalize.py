@@ -19,13 +19,7 @@ class Normalize(PatchDimWidget):
     """Apply DASCore normalize and standardize operations to a patch."""
 
     node_spec = NODE_SPEC
-    name = "Normalize"
     authoritative_state = True
-    description = "Apply DASCore normalize or standardize to a patch"
-    icon = "icons/Normalize.svg"
-    category = "Processing"
-    keywords = ("normalize", "standardize", "scale", "amplitude")
-    priority = 21.5
     want_main_area = False
 
     _OPERATIONS: ClassVar[tuple[str, ...]] = OPERATIONS
