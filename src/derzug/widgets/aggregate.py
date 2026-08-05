@@ -25,13 +25,7 @@ class Aggregate(ZugWidget):
     """Apply DASCore aggregate reduction to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Aggregate"
     authoritative_state = True
-    description = "Apply DASCore aggregate reduction to a patch"
-    icon = "icons/AggregateColumns.svg"
-    category = "Processing"
-    keywords = ("aggregate", "reduce", "mean", "sum", "statistics")
-    priority = 25
 
     want_main_area = False
 

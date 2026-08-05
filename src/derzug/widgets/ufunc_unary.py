@@ -14,12 +14,6 @@ class UFuncUnary(PatchMethodWidget):
     """Apply a selected unary element-wise math transform to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "UFuncUnary"
-    description = "Apply a unary element-wise transform to a patch"
-    icon = "icons/UFunc.svg"
-    category = "Processing"
-    keywords = ("ufunc", "math", "unary", "abs", "log", "exp", "transform")
-    priority = 22
     want_main_area = False
 
     authoritative_state = True
@@ -27,7 +21,6 @@ class UFuncUnary(PatchMethodWidget):
     _OPS: ClassVar[tuple[str, ...]] = OPS
 
     uses_dim = False
-    call_style = "plain"
     _OPTIONS: ClassVar[tuple[object, ...]] = _OPTIONS
 
     class Error(PatchMethodWidget.Error):

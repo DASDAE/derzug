@@ -24,13 +24,7 @@ class Stft(PatchDimWidget):
     """Apply a DASCore short-time Fourier transform to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Stft"
     authoritative_state = True
-    description = "Apply a short-time Fourier transform to a patch"
-    icon = "icons/Stft.svg"
-    category = "Transform"
-    keywords = ("stft", "spectrogram", "fourier", "transform")
-    priority = 21.15
     want_main_area = False
 
     class Error(PatchDimWidget.Error):

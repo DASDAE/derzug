@@ -14,17 +14,10 @@ class Analytic(PatchMethodWidget):
     """Apply Hilbert-derived transforms to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Analytic"
-    description = "Apply Hilbert-derived transforms to a patch"
-    icon = "icons/Analytic.svg"
-    category = "Transform"
-    keywords = ("transform", "hilbert", "envelope", "analytic")
-    priority = 21.2
     want_main_area = False
 
     authoritative_state = True
 
-    call_style = "positional_dim"
     error_key = "transform_failed"
     _OPTIONS: ClassVar[tuple[object, ...]] = _OPTIONS
 

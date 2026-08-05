@@ -20,13 +20,7 @@ class Rolling(PatchDimWidget):
     """Apply DASCore rolling aggregations to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Rolling"
     authoritative_state = True
-    description = "Apply DASCore rolling aggregation to a patch"
-    icon = "icons/Rolling.svg"
-    category = "Processing"
-    keywords = ("rolling", "aggregate", "smooth", "moving")
-    priority = 24
 
     # This is a non-graphical widget; we dont need main area.
     want_main_area = False

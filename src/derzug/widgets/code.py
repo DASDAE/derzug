@@ -88,13 +88,7 @@ class Code(ZugWidget):
     """Run custom Python code against an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Code"
     authoritative_state = True
-    description = "Run custom Python code on a patch"
-    icon = "icons/PythonScript.svg"
-    category = "Processing"
-    keywords = ("code", "python", "script", "custom")
-    priority = 21.7
     want_main_area = True
 
     class Error(ZugWidget.Error):

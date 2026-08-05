@@ -302,14 +302,8 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
     users change the colormap interactively.
     """
 
-    name = "Waterfall"
     node_spec = NODE_SPEC
     authoritative_state = True
-    description = "Interactive pyqtgraph waterfall view for DAS patches"
-    icon = "icons/Waterfall.svg"
-    category = "Visualize"
-    keywords = ("waterfall", "patch", "pyqtgraph", "dascore")
-    priority = 20
 
     _COLORMAPS: ClassVar[tuple[str, ...]] = (
         "CET-D1",

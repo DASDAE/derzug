@@ -33,14 +33,8 @@ class Select(SelectionControlsMixin, ZugWidget):
     """Select subsets of patches or spools using shared left-side controls."""
 
     node_spec = NODE_SPEC
-    name = "Select"
     authoritative_state = True
     want_main_area = False
-    description = "Select subsets of patches or spools"
-    icon = "icons/SelectRows.svg"
-    category = "Processing"
-    keywords = ("select", "patch", "spool", "subset", "filter")
-    priority = 23
 
     def __setattr__(self, name, value) -> None:
         """Track restored settings so late patch selection restore stays atomic."""

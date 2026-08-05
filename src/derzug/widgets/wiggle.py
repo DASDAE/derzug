@@ -131,14 +131,8 @@ class Wiggle(MultiDimPlotControlsMixin, ZugWidget):
     # slower, so all bulk line rendering must stay at width 1.
     _LINE_COLOR = (15, 15, 15, 255)
 
-    name = "Wiggle"
     node_spec = NODE_SPEC
     authoritative_state = True
-    description = "Interactive pyqtgraph wiggle view for DAS patches"
-    icon = "icons/Wiggle.svg"
-    category = "Visualize"
-    keywords = ("wiggle", "patch", "pyqtgraph", "dascore")
-    priority = 21
 
     _COLORMAPS = (
         "CET-D1",

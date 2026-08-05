@@ -21,40 +21,21 @@ from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.nodes._options import (
-    ComboOption,
-    SpinOption,
-    build_params_model,
-    options_task_factory,
-)
-from derzug.settings import Setting
+from derzug.nodes._options import ComboOption, SpinOption
 from derzug.workflow import Task
-
-
-def _setting_default(cls: type, name: str, fallback: object) -> object:
-    """Return the default of the named ``Setting`` declared on ``cls``."""
-    for klass in cls.__mro__:
-        value = klass.__dict__.get(name)
-        if isinstance(value, Setting):
-            return value.default
-    return fallback
 
 
 class PatchMethodWidget(PatchDimWidget, openclass=True):
     """Base for patch-in/patch-out widgets calling one configured DASCore method.
 
-    Subclasses declare metadata (``name`` etc.), a ``Setting`` per option, and:
+    Subclasses declare a ``node_spec`` (which supplies the metadata, params
+    model, and task factory), a ``Setting`` per option, and:
 
-    - ``method_name``: the DASCore ``Patch`` method to call, unless an option
-      with ``role="method"`` supplies it.
-    - ``call_style``: forwarded to :class:`PatchConfiguredMethodTask`.
     - ``uses_dim``: whether a dimension chooser is shown and passed to the task.
     - ``_OPTIONS``: the controls to render and feed into the task.
     - ``error_key``: the ``Error`` slot used for execution failures.
     """
 
-    method_name: ClassVar[str] = ""
-    call_style: ClassVar[str] = "positional_dim"
     uses_dim: ClassVar[bool] = True
     error_key: ClassVar[str] = "operation_failed"
     parameters_title: ClassVar[str] = "Parameters"
@@ -142,28 +123,15 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
             self._refresh_dims()
 
     def __init_subclass__(cls, **kwargs) -> None:
-        """Auto-derive a params model for each concrete option-based widget.
-
-        Widgets that declare a ``node_spec`` already got theirs from the spec;
-        this only covers the ones not yet migrated to the node layer.
-        """
+        """Require each concrete option-based widget to declare its own spec."""
         super().__init_subclass__(**kwargs)
         if not cls.__dict__.get("_OPTIONS"):
             return
-        if "node_spec" not in cls.__dict__ and cls.node_spec is not None:
+        if cls.__dict__.get("node_spec") is None:
             raise TypeError(
-                f"{cls.__name__} overrides _OPTIONS but inherits node_spec "
-                f"{cls.node_spec.name!r}; declare its own node_spec, or set "
-                "node_spec = None to fall back to a generated params model"
+                f"{cls.__name__} overrides _OPTIONS and must declare its own "
+                "node_spec (see derzug.nodes for the Qt-free half)"
             )
-        if cls.node_spec is not None:
-            return
-        cls.params_model = build_params_model(
-            f"{cls.__name__}Params",
-            cls._OPTIONS,
-            uses_dim=cls.uses_dim,
-            dim_default=_setting_default(cls, "selected_dim", ""),
-        )
 
     def _settings_control_map(self) -> dict[str, object]:
         """Map each option setting (and the dim chooser) to its control."""
@@ -235,13 +203,4 @@ class PatchMethodWidget(PatchDimWidget, openclass=True):
         if self.uses_dim:
             # Side effect: resyncs ``selected_dim`` to an available dimension.
             self._get_dim()
-        params = self.get_params()
-        if self.node_spec is not None and self.node_spec.task_factory is not None:
-            return self.node_spec.build_task(params)
-        return options_task_factory(
-            params,
-            method_name=self.method_name,
-            call_style=self.call_style,
-            uses_dim=self.uses_dim,
-            options=self._OPTIONS,
-        )
+        return self.node_spec.build_task(self.get_params())
