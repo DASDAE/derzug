@@ -5,7 +5,6 @@ def __getattr__(name: str):
     if name in {
         "CompiledWorkflow",
         "compile_workflow",
-        "FileSystemSource",
         "Pipe",
         "PipeBuilder",
         "Provenance",

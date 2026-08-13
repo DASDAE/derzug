@@ -37,6 +37,7 @@ DerZug is pre-alpha; these renames are a clean break with no compatibility
 shims. Workflows (`.ows` files) saved with an earlier version that reference the
 affected widgets will not load and must be rebuilt.
 
+- The speculative `derzug.FileSystemSource` (and its provenance-sidecar loading helpers) was removed; it had no concrete subclass and no callers. The small `Source` ABC the workflow engine consumes remains.
 - The `derzug.orange` module (the `Setting` subclass) moved to
   `derzug.settings`. Update `from derzug.orange import Setting` to
   `from derzug.settings import Setting`.
