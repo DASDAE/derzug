@@ -21,13 +21,7 @@ class FBE(PatchDimWidget):
     """Extract one frequency band energy trace via STFT power reduction."""
 
     node_spec = NODE_SPEC
-    name = "FBE"
     authoritative_state = True
-    description = "Extract one frequency band energy feature from a patch"
-    icon = "icons/FBE.svg"
-    category = "Transform"
-    keywords = ("fbe", "stft", "frequency", "band", "energy")
-    priority = 21.14
     want_main_area = False
 
     _WINDOW_TYPES: ClassVar[tuple[str, ...]] = WINDOW_TYPES

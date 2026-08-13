@@ -120,17 +120,8 @@ class DataFrameLoader(ZugWidget):
     """Orange widget for loading a pandas DataFrame from a file on disk."""
 
     node_spec = NODE_SPEC
-    name = "DataFrame Loader"
     authoritative_state = True
     want_control_area = False
-    description = (
-        "Load a tabular DataFrame from a file. "
-        "Format is auto-detected from the file extension or can be set manually."
-    )
-    icon = "icons/DataFrame.svg"
-    category = "IO"
-    keywords = ("dataframe", "csv", "parquet", "excel", "table", "file", "load")
-    priority = 20
     is_source = True
 
     class Error(ZugWidget.Error):

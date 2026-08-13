@@ -58,14 +58,8 @@ class PatchViewer(ZugWidget):
     """Inspect patch structure and preview selected arrays."""
 
     node_spec = NODE_SPEC
-    name = "PatchViewer"
     authoritative_state = True
-    description = "Inspect a DAS patch and preview its arrays"
     want_control_area = False
-    icon = "icons/PatchViewer.svg"
-    category = "Visualize"
-    keywords = ("patch", "viewer", "inspect", "coords", "attrs")
-    priority = 22
 
     class Error(ZugWidget.Error):
         """Errors shown by the widget."""

@@ -47,13 +47,7 @@ class Filter(PatchDimWidget):
     """Apply a selected DASCore Patch filter method to an input patch."""
 
     node_spec = NODE_SPEC
-    name = "Filter"
-    description = "Apply a DASCore filter function to a patch"
     authoritative_state = True
-    icon = "icons/Filter.svg"
-    category = "Processing"
-    keywords = ("filter", "bandpass", "gaussian", "notch", "median", "sobel")
-    priority = 22
 
     # This is a non-graphical widget; we dont need main area.
     want_main_area = False

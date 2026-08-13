@@ -33,6 +33,8 @@ All notable user-facing changes to DerZug are documented here.
 
 ### Changed (breaking)
 
+- Widget canvas metadata (`name`, `description`, `icon`, `category`, `keywords`, `priority`) is now derived from each widget's `NODE_SPEC`; the bundled widgets no longer re-declare it. External `PatchMethodWidget` subclasses that override `_OPTIONS` must now declare their own `node_spec` — the fallback that generated a params model and built tasks from widget-level `method_name`/`call_style` attributes was removed.
+
 DerZug is pre-alpha; these renames are a clean break with no compatibility
 shims. Workflows (`.ows` files) saved with an earlier version that reference the
 affected widgets will not load and must be rebuilt.

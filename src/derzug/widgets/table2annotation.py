@@ -35,16 +35,7 @@ class Table2Annotation(ZugWidget):
     """Orange widget that converts each DataFrame row into an Annotation."""
 
     node_spec = NODE_SPEC
-    name = "Table to Annotations"
     authoritative_state = True
-    description = (
-        "Convert rows of a DataFrame into an AnnotationSet. "
-        "Each row becomes one annotation (dot or line)."
-    )
-    icon = "icons/DataFrame2Annotation.svg"
-    category = "Table"
-    keywords = ("annotation", "table", "dataframe", "convert", "label")
-    priority = 25
     want_main_area = False
 
     # --- settings ---

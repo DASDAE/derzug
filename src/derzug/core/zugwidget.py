@@ -96,16 +96,26 @@ class ZugWidget(WorkflowExecutionMixin, WidgetMessageMixin, OWWidget, openclass=
     """
 
     #: The Qt-free :class:`~derzug.nodes.spec.NodeSpec` this widget renders.
-    #: When set, ``params_model``, ``view_model``, and ``is_source`` are taken
-    #: from the spec unless the widget overrides them itself. ``None`` for
-    #: widgets not yet migrated to the node layer.
+    #: Every canvas widget declares one; the spec supplies the node identity
+    #: (params/view models, source flag, and canvas metadata) unless the
+    #: widget overrides an attribute itself. ``None`` only on non-node helper
+    #: widgets.
     node_spec: ClassVar[NodeSpec | None] = None
 
     #: Attributes a ``node_spec`` supplies when the widget doesn't declare them.
+    #: The canvas metadata (name, description, ...) lives on the spec so a
+    #: widget states it once; a widget may still override any of these in its
+    #: own class body.
     _SPEC_DERIVED_ATTRS: ClassVar[tuple[str, ...]] = (
         "params_model",
         "view_model",
         "is_source",
+        "name",
+        "description",
+        "icon",
+        "category",
+        "keywords",
+        "priority",
     )
 
     #: Pydantic model (or discriminated union) describing this widget's

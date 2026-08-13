@@ -19,13 +19,7 @@ class Annotation2DataFrame(ZugWidget):
     """Orange widget that extracts point annotations into a DataFrame."""
 
     node_spec = NODE_SPEC
-    name = "Annotations to DataFrame"
     authoritative_state = True
-    description = "Extract point annotations from an AnnotationSet into a DataFrame."
-    icon = "icons/Annotation2DataFrame.svg"
-    category = "Table"
-    keywords = ("annotation", "table", "dataframe", "convert", "point")
-    priority = 26
 
     class Warning(ZugWidget.Warning):
         """Warnings shown by this widget."""

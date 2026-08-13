@@ -296,6 +296,11 @@ class TestWidgetDefaults(WidgetTest):
         qualified_name = f"{self.widget.__module__}.{self.widget.__qualname__}"
         assert spec.widget_qualified_name == qualified_name
         assert spec.name == self.widget.name
+        assert spec.description == self.widget.description
+        assert spec.icon == self.widget.icon
+        assert spec.category == self.widget.category
+        assert tuple(spec.keywords) == tuple(self.widget.keywords)
+        assert spec.priority == self.widget.priority
         assert spec.params_model is self.widget.params_model
         assert spec.view_model is self.widget.view_model
         assert spec.is_source == self.widget.is_source

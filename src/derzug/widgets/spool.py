@@ -453,13 +453,7 @@ class Spool(ZugWidget):
     """Orange widget for loading DASCore example spools."""
 
     node_spec = NODE_SPEC
-    name = "Spool"
     authoritative_state = True
-    description = "Interact with DASCore Spools"
-    icon = "icons/Spool.svg"
-    category = "IO"
-    keywords = ("dascore", "examples", "spool", "patch")
-    priority = 15
     is_source = True
 
     # App-level MRU of directories: a global remembered default
