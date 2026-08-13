@@ -26,8 +26,6 @@ from AnyQt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from dascore.clients.dirspool import DirectorySpool
-from dascore.clients.filespool import FileSpool
 from dascore.utils.patch import get_patch_names
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
@@ -52,6 +50,13 @@ from derzug.nodes.spool import (
     spool_transform_task_from_params,
 )
 from derzug.settings import Setting
+from derzug.utils.dascore_compat import (
+    contents_dims,
+    is_directory_spool,
+    is_file_spool,
+    selectable_contents_keys,
+    spool_source_path,
+)
 from derzug.utils.display import format_display
 from derzug.utils.dynamic_rows import DynamicRowManager
 from derzug.utils.example_parameters import (
@@ -62,7 +67,6 @@ from derzug.utils.example_parameters_dialog import ExampleParametersDialog
 from derzug.utils.qt import FileOrDirDialog
 from derzug.utils.spool import (
     extract_single_patch,
-    normalize_dims_value,
     series_has_visible_values,
 )
 from derzug.workflow import Task
@@ -1392,19 +1396,18 @@ class Spool(ZugWidget):
                 return result
             return current
 
-        if isinstance(current, DirectorySpool):
-            return self._append_to_directory_spool(current, incoming)
+        if is_directory_spool(current):
+            return self._append_to_directory_spool(spool_source_path(current), incoming)
 
-        if isinstance(current, FileSpool):
+        if is_file_spool(current):
             raise ValueError("Cannot append input to a file-backed spool.")
 
         return self._append_to_memory_spool(current, incoming)
 
     def _append_to_directory_spool(
-        self, current: DirectorySpool, incoming: dc.BaseSpool
+        self, directory: Path, incoming: dc.BaseSpool
     ) -> dc.BaseSpool:
         """Write incoming patches into a directory-backed spool and reload it."""
-        directory = Path(current.spool_path)
         self._write_spool_to_directory(incoming, directory)
         return dc.spool(directory)
 
@@ -1462,13 +1465,7 @@ class Spool(ZugWidget):
         if "dims" not in df.columns:
             self._reset_dynamic_controls()
             return
-        options: list[str] = []
-        seen: set[str] = set()
-        for value in df["dims"]:
-            for dim in normalize_dims_value(value):
-                if dim not in seen:
-                    seen.add(dim)
-                    options.append(dim)
+        options = contents_dims(df)
 
         self.chunk_dim_combo.blockSignals(True)
         self.chunk_dim_combo.clear()
@@ -1529,16 +1526,9 @@ class Spool(ZugWidget):
 
     def _set_select_cols_from_contents(self, df) -> None:
         """Populate select column choices from the contents DataFrame."""
-        visible_cols = self._visible_contents_columns(df)
-        dims: list[str] = []
-        if "dims" in df.columns:
-            seen: set[str] = set(visible_cols)
-            for value in df["dims"]:
-                for dim in normalize_dims_value(value):
-                    if dim not in seen:
-                        seen.add(dim)
-                        dims.append(dim)
-        self._select_options = tuple(sorted(visible_cols + dims, key=str.casefold))
+        self._select_options = selectable_contents_keys(
+            df, self._visible_contents_columns(df)
+        )
         self._refresh_select_rows()
 
     def _on_select_changed(self, *_args) -> None:

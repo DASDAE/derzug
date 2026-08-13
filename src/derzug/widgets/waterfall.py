@@ -29,7 +29,7 @@ from AnyQt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from dascore.viz.waterfall import _get_scale as get_dascore_waterfall_scale
+from dascore.utils.misc import tukey_fence
 from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
@@ -1012,13 +1012,13 @@ class Waterfall(SelectionControlsMixin, MultiDimPlotControlsMixin, ZugWidget):
 
     @staticmethod
     def _compute_default_levels(display_data: np.ndarray) -> tuple[float, float] | None:
-        """Return default color levels from DASCore's waterfall helper."""
-        # The percentile-based default scale is statistically stable on a
-        # subsample; running it on every sample costs ~1s per render for
-        # 60M-sample patches.
+        """Return the color levels an unscaled DASCore waterfall would use."""
+        # Tukey's fence is what DASCore applies when no scale is given, and it
+        # is statistically stable on a subsample; running it on every sample
+        # costs ~1s per render for 60M-sample patches.
         sampled = strided_sample(display_data, _STAT_SAMPLE_TARGET)
-        scale = get_dascore_waterfall_scale(None, "relative", sampled)
-        if scale is None or len(scale) != 2:
+        scale = tukey_fence(sampled)
+        if len(scale) != 2:
             return None
         low, high = float(scale[0]), float(scale[1])
         if not np.isfinite((low, high)).all():

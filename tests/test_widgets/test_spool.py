@@ -4,6 +4,7 @@ Tests for the Spool widget.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import dascore as dc
@@ -12,13 +13,16 @@ import pandas as pd
 import pytest
 from AnyQt.QtCore import Qt
 from AnyQt.QtWidgets import QDialog
-from dascore.clients.dirspool import DirectorySpool
-from dascore.clients.filespool import FileSpool
 from derzug.nodes.spool import (
     SpoolTask,
     SpoolTransformTask,
     apply_select_rows,
     spool_rows_to_patches,
+)
+from derzug.utils.dascore_compat import (
+    is_directory_spool,
+    is_file_spool,
+    spool_source_path,
 )
 from derzug.utils.display import format_display
 from derzug.utils.example_parameters import get_example_parameter_specs
@@ -35,6 +39,32 @@ from derzug.widgets.spool import (
     _execute_spool_snapshot,
     _SpoolExecutionSnapshot,
 )
+
+
+def _select_value_for(key: str) -> str:
+    """Return a select value the widget can apply for one select key."""
+    return "'bob'" if key == "tag" else "(1000, None)"
+
+
+class _FakeDirectoryContents:
+    """A directory-backed spool stand-in whose patches must never be iterated."""
+
+    def __init__(self, directory: Path) -> None:
+        self.spool_path = Path(directory)
+        # Only the presence of an indexer marks a spool as directory-backed.
+        self.indexer = object()
+
+    def __iter__(self):
+        raise AssertionError("patch iteration should not happen here")
+
+    def get_contents(self) -> pd.DataFrame:
+        """Return two rows whose display order differs from their storage order."""
+        return pd.DataFrame(
+            [
+                {"path": "/tmp/b_patch.h5", "tag": "b"},
+                {"path": "/tmp/a_patch.h5", "tag": "a"},
+            ]
+        )
 
 
 def _default_example_name(spool_widget: Spool) -> str | None:
@@ -1486,12 +1516,12 @@ class TestSpool:
 
         spool_widget.select_add_button.click()
         second_combo, second_edit, _remove = _select_row(spool_widget, 1)
-        second_combo.setCurrentText("distance_min")
-        second_edit.setText("1000")
+        second_combo.setCurrentText("distance")
+        second_edit.setText("(1000, None)")
         second_edit.editingFinished.emit()
         wait_for_widget_idle(spool_widget, timeout=5.0)
 
-        expected = spool.select(tag="bob", distance_min=1000)
+        expected = spool.select(tag="bob", distance=(1000, None))
 
         assert received
         assert _spool_tags(received[-1]) == _spool_tags(expected)
@@ -1506,8 +1536,8 @@ class TestSpool:
 
         spool_widget._set_source_spool(spool)
         first_combo, first_edit, _remove = _select_row(spool_widget, 0)
-        first_combo.setCurrentText("distance_min")
-        first_edit.setText("1000")
+        first_combo.setCurrentText("distance")
+        first_edit.setText("(1000, None)")
         first_edit.editingFinished.emit()
 
         spool_widget.select_add_button.click()
@@ -1517,7 +1547,7 @@ class TestSpool:
         second_edit.editingFinished.emit()
         wait_for_widget_idle(spool_widget, timeout=5.0)
 
-        expected = spool.select(distance_min=1000, tag="alice")
+        expected = spool.select(distance=(1000, None), tag="alice")
 
         assert received
         assert _spool_tags(received[-1]) == _spool_tags(expected)
@@ -1726,55 +1756,27 @@ class TestSpool:
 
         assert restored == 1
 
-    def test_selected_output_spool_uses_indexing_not_iteration(self):
+    def test_selected_output_spool_uses_indexing_not_iteration(self, tmp_path):
         """Selected rows should become a subspool without iterating the whole spool."""
 
-        class _FakeDirectorySpool(DirectorySpool):
-            def __init__(self):
-                pass
-
-            def __iter__(self):
-                raise AssertionError("patch iteration should not happen here")
-
-            def get_contents(self):
-                return pd.DataFrame(
-                    [
-                        {"path": "/tmp/b_patch.h5", "tag": "b"},
-                        {"path": "/tmp/a_patch.h5", "tag": "a"},
-                    ]
-                )
-
+        class _FakeDirectorySpool(_FakeDirectoryContents):
             def __getitem__(self, item):
                 assert isinstance(item, np.ndarray)
                 return ("subset", tuple(int(x) for x in item.tolist()))
 
-        result = Spool._spool_rows_to_output(_FakeDirectorySpool(), {0})
+        result = Spool._spool_rows_to_output(_FakeDirectorySpool(tmp_path), {0})
 
         assert result == ("subset", (1,))
 
-    def test_selected_patch_rows_use_indexing_not_iteration(self):
+    def test_selected_patch_rows_use_indexing_not_iteration(self, tmp_path):
         """Single-patch extraction should only read the selected patch row."""
 
-        class _FakeDirectorySpool(DirectorySpool):
-            def __init__(self):
-                pass
-
-            def __iter__(self):
-                raise AssertionError("patch iteration should not happen here")
-
-            def get_contents(self):
-                return pd.DataFrame(
-                    [
-                        {"path": "/tmp/b_patch.h5", "tag": "b"},
-                        {"path": "/tmp/a_patch.h5", "tag": "a"},
-                    ]
-                )
-
+        class _FakeDirectorySpool(_FakeDirectoryContents):
             def __getitem__(self, item):
                 assert isinstance(item, int)
                 return f"patch-{item}"
 
-        patches = spool_rows_to_patches(_FakeDirectorySpool(), {0})
+        patches = spool_rows_to_patches(_FakeDirectorySpool(tmp_path), {0})
 
         assert patches == ["patch-1"]
 
@@ -1854,22 +1856,22 @@ class TestSpool:
             first_combo, first_edit, _remove = _select_row(first, 0)
             first_key = next(
                 key
-                for key in ("tag", "distance_min", "time_min")
+                for key in ("tag", "distance", "time")
                 if key in first._select_options
             )
             first_combo.setCurrentText(first_key)
-            first_edit.setText("'bob'" if first_key == "tag" else "0")
+            first_edit.setText(_select_value_for(first_key))
             first_edit.editingFinished.emit()
 
             first.select_add_button.click()
             second_combo, second_edit, _remove = _select_row(first, 1)
             second_key = next(
                 key
-                for key in ("distance_min", "time_min", "tag")
+                for key in ("distance", "time", "tag")
                 if key in first._select_options and key != first_key
             )
             second_combo.setCurrentText(second_key)
-            second_edit.setText("1000" if second_key != "tag" else "'bob'")
+            second_edit.setText(_select_value_for(second_key))
             second_edit.editingFinished.emit()
             wait_for_widget_idle(first, timeout=5.0)
             saved = first.settingsHandler.pack_data(first)
@@ -1883,9 +1885,9 @@ class TestSpool:
             first_combo, first_edit, _remove = _select_row(second, 0)
             second_combo, second_edit, _remove = _select_row(second, 1)
             assert first_combo.currentText() == first_key
-            assert first_edit.text() == ("'bob'" if first_key == "tag" else "0")
+            assert first_edit.text() == _select_value_for(first_key)
             assert second_combo.currentText() == second_key
-            assert second_edit.text() == ("1000" if second_key != "tag" else "'bob'")
+            assert second_edit.text() == _select_value_for(second_key)
 
     def test_unpack_checkbox_off_emits_no_patch(self, spool_widget, monkeypatch):
         """The patch output stays None when unpack is disabled."""
@@ -2178,7 +2180,7 @@ class TestSpool:
         directory.mkdir()
         dc.examples.spool_to_directory(dc.spool([first]), directory)
         spool_widget._current_spool = dc.spool(directory)
-        assert isinstance(spool_widget._current_spool, DirectorySpool)
+        assert is_directory_spool(spool_widget._current_spool)
         received = capture_output(spool_widget.Outputs.spool, monkeypatch)
 
         spool_widget.set_patch(second)
@@ -2186,10 +2188,28 @@ class TestSpool:
 
         assert received
         updated = received[-1]
-        assert isinstance(updated, DirectorySpool)
-        assert Path(updated.spool_path) == directory
+        assert is_directory_spool(updated)
+        assert spool_source_path(updated) == directory
         assert len(list(updated)) == 2
         assert len(list(spool_widget._current_spool)) == 2
+
+    def test_set_patch_recreates_a_vanished_spool_directory(
+        self, spool_widget, monkeypatch, tmp_path, qtbot
+    ):
+        """A directory deleted underneath a spool is rewritten, not rejected."""
+        directory = tmp_path / "vanished_dir"
+        directory.mkdir()
+        dc.examples.spool_to_directory(dc.spool([_patch_with_tag("gone")]), directory)
+        spool_widget._current_spool = dc.spool(directory)
+        shutil.rmtree(directory)
+        received = capture_output(spool_widget.Outputs.spool, monkeypatch)
+
+        spool_widget.set_patch(_patch_with_tag("rewritten"))
+        wait_for_widget_idle(spool_widget, timeout=5.0)
+
+        assert not spool_widget.Error.general.is_shown()
+        assert received
+        assert _spool_tags(received[-1]) == ["rewritten"]
 
     def test_set_patch_rejects_file_backed_spool(
         self, spool_widget, monkeypatch, tmp_path
@@ -2200,7 +2220,7 @@ class TestSpool:
         file_path = tmp_path / "single.h5"
         dc.write(dc.spool([first]), file_path, file_format="DASDAE")
         current = dc.spool(file_path)
-        assert isinstance(current, FileSpool)
+        assert is_file_spool(current)
         spool_widget._current_spool = current
         received = capture_output(spool_widget.Outputs.spool, monkeypatch)
 

@@ -260,7 +260,6 @@ class TestFilter:
             filt=[2000.0, 2200.0, 8000.0, 20000.0],
             dims=("distance", "time"),
             directional=False,
-            notch=None,
             invert=False,
         )
         assert out is not None
@@ -530,7 +529,6 @@ _FILTER_REFERENCE_CASES = [
             filt=[2000.0, 2200.0, 8000.0, 20000.0],
             dims=("distance", "time"),
             directional=False,
-            notch=None,
             invert=False,
         ),
         id="slope_filter",

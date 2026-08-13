@@ -193,7 +193,8 @@ class TestUFuncBinary:
         """Multi-patch spool inputs are rejected with a user-visible error."""
         received = _capture_output(ufunc_widget, monkeypatch)
         patch = dc.get_example_patch("example_event_2")
-        multi = dc.spool([patch, patch])
+        # The patches must differ; DASCore deduplicates identical ones.
+        multi = dc.spool([patch, patch.update_attrs(tag="second")])
 
         ufunc_widget.set_x(multi)
         ufunc_widget.set_y(patch)

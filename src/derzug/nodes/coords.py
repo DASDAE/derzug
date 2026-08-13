@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import ClassVar, Literal
 
 import dascore as dc
-from dascore.core.coords import get_coord
 from pydantic import BaseModel, Field
 
 from derzug.nodes.spec import NodeSpec, PortSpec
@@ -81,7 +80,7 @@ def resolve_set_coord(patch, dim: str, start: str, stop: str, step: str):
         **parsed,
     }
     try:
-        return get_coord(**kwargs)
+        return dc.get_coord(**kwargs)
     except Exception as exc:
         raise CoordsValidationError("set_coords", str(exc)) from exc
 

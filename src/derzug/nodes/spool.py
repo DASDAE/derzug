@@ -16,10 +16,10 @@ from typing import Any, ClassVar
 import dascore as dc
 import numpy as np
 import pandas as pd
-from dascore.clients.dirspool import DirectorySpool
 from pydantic import BaseModel, Field
 
 from derzug.nodes.spec import NodeSpec, PortSpec
+from derzug.utils.dascore_compat import contents_path_column, is_directory_spool
 from derzug.utils.example_parameters import build_example_call_kwargs
 from derzug.utils.spool import extract_single_patch
 from derzug.workflow.task import Task
@@ -50,12 +50,14 @@ def ordered_contents_df_with_source_rows(spool: dc.BaseSpool) -> pd.DataFrame:
         return ordered
     ordered = df.copy()
     ordered["_source_row"] = np.arange(len(ordered), dtype=np.int64)
-    if not isinstance(spool, DirectorySpool):
+    if not is_directory_spool(spool):
         return ordered
+    path_column = contents_path_column(ordered)
+    candidates = (path_column, "tag", "station", "network", "time_min", "time_max")
     sort_cols = [
         column
-        for column in ("path", "tag", "station", "network", "time_min", "time_max")
-        if column in ordered.columns
+        for column in candidates
+        if column is not None and column in ordered.columns
     ]
     sort_cols.append("_source_row")
     return ordered.sort_values(
@@ -128,8 +130,9 @@ def contents_identity_token(df: pd.DataFrame, row: int) -> str:
     """Return a stable row token from spool contents without loading patches."""
     if row < 0 or row >= len(df):
         raise IndexError(row)
-    if "path" in df.columns:
-        value = df.iloc[row]["path"]
+    path_column = contents_path_column(df)
+    if path_column is not None:
+        value = df.iloc[row][path_column]
         text = serialize_identity_value(value).strip()
         if text:
             return f"path:{Path(text).as_posix()}"
