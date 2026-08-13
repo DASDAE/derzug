@@ -131,6 +131,10 @@ path = "derzug.utils.benchmarking"
 layer = "foundation"
 
 [[modules]]
+path = "derzug.utils.dascore_compat"
+layer = "foundation"
+
+[[modules]]
 path = "derzug.utils.display"
 layer = "foundation"
 

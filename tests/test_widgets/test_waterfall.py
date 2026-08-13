@@ -14,7 +14,7 @@ from AnyQt.QtCore import QEvent, QPointF, Qt
 from AnyQt.QtGui import QKeyEvent
 from AnyQt.QtTest import QTest
 from AnyQt.QtWidgets import QMenu, QToolButton
-from dascore.viz.waterfall import _get_scale as get_dascore_waterfall_scale
+from dascore.utils.misc import tukey_fence
 from derzug.annotations_config import AnnotationConfig, save_annotation_config
 from derzug.models.annotations import Annotation, AnnotationSet, PointGeometry
 from derzug.models.selection import SelectParams
@@ -2997,7 +2997,7 @@ class TestWaterfall:
 
         waterfall_widget.set_patch(patch)
 
-        expected = get_dascore_waterfall_scale(None, "relative", np.asarray(patch.data))
+        expected = tukey_fence(np.asarray(patch.data))
         assert waterfall_widget._hist_lut.item.getLevels() == pytest.approx(expected)
 
     def test_view_all_resets_color_limits_to_dascore_default(self, waterfall_widget):
@@ -3008,7 +3008,7 @@ class TestWaterfall:
 
         waterfall_widget._hist_lut.item.vb.menu.viewAll.trigger()
 
-        expected = get_dascore_waterfall_scale(None, "relative", np.asarray(patch.data))
+        expected = tukey_fence(np.asarray(patch.data))
         assert waterfall_widget.color_limits is None
         assert waterfall_widget._hist_lut.item.getLevels() == pytest.approx(expected)
 
@@ -3039,11 +3039,7 @@ class TestWaterfall:
         after_view = waterfall_widget._plot_item.vb.viewRange()
         expected_x = waterfall_widget._axis_bounds(waterfall_widget._axes.x_plot)
         expected_y = waterfall_widget._axis_bounds(waterfall_widget._axes.y_plot)
-        expected_levels = get_dascore_waterfall_scale(
-            None,
-            "relative",
-            np.asarray(second_patch.data),
-        )
+        expected_levels = tukey_fence(np.asarray(second_patch.data))
 
         assert before_view[0] == pytest.approx(narrowed_x)
         assert before_view[1] == pytest.approx(narrowed_y)
@@ -3087,11 +3083,7 @@ class TestWaterfall:
         after_view = waterfall_widget._plot_item.vb.viewRange()
         expected_x = waterfall_widget._axis_bounds(waterfall_widget._axes.x_plot)
         expected_y = waterfall_widget._axis_bounds(waterfall_widget._axes.y_plot)
-        expected_levels = get_dascore_waterfall_scale(
-            None,
-            "relative",
-            np.asarray(second_patch.data),
-        )
+        expected_levels = tukey_fence(np.asarray(second_patch.data))
 
         assert before_view[0] == pytest.approx(narrowed_x)
         assert before_view[1] == pytest.approx(narrowed_y)
@@ -4986,7 +4978,7 @@ class TestComputeDefaultLevels:
         rng = np.random.default_rng(0)
         data = rng.normal(size=(200, 300))
         levels = Waterfall._compute_default_levels(data)
-        expected = get_dascore_waterfall_scale(None, "relative", data)
+        expected = tukey_fence(data)
         assert levels == pytest.approx(tuple(expected))
 
     def test_large_data_levels_close_to_full_computation(self):
@@ -4995,7 +4987,7 @@ class TestComputeDefaultLevels:
         data = rng.normal(size=(1500, 1500))
         assert data.size > _STAT_SAMPLE_TARGET
         levels = Waterfall._compute_default_levels(data)
-        expected = get_dascore_waterfall_scale(None, "relative", data)
+        expected = tukey_fence(data)
         assert levels == pytest.approx(tuple(expected), rel=0.05)
 
     def test_all_nan_data_returns_none(self):

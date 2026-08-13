@@ -16,9 +16,10 @@ from typing import Any
 
 import numpy as np
 from derzug.models.selection import SelectParams
+from derzug.utils.dascore_compat import selectable_contents_keys
 from derzug.utils.misc import ordered_pair
 from derzug.utils.parsing import parse_coord_text_value
-from derzug.utils.spool import normalize_dims_value, series_has_visible_values
+from derzug.utils.spool import series_has_visible_values
 
 
 def _values_equal(left: Any, right: Any) -> bool:
@@ -393,20 +394,16 @@ class SelectionState:
             df = spool.get_contents()
         except Exception:
             options: tuple[str, ...] = ()
+            applicable: set[str] = set()
         else:
             visible_cols = [c for c in df.columns if series_has_visible_values(df[c])]
-            dims: list[str] = []
-            if "dims" in df.columns:
-                seen: set[str] = set(visible_cols)
-                for value in df["dims"]:
-                    for dim in normalize_dims_value(value):
-                        if dim not in seen:
-                            seen.add(dim)
-                            dims.append(dim)
-            options = tuple(sorted(visible_cols + dims, key=str.casefold))
+            options = selectable_contents_keys(df, visible_cols)
+            # A saved workflow may hold a key no longer offered as a fresh
+            # choice; keep it as long as this spool still describes it.
+            applicable = set(options) | {str(c) for c in df.columns}
         existing_filters = [
             SpoolFilterRowState(
-                key=flt.key if flt.key in options else "",
+                key=flt.key if flt.key in applicable else "",
                 raw_value=flt.raw_value,
             )
             for flt in self.spool.filters

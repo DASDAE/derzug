@@ -4,6 +4,21 @@ All notable user-facing changes to DerZug are documented here.
 
 ## Unreleased
 
+### Changed
+
+- DerZug now runs against both the current DASCore release and its development
+  branch, which collapsed `DirectorySpool`/`FileSpool`/`MemorySpool` into a
+  single `Spool` type and renamed several `get_contents()` columns. Nothing in
+  DerZug imports those classes any more; `derzug.utils.dascore_compat` answers
+  the questions they used to answer.
+- The Spool and Select widgets now offer each coordinate by name as a select
+  key, in place of the flattened `distance_min`/`time_max`-style columns and
+  the source-file bookkeeping columns they used to list. Select on the
+  coordinate itself — `distance` with a `(1000, None)` range rather than
+  `distance_min` — which is what current DASCore accepts. Auxiliary
+  coordinates such as `latitude` are now offered too. Workflows saved with an
+  older key keep filtering on it.
+
 ### Fixed
 
 - Canvas and headless execution now resolve default dimensions identically. Previously a widget on the canvas could pick a different dimension than the same node run headlessly from the same saved parameters:

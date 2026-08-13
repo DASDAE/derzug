@@ -332,12 +332,14 @@ class FilterTask(Task):
             filt = [float(x) for x in self.slope_filt.split(",") if x.strip()]
             if not filt:
                 return patch
+            # DASCore's `notch` argument was deprecated in favor of `invert`
+            # and then dropped; the two named the same behavior, so the
+            # widget's two checkboxes fold into the surviving parameter.
             return fn(
                 filt=filt,
                 dims=(self.slope_dim0, self.slope_dim1),
                 directional=bool(self.slope_directional),
-                notch=bool(self.slope_notch) or None,
-                invert=bool(self.slope_invert),
+                invert=bool(self.slope_notch) or bool(self.slope_invert),
             )
         if dim is None:
             return patch

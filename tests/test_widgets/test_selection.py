@@ -52,6 +52,29 @@ class TestSelectionState:
         assert state.spool.key == ""
         assert state.spool.raw_value == ""
 
+    def test_saved_filter_key_survives_when_no_longer_offered(self):
+        """A workflow saved with a key DerZug stopped offering keeps filtering."""
+        state = SelectionState()
+        spool = dc.get_example_spool()
+        saved_key = "distance_min"
+        assert saved_key in spool.get_contents().columns
+        state.set_spool_filters([(saved_key, "1")])
+
+        state.set_spool_source(spool)
+
+        assert saved_key not in state.spool.options
+        assert state.spool.filters[0].key == saved_key
+        assert state.spool.filters[0].raw_value == "1"
+
+    def test_saved_filter_key_absent_from_the_source_is_dropped(self):
+        """A key this spool knows nothing about is still cleared."""
+        state = SelectionState()
+        state.set_spool_filters([("not_a_column", "1")])
+
+        state.set_spool_source(dc.get_example_spool())
+
+        assert state.spool.filters[0].key == ""
+
     def test_reset_clears_spool_filter(self):
         """Reset removes any active spool filter."""
         state = SelectionState()
