@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <rect x="6" y="7" width="36" height="34" rx="3"
+        fill="#ffffff" stroke="#333333" stroke-width="2.5"/>
+  <!-- Plot axes -->
+  <path d="M 13 35 L 13 14 M 13 35 L 38 35"
+        fill="none" stroke="#333333" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Dispersion-energy ridges -->
+  <path d="M 16 33 C 20 28, 24 23, 35 15"
+        fill="none" stroke="#333333" stroke-width="2.7"
+        stroke-linecap="round"/>
+  <path d="M 16 34 C 21 31, 27 27, 37 23"
+        fill="none" stroke="#333333" stroke-width="1.8"
+        stroke-linecap="round" opacity="0.55"/>
+  <path d="M 17 30 C 22 25, 27 20, 34 18"
+        fill="none" stroke="#333333" stroke-width="1.5"
+        stroke-linecap="round" opacity="0.35"/>
+  <!-- Frequency/velocity sample marks -->
+  <path d="M 18 35 L 18 37 M 26 35 L 26 37 M 34 35 L 34 37
+           M 11 29 L 13 29 M 11 22 L 13 22 M 11 15 L 13 15"
+        fill="none" stroke="#333333" stroke-width="1.2"
+        stroke-linecap="round" opacity="0.75"/>
+</svg>
