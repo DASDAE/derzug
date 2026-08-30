@@ -44,6 +44,7 @@ from AnyQt.QtGui import (
     QTextCharFormat,
     QTextCursor,
     QTextBlockFormat,
+    QTextFormat,
 )
 from AnyQt.QtWidgets import (
     QAbstractItemView,
@@ -827,6 +828,20 @@ def _apply_text_item_alignment(item, alignment: str) -> None:
     item.setTextCursor(cursor)
 
 
+def _pixel_size_configurer(size: int):
+    """Return a char-format configurer that sets one font pixel size.
+
+    ``QTextCharFormat`` has no ``setFontPixelSize`` setter, so the size is
+    written as a raw text property; canvas text is sized in pixels everywhere
+    else, so no point size competes with it.
+    """
+
+    def configure(char_format: QTextCharFormat) -> None:
+        char_format.setProperty(QTextFormat.Property.FontPixelSize, int(size))
+
+    return configure
+
+
 class _CanvasArrowColorPalette(QWidget):
     """Tiny floating palette for canvas arrow colors."""
 
@@ -1318,7 +1333,7 @@ class _CanvasTextStylePaletteController(QObject):
             size = int(text)
             if size <= 0:
                 return
-            if self._apply_to_active_editor(lambda fmt: fmt.setFontPixelSize(size)):
+            if self._apply_to_active_editor(_pixel_size_configurer(size)):
                 return
             if _selected_text_annotations(self._document):
                 _set_selected_text_font_property(self._document, "size", size)

@@ -1910,6 +1910,13 @@ class TestDerZugCanvasWorkflow:
         return box
 
     @staticmethod
+    def _text_font_box(window) -> QComboBox:
+        """Return the floating text palette font family combo box."""
+        box = window.findChild(QComboBox, "canvas-text-font-box")
+        assert box is not None
+        return box
+
+    @staticmethod
     def _text_align_box(window) -> QComboBox:
         """Return the floating text palette alignment combo box."""
         box = window.findChild(QComboBox, "canvas-text-align-box")
@@ -2615,6 +2622,62 @@ class TestDerZugCanvasWorkflow:
         assert "beta" in annotation.content
         assert "<" in annotation.content
         assert "font-weight" in annotation.content or "<b>" in annotation.content
+
+    def test_text_palette_restyles_only_the_selected_words_while_editing(
+        self, derzug_app, qapp
+    ):
+        """Every palette control should format just the selection being edited."""
+        window = derzug_app.window
+        document = window.current_document()
+        scene = document.scene()
+
+        window.show()
+        qapp.processEvents()
+
+        annotation = self._create_canvas_annotation(document, "text", qapp)
+        item = scene.item_for_annotation(annotation)
+        item.setSelected(True)
+        item.startEdit()
+        qapp.processEvents()
+
+        cursor = item.textCursor()
+        cursor.insertText("alpha beta")
+        item.setTextCursor(cursor)
+
+        cursor = item.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Left, n=2)
+        item.setTextCursor(cursor)
+        qapp.processEvents()
+
+        self._text_size_box(window).setCurrentText("28")
+        qapp.processEvents()
+        self._text_font_box(window).setCurrentText("Georgia")
+        qapp.processEvents()
+        for name in ("bold", "italic", "underline"):
+            QTest.mouseClick(self._text_style_button(window, name), Qt.LeftButton)
+            qapp.processEvents()
+
+        cursor = item.textCursor()
+        styled = cursor.charFormat().font()
+        assert styled.pixelSize() == 28
+        assert styled.family() == "Georgia"
+        assert styled.bold() is True
+        assert styled.italic() is True
+        assert styled.underline() is True
+
+        cursor.setPosition(1)
+        untouched = cursor.charFormat().font()
+        assert untouched.pixelSize() != 28
+        assert untouched.bold() is False
+        assert untouched.italic() is False
+        assert untouched.underline() is False
+
+        item.endEdit()
+        qapp.processEvents()
+
+        assert annotation.content_type == "text/html"
+        assert "28px" in annotation.content
+        assert "Georgia" in annotation.content
 
     def test_text_style_buttons_have_tooltips_with_shortcuts(self, derzug_app, qapp):
         """Formatting buttons should advertise their standard shortcuts."""
