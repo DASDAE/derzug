@@ -286,11 +286,6 @@ def summarize_entries(
     return tuple(summarize_entry(entry) for entry in entries)
 
 
-def serialize_annotation_set(annotation_set: AnnotationSet) -> str:
-    """Serialize one annotation set to formatted JSON."""
-    return annotation_set.model_dump_json(indent=2)
-
-
 def deserialize_annotation_set(text: str) -> AnnotationSet:
     """Deserialize one annotation set from JSON text."""
     return AnnotationSet.model_validate_json(text)

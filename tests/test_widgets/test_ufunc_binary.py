@@ -203,6 +203,25 @@ class TestUFuncBinary:
         assert received[-1] is None
         assert ufunc_widget.Error.invalid_spool.is_shown()
 
+    def test_multi_patch_spool_never_reads_data(self, ufunc_widget, monkeypatch, qtbot):
+        """Reject a multi-patch spool using its index, without reading payloads."""
+        received = _capture_output(ufunc_widget, monkeypatch)
+        patch = dc.get_example_patch("example_event_2")
+        multi = dc.spool([patch, patch.update_attrs(tag="second")])
+
+        def unexpected_read(*args):
+            """Fail if rejecting the spool requires a patch read."""
+            pytest.fail("multi-patch input should be rejected from metadata")
+
+        monkeypatch.setattr(type(multi), "__iter__", unexpected_read)
+        monkeypatch.setattr(type(multi), "__getitem__", unexpected_read)
+        ufunc_widget.set_x(multi)
+        ufunc_widget.set_y(patch)
+        _wait_for_output(ufunc_widget, qtbot, received, 2)
+
+        assert received[-1] is None
+        assert ufunc_widget.Error.invalid_spool.is_shown()
+
     def test_invalid_pair_shows_error_and_emits_none(
         self, ufunc_widget, monkeypatch, qtbot
     ):

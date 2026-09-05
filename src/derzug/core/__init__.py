@@ -8,9 +8,11 @@ DerZug core modules.
 # without `derzug.widgets` having to reach up into `derzug.views`.
 from derzug.core import summary as _summary  # noqa: F401
 from derzug.core.patchdimwidget import PatchDimWidget as PatchDimWidget
+from derzug.core.patchwidget import PatchWidget as PatchWidget
 from derzug.core.zugwidget import ZugWidget as ZugWidget
 
 __all__ = (
     "PatchDimWidget",
+    "PatchWidget",
     "ZugWidget",
 )

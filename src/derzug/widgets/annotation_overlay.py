@@ -60,15 +60,6 @@ class _EllipseFitError(ValueError):
     """Raised when an ellipse cannot be fit from the chosen annotations."""
 
 
-def _normalize_half_turn_angle(angle: float) -> float:
-    """Normalize one angle into the [-pi/2, pi/2) range."""
-    while angle < (-math.pi / 2.0):
-        angle += math.pi
-    while angle >= (math.pi / 2.0):
-        angle -= math.pi
-    return float(angle)
-
-
 def _format_equation_scalar(value: float | int) -> str:
     """Return one compact scalar string for stored equation text."""
     return format(float(value), ".6g")

@@ -9,6 +9,7 @@ Widgets can be internal DerZug widgets or written in their own stand-along progr
 - A widget's class `name` and its entry-point name in `pyproject.toml` should match.
 
 - Processing widgets (those without visual components) should set `want_main_area = False`
+- Use `PatchWidget` for a widget that transforms one patch into another. It owns patch storage, async dispatch, synchronous execution, and output delivery; the widget supplies its input handler and `get_task()`, with optional `_validated_task()` preflight and `_on_result()` preview updates. Use `PatchDimWidget` when a dimension chooser is also needed, or `PatchMethodWidget` for declarative method controls.
 - `ZugWidget` subclasses should separate state changes from visible UI work. Input handlers should store the latest state, emit outputs immediately, and trigger `_request_ui_refresh()` instead of directly redrawing plots, tables, or previews.
 - Put visible refresh work in `_refresh_ui()`. `ZugWidget` defers `_refresh_ui()` while the widget window is hidden and flushes one coalesced refresh the next time the window is shown.
 - Prefer pure builders for non-trivial UI state. If a widget derives labels, tables, or plot metadata from current settings and inputs, build that state in a plain helper/dataclass first, then have `_refresh_ui()` apply it to Qt.
