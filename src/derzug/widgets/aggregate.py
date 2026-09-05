@@ -10,7 +10,7 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
-from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
+from derzug.core.patchwidget import PatchWidget
 from derzug.nodes.aggregate import (
     DIM_REDUCES,
     METHODS,
@@ -21,7 +21,7 @@ from derzug.nodes.aggregate import (
 from derzug.workflow import Task
 
 
-class Aggregate(ZugWidget):
+class Aggregate(PatchWidget):
     """Apply DASCore aggregate reduction to an input patch."""
 
     node_spec = NODE_SPEC
@@ -32,7 +32,7 @@ class Aggregate(ZugWidget):
     _METHODS: ClassVar[tuple[str, ...]] = METHODS
     _DIM_REDUCES: ClassVar[tuple[str, ...]] = DIM_REDUCES
 
-    class Error(ZugWidget.Error):
+    class Error(PatchWidget.Error):
         """Errors shown by the widget."""
 
         aggregate_failed = Msg("Aggregate failed: {}")
@@ -49,7 +49,6 @@ class Aggregate(ZugWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self._patch: dc.Patch | None = None
         self._available_dims: tuple[str, ...] = ()
 
         box = gui.widgetBox(self.controlArea, "Parameters")
@@ -201,22 +200,7 @@ class Aggregate(ZugWidget):
         self.dim_reduce = value
         self.run()
 
-    def _supports_async_execution(self) -> bool:
-        """Run aggregate reductions off-thread by default."""
-        return True
-
-    def _build_execution_request(self) -> WidgetExecutionRequest | None:
-        """Build one aggregate execution request from current widget state."""
-        patch = self._patch
-        if patch is None:
-            return None
-        return self._build_task_execution_request(
-            self._validated_task(),
-            input_values={"patch": patch},
-            output_names=("patch",),
-        )
-
-    def _validated_task(self) -> Task | None:
+    def _validated_task(self) -> Task:
         """Return the aggregate task after normalizing persisted settings."""
         method = self.method if self.method in self._METHODS else self._METHODS[0]
         if method != self.method:
@@ -240,17 +224,6 @@ class Aggregate(ZugWidget):
         """Route worker failures to the aggregate-specific banner."""
         self._show_exception("aggregate_failed", exc)
 
-    def _run(self) -> dc.Patch | None:
-        """Apply aggregate reduction with current settings and return output patch."""
-        patch = self._patch
-        if patch is None:
-            return None
-        return self._execute_workflow_object(
-            self._validated_task(),
-            input_values={"patch": patch},
-            output_names=("patch",),
-        )
-
     def _settings_control_map(self) -> dict[str, object]:
         """Map settings to their controls for unified apply_settings sync."""
         return {
@@ -262,14 +235,7 @@ class Aggregate(ZugWidget):
 
     def get_task(self) -> Task:
         """Return the configured aggregate task."""
-        workflow_obj = self._validated_task()
-        if workflow_obj is None:
-            raise ValueError("current Aggregate state is not valid")
-        return workflow_obj
-
-    def _on_result(self, result: dc.Patch | None) -> None:
-        """Send aggregate result patch on output."""
-        self.Outputs.patch.send(result)
+        return self._validated_task()
 
 
 if __name__ == "__main__":  # pragma: no cover

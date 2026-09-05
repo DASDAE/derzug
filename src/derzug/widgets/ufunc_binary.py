@@ -15,6 +15,7 @@ from orangewidget.utils.signals import PartialSummary
 
 from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
 from derzug.nodes.ufunc_binary import NODE_SPEC, OP_LABEL_TO_UFUNC
+from derzug.utils.spool import extract_single_patch
 from derzug.workflow import Task
 
 
@@ -140,25 +141,11 @@ class UFuncBinary(ZugWidget):
         """Unwrap length-1 spools to patches and reject unsupported spool inputs."""
         if not isinstance(value, dc.BaseSpool):
             return value
-        patch = self._extract_single_patch(value)
+        patch = extract_single_patch(value)
         if patch is not None:
             return patch
         self._show_error_message("invalid_spool", label)
         return self._UNSET
-
-    @staticmethod
-    def _extract_single_patch(spool: dc.BaseSpool) -> dc.Patch | None:
-        """Return the only patch in spool, or None when length is not exactly one."""
-        iterator = iter(spool)
-        try:
-            first = next(iterator)
-        except StopIteration:
-            return None
-        try:
-            next(iterator)
-        except StopIteration:
-            return first
-        return None
 
     def _get_selected_ufunc(self) -> np.ufunc:
         """Return selected ufunc, coercing unknown settings back to default once."""

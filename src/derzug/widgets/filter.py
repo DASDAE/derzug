@@ -21,7 +21,6 @@ from Orange.widgets.widget import Msg
 from pydantic import TypeAdapter
 
 from derzug.core.patchdimwidget import PatchDimWidget
-from derzug.core.zugwidget import WidgetExecutionRequest
 from derzug.nodes.filter import (
     _FILTER_MODELS,
     _FILTER_NAMES,
@@ -474,35 +473,9 @@ class Filter(PatchDimWidget):
         self._sync_gaussian_dim_windows_from_ui()
         self.run()
 
-    def _build_execution_request(self) -> WidgetExecutionRequest | None:
-        """Build one filter execution request with validated parameters."""
-        patch = self._patch
-        if patch is None:
-            return None
-        return self._build_task_execution_request(
-            self._validated_task(),
-            input_values={"patch": patch},
-            output_names=("patch",),
-        )
-
-    def _handle_execution_exception(self, exc: Exception) -> None:
-        """Route worker failures to the filter-specific banner."""
-        self._show_exception("general", exc)
-
     # ------------------------------------------------------------------
     # Core computation
     # ------------------------------------------------------------------
-
-    def _run(self):
-        """Dispatch to the selected DASCore filter method."""
-        patch = self._patch
-        if patch is None:
-            return None
-        return self._execute_workflow_object(
-            self._validated_task(),
-            input_values={"patch": patch},
-            output_names=("patch",),
-        )
 
     def _validated_task(self) -> FilterTask | None:
         """Return the current validated filter task, or None on invalid state.
@@ -546,9 +519,6 @@ class Filter(PatchDimWidget):
                     allow_quantity=False,
                 )
         return NODE_SPEC.build_task(self.get_params())
-
-    def _on_result(self, result) -> None:
-        self.Outputs.patch.send(result)
 
     def _settings_control_map(self) -> dict[str, object]:
         """Map settings to their controls for unified apply_settings sync."""

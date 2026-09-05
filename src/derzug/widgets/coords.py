@@ -28,11 +28,12 @@ from Orange.widgets import gui
 from Orange.widgets.utils.signals import Input, Output
 from Orange.widgets.widget import Msg
 
-from derzug.core.zugwidget import WidgetExecutionRequest, ZugWidget
+from derzug.core.patchwidget import PatchWidget
 from derzug.nodes.coords import (
     NODE_SPEC,
     CoordsTask,
     CoordsValidationError,
+    normalize_mapping_rows,
     resolve_set_coord,
 )
 from derzug.workflow import Task
@@ -47,7 +48,7 @@ class _CoordsPreviewState:
     output_text: str
 
 
-class Coords(ZugWidget):
+class Coords(PatchWidget):
     """Apply coordinate-structure operations to an input patch."""
 
     node_spec = NODE_SPEC
@@ -64,7 +65,7 @@ class Coords(ZugWidget):
         ("transpose", "Transpose"),
     )
 
-    class Error(ZugWidget.Error):
+    class Error(PatchWidget.Error):
         """Errors shown by the widget."""
 
         invalid_operation = Msg("Unknown coords operation '{}'")
@@ -85,7 +86,6 @@ class Coords(ZugWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self._patch: dc.Patch | None = None
         self._last_result: dc.Patch | None = None
         self._available_dims: tuple[str, ...] = ()
         self._available_coords: tuple[str, ...] = ()
@@ -426,7 +426,7 @@ class Coords(ZugWidget):
 
     def _sync_table_rows(self, table: QTableWidget, rows: object) -> None:
         """Replace table contents from serialized settings rows."""
-        normalized = self._normalize_rows(rows)
+        normalized = normalize_mapping_rows(rows)
         self._ui_sync = True
         table.setRowCount(len(normalized))
         for row_num, (left, right) in enumerate(normalized):
@@ -560,7 +560,7 @@ class Coords(ZugWidget):
 
     def _add_rename_row(self) -> None:
         """Append a blank rename-mapping row."""
-        rows = self._normalize_rows(self.rename_rows)
+        rows = normalize_mapping_rows(self.rename_rows)
         rows.append(["", ""])
         self.rename_rows = rows
         self._sync_table_rows(self._rename_table, rows)
@@ -576,7 +576,7 @@ class Coords(ZugWidget):
 
     def _add_set_dims_row(self) -> None:
         """Append a blank set-dims row."""
-        rows = self._normalize_rows(self.set_dims_rows)
+        rows = normalize_mapping_rows(self.set_dims_rows)
         rows.append(["", ""])
         self.set_dims_rows = rows
         self._sync_table_rows(self._set_dims_table, rows)
@@ -596,22 +596,13 @@ class Coords(ZugWidget):
         rows: object,
     ) -> list[list[str]]:
         """Remove the selected row from serialized table data."""
-        normalized = Coords._normalize_rows(rows)
+        normalized = normalize_mapping_rows(rows)
         row = table.currentRow()
         if row < 0:
             row = len(normalized) - 1
         if 0 <= row < len(normalized):
             normalized.pop(row)
         return normalized
-
-    @staticmethod
-    def _normalize_rows(rows: object) -> list[list[str]]:
-        """Return a normalized list-of-two-strings representation."""
-        output: list[list[str]] = []
-        for row in rows or []:
-            if isinstance(row, list | tuple) and len(row) >= 2:
-                output.append([str(row[0]), str(row[1])])
-        return output
 
     def _on_rename_table_changed(self, _item: QTableWidgetItem) -> None:
         """Persist rename table edits and rerun."""
@@ -789,38 +780,12 @@ class Coords(ZugWidget):
             for index in range(self._transpose_list.count())
         ]
 
-    def _supports_async_execution(self) -> bool:
-        """Run coordinate operations off-thread by default."""
-        return True
-
-    def _build_execution_request(self) -> WidgetExecutionRequest | None:
-        """Build one coordinate-operation execution request."""
-        patch = self._patch
-        if patch is None:
-            return None
-        return self._build_task_execution_request(
-            self._validated_task(),
-            input_values={"patch": patch},
-            output_names=("patch",),
-        )
-
     def _handle_execution_exception(self, exc: Exception) -> None:
         """Route worker failures to the coordinate-operation banner."""
         self._show_exception(
             "operation_failed",
             exc,
             self._operation_label(self._coerce_operation()),
-        )
-
-    def _run(self) -> dc.Patch | None:
-        """Apply the active coordinate operation to the current patch."""
-        patch = self._patch
-        if patch is None:
-            return None
-        return self._execute_workflow_object(
-            self._validated_task(),
-            input_values={"patch": patch},
-            output_names=("patch",),
         )
 
     def _validated_task(self) -> CoordsTask | None:
@@ -916,7 +881,7 @@ class Coords(ZugWidget):
         if operation == "rename_coords":
             rows = [
                 f"{left}->{right}"
-                for left, right in self._normalize_rows(self.rename_rows)
+                for left, right in normalize_mapping_rows(self.rename_rows)
                 if left and right
             ]
             return "Rename: " + (", ".join(rows) if rows else "no mappings")
@@ -946,7 +911,7 @@ class Coords(ZugWidget):
         if operation == "set_dims":
             rows = [
                 f"{left}->{right}"
-                for left, right in self._normalize_rows(self.set_dims_rows)
+                for left, right in normalize_mapping_rows(self.set_dims_rows)
                 if left and right
             ]
             return "Set dims: " + (", ".join(rows) if rows else "no mappings")

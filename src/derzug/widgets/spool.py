@@ -1288,10 +1288,6 @@ class Spool(ZugWidget):
         """Return the current example registry used by the widget."""
         return node_spool.all_examples()
 
-    def _selected_example_callable(self, example_name: str):
-        """Return the callable registered for one example name."""
-        return self._example_registry()[example_name]
-
     def example_parameters_for(self, example_name: str | None) -> dict[str, object]:
         """Return the persisted parameter overrides for one example."""
         if not example_name:
